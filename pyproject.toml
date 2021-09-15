@@ -34,6 +34,22 @@ pre-commit = "^2.15.0"
 flake8-isort = "^4.0.0"
 darglint = "^1.8.0"
 
+[tool.black]
+line-length = 79
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
 [tool.towncrier]
 # Usage: (Source: https://github.com/python-trio/trio/blob/master/pyproject.toml)
 # - PRs should drop a file like "issuenumber.feature" in newsfragments
