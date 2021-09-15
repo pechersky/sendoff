@@ -31,3 +31,6 @@ MANIFEST
 
 # IDE
 .vscode
+
+# Testing
+.coverage
