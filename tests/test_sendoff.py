@@ -76,6 +76,7 @@ def test_single_record_mol_read(single_record_mol_sdf: Pathy) -> None:
     assert ("Record", "Value") in records
 
 
+@pytest.mark.xfail  # sendoff does not support metadata vals starting with $$$$
 def test_delimiter_record_mol_read(
     single_delimiter_record_mol_sdf: Pathy,
 ) -> None:

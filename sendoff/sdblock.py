@@ -5,7 +5,7 @@ import os
 from collections import deque
 from dataclasses import dataclass
 from io import TextIOWrapper
-from itertools import groupby, tee
+from itertools import chain, groupby
 from typing import Any, Iterable, Iterator, Tuple, Union
 
 Pathy = Union[str, bytes, os.PathLike[Any]]
@@ -16,7 +16,39 @@ class SDBlock:
     """Handle a single molecule block from an SD file."""
 
     title: str
-    lines: Iterator[str]
+    mdl: deque[str]
+    metadata: deque[str]
+
+    @classmethod
+    def parse_mdl(cls, lines: Iterable[str]) -> Iterable[str]:
+        """Parse in an MDL block from the ingested lines.
+
+        Args:
+            lines: an Iterable of str that comprises the MDL block
+
+        Yields:
+            str lines comprising the MDL block
+        """
+        for line in lines:
+            yield line
+            if line.startswith("M  END"):
+                return
+
+    @classmethod
+    def parse_metadata(cls, lines: Iterable[str]) -> Iterable[str]:
+        """Parse in the SDF metadata from the ingested lines.
+
+        Args:
+            lines: an Iterable of str that metadata, optionally
+                including the $$$$ delimiter
+
+        Yields:
+            str lines comprising the metadata, excluding the $$$$ delimiter
+        """
+        for line in lines:
+            if line.startswith("$$$$"):
+                return
+            yield line
 
     @classmethod
     def from_block_lines(cls, lines: Iterable[str]) -> SDBlock:
@@ -29,9 +61,11 @@ class SDBlock:
         Returns:
             An SDBlock with a parsed in title and lines
         """
-        title_gen, lines = tee(lines)
-        title = next(title_gen).strip()
-        return SDBlock(title, lines)
+        iterlines = iter(lines)
+        title = next(iterlines).strip()
+        mdl = deque(cls.parse_mdl(iterlines))
+        metadata = deque(cls.parse_metadata(iterlines))
+        return SDBlock(title, mdl, metadata)
 
     @classmethod
     def from_lines(cls, lines: Iterable[str]) -> Iterator[SDBlock]:
@@ -52,17 +86,6 @@ class SDBlock:
                 yield cls.from_block_lines(block)
                 block = deque()
 
-    def parse_mdl(self) -> Iterable[str]:
-        """Parse in an MDL block from the ingested lines.
-
-        Yields:
-            str lines comprising the MDL block
-        """
-        for line in self.lines:
-            yield line
-            if line.startswith("M  END"):
-                return
-
     def records(self) -> Iterable[Tuple[str, str]]:
         """Generate SD metadata records one by one.
 
@@ -70,9 +93,10 @@ class SDBlock:
             Tuples of str, str of record, value.
                 The value includes any newlines if it is multiline
         """
-        list(self.parse_mdl())  # consume to rid ourselves of lines
         # make data chunks by breaking on empty lines
-        for _, chunk in groupby((line.strip() for line in self.lines), bool):
+        for _, chunk in groupby(
+            (line.strip() for line in self.metadata), bool
+        ):
             record_line: str = next(chunk)
             if not record_line.startswith("> "):
                 continue
@@ -92,9 +116,22 @@ class SDBlock:
             outh: file-like handle, such as what is returned by open(..., "w")
 
         """
-        print(list(self.lines))
-        for line in self.lines:
-            print(line, file=outh)
+        print(self.title, file=outh)
+        for line in chain(self.mdl, self.metadata):
+            outh.write(line)
+        outh.write("$$$$\n")
+
+    def append_record(self, record_name: str, value: str) -> None:
+        """Append a field and value to the SD data record.
+
+        Args:
+            record_name: str for field's name
+            value: str for value, with no terminating newline
+
+        """
+        self.metadata.append(f"> <{record_name}>\n")
+        self.metadata.append(value + "\n")
+        self.metadata.append("\n")
 
 
 def parse_sdf(sdfpath: Pathy) -> Iterator[SDBlock]:
