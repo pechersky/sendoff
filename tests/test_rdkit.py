@@ -120,3 +120,15 @@ def test_empty_string_record_mol_read(
     """
     mol = next(Chem.SDMolSupplier(str(single_empty_string_record_mol_sdf)))
     assert mol.GetProp("Record") == ""
+
+
+def test_multiline_record_name_mol_read(
+    single_multiline_record_name_mol_sdf: Pathy,
+) -> None:
+    """An sdf of a multiline record name molecule cannot contain the expected data.
+
+    Args:
+        single_multiline_record_name_mol_sdf: fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_multiline_record_name_mol_sdf)))
+    assert not mol.HasProp("Rec\nord")

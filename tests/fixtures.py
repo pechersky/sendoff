@@ -262,3 +262,36 @@ def single_empty_string_record_mol_sdf(
                 mol.append_record(record, value)
                 mol.write(outh)
     return outpath
+
+
+@pytest.fixture(params=["rdkit", "sendoff"])
+def single_multiline_record_name_mol_sdf(
+    request: FixtureRequest, tmp_path: Path
+) -> Path:
+    """Write a single molecule with a multiline string record name to an sdf.
+
+    Args:
+        request: pytest fixture configuration handling param passing
+        tmp_path: pytest fixture for writing files to a temp directory
+
+    Returns:
+        Path to the sdf
+    """
+    record, value = ("Rec\nord", "Value")
+    mol = Chem.MolFromSmiles("C")
+    outpath = tmp_path / "input.sdf"
+    with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.write(mol)
+    if request.param == "rdkit":
+        mols = list(Chem.SDMolSupplier(str(outpath)))
+        with Chem.SDWriter(str(outpath)) as outh:
+            for mol in mols:
+                mol.SetProp(record, value)
+                outh.write(mol)
+    elif request.param == "sendoff":
+        mols = list(parse_sdf(outpath))
+        with open(outpath, "w") as outh:
+            for mol in mols:
+                mol.append_record(record, value)
+                mol.write(outh)
+    return outpath

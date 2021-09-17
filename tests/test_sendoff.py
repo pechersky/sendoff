@@ -1,4 +1,6 @@
 """Test sendoff parsing of metadata on generated SDFs."""
+from itertools import chain
+
 import pytest
 
 from sendoff.sdblock import Pathy, SDBlock, parse_sdf
@@ -114,3 +116,16 @@ def test_empty_string_record_mol_read(
     mol = next(parse_sdf(single_empty_string_record_mol_sdf))
     records = list(mol.records())
     assert ("Record", "") in records
+
+
+def test_multiline_record_name_mol_read(
+    single_multiline_record_name_mol_sdf: Pathy,
+) -> None:
+    """An sdf of a multiline record name molecule cannot contain the expected data.
+
+    Args:
+        single_multiline_record_name_mol_sdf: fixture of a Path to the sdf
+    """
+    mol = next(parse_sdf(single_multiline_record_name_mol_sdf))
+    records = list(mol.records())
+    assert "Rec\nord" not in map(str, chain(zip(*records)))
