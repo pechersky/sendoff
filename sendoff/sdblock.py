@@ -6,9 +6,9 @@ from collections import deque
 from dataclasses import dataclass
 from io import TextIOWrapper
 from itertools import chain, groupby
-from typing import Any, Iterable, Iterator, Tuple, Union
+from typing import Iterable, Iterator, Tuple, Union
 
-Pathy = Union[str, bytes, os.PathLike[Any]]
+Pathy = Union[str, bytes, os.PathLike]
 
 
 @dataclass
