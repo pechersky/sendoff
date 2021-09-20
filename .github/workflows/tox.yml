@@ -49,7 +49,7 @@ jobs:
       matrix:
         python-version: [3.9]
     needs: test
-    # if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
     steps:
     - uses: actions/checkout@v1
     - name: Set up Python ${{ matrix.python-version }}
@@ -73,13 +73,13 @@ jobs:
         key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}
     - name: Check pyproject.toml validity
       run: poetry check --no-interaction
-    # - name: Check if tag version matches project version
-    #   run: |
-    #     TAG=$(git describe HEAD --tags --abbrev=0)
-    #     PROJECT_VERSION=$(poetry version --short)
-    #     echo $TAG
-    #     echo $PROJECT_VERSION
-    #     if [[ "$TAG" != "v$PROJECT_VERSION" ]]; then exit 1; fi
+    - name: Check if tag version matches project version
+      run: |
+        TAG=$(git describe HEAD --tags --abbrev=0)
+        PROJECT_VERSION=$(poetry version --short)
+        echo $TAG
+        echo $PROJECT_VERSION
+        if [[ "$TAG" != "v$PROJECT_VERSION" ]]; then exit 1; fi
     - name: Build
       run: poetry build
     - name: Publish
