@@ -5,6 +5,9 @@ sendoff
    :target: https://results.pre-commit.ci/latest/github/pechersky/sendoff/main
    :alt: pre-commit.ci status
 
+.. image:: https://github.com/pechersky/sendoff/actions/workflows/tox.yml/badge.svg
+   :alt: Tox status
+
 The minimal SDF metadata parser.
 
 Often, SDFs have lots of useful metadata on them in the title and record fields/values.

@@ -1,4 +1,4 @@
-name: Tox test package
+name: Test package via tox
 
 on:
   - push
