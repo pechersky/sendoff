@@ -8,7 +8,7 @@ from rdkit import Chem
 from sendoff.sdblock import parse_sdf
 
 if TYPE_CHECKING:
-    from pytest import FixtureRequest as __FixtureRequest
+    from _pytest.fixtures import FixtureRequest as __FixtureRequest
 
     class FixtureRequest(__FixtureRequest):
         """FixtureRequest wrapper class to provide param attribute."""
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 else:
-    from pytest import FixtureRequest
+    from _pytest.fixtures import FixtureRequest
 
 
 @pytest.fixture
