@@ -1,10 +1,10 @@
-name: Test package via tox
+name: Test and publish
 
 on:
   - push
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -42,3 +42,48 @@ jobs:
       run: poetry install --no-interaction
     - name: Test with tox
       run: tox
+
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.9]
+    needs: test
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
+    steps:
+    - uses: actions/checkout@v1
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+        installer-parallel: true
+    - name: Load cached poetry venv
+      id: cached-poetry-dependencies
+      uses: actions/cache@v2
+      with:
+        path: |
+          .venv
+          .tox
+          ~/.cache/pip
+        key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}
+    - name: Check pyproject.toml validity
+      run: poetry check --no-interaction
+    - name: Check if tag version matches project version
+      run: |
+        TAG=$(git describe HEAD --tags --abbrev=0)
+        PROJECT_VERSION=$(poetry version --short)
+        echo $TAG
+        echo $PROJECT_VERSION
+        if [[ "$TAG" != "v$PROJECT_VERSION" ]]; then exit 1; fi
+    - name: Build
+      run: poetry build
+    - name: Publish
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        user: __token__
+        password: ${{ secrets.PYPI_API_TOKEN }}
