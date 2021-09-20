@@ -6,6 +6,7 @@ sendoff
    :alt: pre-commit.ci status
 
 .. image:: https://github.com/pechersky/sendoff/actions/workflows/tox.yml/badge.svg
+   :target: https://github.com/pechersky/sendoff/actions/workflows/tox.yml
    :alt: Tox status
 
 The minimal SDF metadata parser.
