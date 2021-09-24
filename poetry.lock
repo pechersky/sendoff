@@ -284,7 +284,7 @@ python-versions = "*"
 name = "numpy"
 version = "1.21.1"
 description = "NumPy is the fundamental package for array computing with Python."
-category = "main"
+category = "dev"
 optional = false
 python-versions = ">=3.7"
 
@@ -464,7 +464,7 @@ python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, !=3.5.*"
 name = "rdkit-pypi"
 version = "2021.3.5.1"
 description = "A collection of chemoinformatics and machine-learning software written in C++ and Python"
-category = "main"
+category = "dev"
 optional = false
 python-versions = "*"
 
@@ -638,7 +638,7 @@ test = []
 [metadata]
 lock-version = "1.1"
 python-versions = "^3.8"
-content-hash = "c33b5d71d716cb7fd16b89fc5de839454502c223a1bc581064f3ed27d8776526"
+content-hash = "9dd5007322e8fc03164dce6ef98df4ee9d6eb2bbf2aabd37b0a606b761c128d4"
 
 [metadata.files]
 atomicwrites = [
