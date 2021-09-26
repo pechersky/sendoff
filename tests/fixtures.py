@@ -166,9 +166,7 @@ def single_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
 
 
 @pytest.fixture(params=["rdkit", "sendoff"])
-def single_delimiter_record_mol_sdf(
-    request: FixtureRequest, tmp_path: Path
-) -> Path:
+def single_delimiter_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with delimiter record value metadata to an sdf.
 
     Args:
@@ -199,9 +197,7 @@ def single_delimiter_record_mol_sdf(
 
 
 @pytest.fixture(params=["rdkit", "sendoff"])
-def single_multiline_record_mol_sdf(
-    request: FixtureRequest, tmp_path: Path
-) -> Path:
+def single_multiline_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with a multiline record value metadata to an sdf.
 
     Args:
@@ -232,9 +228,7 @@ def single_multiline_record_mol_sdf(
 
 
 @pytest.fixture(params=["rdkit", "sendoff"])
-def single_empty_string_record_mol_sdf(
-    request: FixtureRequest, tmp_path: Path
-) -> Path:
+def single_empty_string_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with an empty string record value to an sdf.
 
     Args:

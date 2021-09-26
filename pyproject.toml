@@ -36,7 +36,7 @@ darglint = "^1.8.0"
 rdkit-pypi = "^2021.3.5"
 
 [tool.black]
-line-length = 79
+line-length = 88
 include = '\.pyi?$'
 exclude = '''
 /(
