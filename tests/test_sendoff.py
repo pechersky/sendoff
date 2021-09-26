@@ -1,3 +1,4 @@
+# mypy: allow-untyped-decorators
 """Test sendoff parsing of metadata on generated SDFs."""
 from itertools import chain
 

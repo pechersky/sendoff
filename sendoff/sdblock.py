@@ -94,18 +94,13 @@ class SDBlock:
                 The value includes any newlines if it is multiline
         """
         # make data chunks by breaking on empty lines
-        for _, chunk in groupby(
-            (line.strip() for line in self.metadata), bool
-        ):
+        for _, chunk in groupby((line.strip() for line in self.metadata), bool):
             record_line: str = next(chunk)
             if not record_line.startswith("> "):
                 continue
             # something of the form `> ___<___>___` where `_` is anything
             record_name = (
-                record_line.split("> ", 1)[1]
-                .strip()
-                .rsplit(">")[0]
-                .split("<", 1)[1]
+                record_line.split("> ", 1)[1].strip().rsplit(">")[0].split("<", 1)[1]
             )
             yield record_name, str.join("\n", chunk)
 

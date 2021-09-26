@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "sendoff"
-version = "0.1.1"
+version = "0.1.2"
 description = "The minimal SDF metadata parser"
 authors = ["Yakov Pechersky <ypechersky@treeline.bio>"]
 license = "MIT"
@@ -36,7 +36,7 @@ darglint = "^1.8.0"
 rdkit-pypi = "^2021.3.5"
 
 [tool.black]
-line-length = 79
+line-length = 88
 include = '\.pyi?$'
 exclude = '''
 /(
