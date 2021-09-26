@@ -1,3 +1,4 @@
+# mypy: allow-untyped-decorators
 """Provide fixtures of SDFs with well- or misbehaved metadata."""
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -10,7 +11,8 @@ from sendoff.sdblock import parse_sdf
 if TYPE_CHECKING:
     from _pytest.fixtures import FixtureRequest as __FixtureRequest
 
-    class FixtureRequest(__FixtureRequest):
+    # This is to provide a proper type; we are subclassing Any, which causes mypy warn
+    class FixtureRequest(__FixtureRequest):  # type: ignore
         """FixtureRequest wrapper class to provide param attribute."""
 
         param: str
