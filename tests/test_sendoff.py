@@ -1,5 +1,6 @@
 # mypy: allow-untyped-decorators
 """Test sendoff parsing of metadata on generated SDFs."""
+import io
 from itertools import chain
 
 import pytest
@@ -130,3 +131,19 @@ def test_multiline_record_name_mol_read(
     mol = next(parse_sdf(single_multiline_record_name_mol_sdf))
     records = list(mol.records())
     assert "Rec\nord" not in map(str, chain(zip(*records)))
+
+def test_SDBlock_from_lines(
+    single_multiline_record_name_mol_sdf: Pathy,
+) -> None:
+    """An sdf of an empty string record valued molecule contains the expected data. Will read and splitlines
+
+    Args:
+        single_empty_string_record_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    #mols = SDBlock.from_lines(l + '\n' for l in open(single_multiline_record_name_mol_sdf).read().splitlines())
+    mols = SDBlock.from_lines(open(single_multiline_record_name_mol_sdf).read().splitlines())
+    buf = io.StringIO()
+    for rec in mols:
+        rec.write(buf)
+        
+    assert len(buf.getvalue().splitlines()) >= 4
