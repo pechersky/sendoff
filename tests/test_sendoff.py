@@ -145,5 +145,5 @@ def test_SDBlock_from_lines(
     buf = io.StringIO()
     for rec in mols:
         rec.write(buf)
-        
+
     assert len(buf.getvalue().splitlines()) >= 4
