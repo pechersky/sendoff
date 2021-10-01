@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Filter SDF by keeping the entries with first occurrence of a record value.
+
+Given an SDF (provided by `--input`), we can filter the entries, retaining the
+first entry that we encounter that has a previously unseen value, at a particular
+record field (provided by `--field`). The retained entries are written to the file
+provided by `--output`. This utility supports piping in and out, and as such, has
+the same issue as other POSIX tools, you cannot write to the same file as the input.
+"""
+import argparse
+import sys
+
+from sendoff.sdblock import SDBlock
+
+
+def parse_args() -> argparse.ArgumentParser:
+    """Parse input arguments.
+
+    Returns:
+        parser: an argument parser that will provide an `args`
+    """
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "-i",
+        "--input",
+        type=argparse.FileType("r"),
+        help="Input SDF to be uniq'd",
+        default=sys.stdin,
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=argparse.FileType("w"),
+        help="Output SDF after uniquing",
+        default=sys.stdout,
+    )
+    parser.add_argument(
+        "-f", "--field", type=str, required=True, help="Record field on which to unique"
+    )
+    return parser
+
+
+def main() -> None:
+    """Uniquify an input SDF."""
+    args = parse_args().parse_args()
+    values: set[str] = set()
+    for sdblock in SDBlock.from_lines(args.input):
+        for record, value in sdblock.records():
+            if record != args.field:
+                continue
+            if value in values:
+                continue
+            values.add(value)
+            sdblock.write(args.output)
+    return
+
+
+if __name__ == "__main__":
+    main()
