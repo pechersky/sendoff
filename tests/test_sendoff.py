@@ -212,4 +212,3 @@ def test_single_mol_newline_write_splitlines_no_trailing(single_mol_sdf: Pathy) 
     assert len(buffer.getvalue().splitlines()) < len(
         open(single_mol_sdf).read().splitlines()
     )
-
