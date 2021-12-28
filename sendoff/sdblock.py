@@ -104,16 +104,20 @@ class SDBlock:
             )
             yield record_name, str.join("\n", chunk)
 
-    def write(self, outh: TextIOWrapper) -> None:
+    def write(self, outh: TextIOWrapper, with_newlines: bool = True) -> None:
         """Write an SDBlock to a file-like handle.
 
         Args:
             outh: file-like handle, such as what is returned by open(..., "w")
+            with_newlines: each line is written with a trailing "\\n".
+                The newline character is appended only if it wasn't in the line
 
         """
         print(self.title, file=outh)
         for line in chain(self.mdl, self.metadata):
             outh.write(line)
+            if with_newlines and not line.endswith("\n"):
+                outh.write("\n")
         outh.write("$$$$\n")
 
     def append_record(self, record_name: str, value: str) -> None:
