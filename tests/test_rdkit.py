@@ -132,3 +132,43 @@ def test_multiline_record_name_mol_read(
     """
     mol = next(Chem.SDMolSupplier(str(single_multiline_record_name_mol_sdf)))
     assert not mol.HasProp("Rec\nord")
+
+
+def test_0_atoms_mol_num_atoms(single_0_atoms_mol_sdf: Pathy) -> None:
+    """An sdf block with 0 atoms written parses as 0 atoms.
+
+    Args:
+        single_0_atoms_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_0_atoms_mol_sdf)))
+    assert mol.GetNumAtoms() == 0
+
+
+def test_star_atom_mol_num_atoms(single_star_atom_mol_sdf: Pathy) -> None:
+    """An sdf block with a single star atom written parses as 1 atom.
+
+    Args:
+        single_star_atom_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_star_atom_mol_sdf)))
+    assert mol.GetNumAtoms() == 1
+
+
+def test_999_atoms_mol_num_atoms(single_999_atoms_mol_sdf: Pathy) -> None:
+    """An sdf block with 999 atoms written parses as 999 atoms.
+
+    Args:
+        single_999_atoms_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_999_atoms_mol_sdf)))
+    assert mol.GetNumAtoms() == 999
+
+
+def test_1001_atoms_mol_num_atoms(single_1001_atoms_mol_sdf: Pathy) -> None:
+    """An sdf block with 1001 atoms written parses as 1001 atoms.
+
+    Args:
+        single_1001_atoms_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_1001_atoms_mol_sdf)))
+    assert mol.GetNumAtoms() == 1001
