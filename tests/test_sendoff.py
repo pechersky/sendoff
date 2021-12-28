@@ -167,8 +167,8 @@ def test_num_atoms_999_atom_mol(test_999_atom_mol: Pathy) -> None:
     for idx, mol in enumerate(parse_sdf(test_999_atom_mol)):
         assert mol.num_atoms() == 999
     assert idx == 1
-    
-    
+
+
 def test_single_mol_newline_write(single_mol_sdf: Pathy) -> None:
     """An sdf block gets written with as many lines as the input.
 

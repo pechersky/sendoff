@@ -44,7 +44,7 @@ def _double_mols() -> Iterator[Chem.Mol]:
     yield Chem.MolFromSmiles("C")
     yield Chem.MolFromSmiles("CC")
 
-    
+
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
 def double_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write two molecules with no metadata to an sdf.
