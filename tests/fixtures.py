@@ -62,6 +62,89 @@ def double_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
 
 
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
+def single_0_atoms_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
+    """Write a single molecule with 0 atoms and no metadata to an sdf.
+
+    This relies on the fact that RDKit does not write hydrogens by default.
+
+    Args:
+        request: pytest fixture configuration handling param passing
+        tmp_path: pytest fixture for writing files to a temp directory
+
+    Returns:
+        Path to the sdf
+    """
+    mol = Chem.MolFromSmiles("C" * 0)
+    outpath = tmp_path / "input.sdf"
+    with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.SetForceV3000(request.param == "rdkitV3000")
+        sdw.write(mol)
+    return outpath
+
+
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
+def single_star_atom_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
+    """Write a single molecule with a single star atom and no metadata to an sdf.
+
+    This relies on the fact that RDKit does not write hydrogens by default.
+
+    Args:
+        request: pytest fixture configuration handling param passing
+        tmp_path: pytest fixture for writing files to a temp directory
+
+    Returns:
+        Path to the sdf
+    """
+    mol = Chem.MolFromSmiles("*")
+    outpath = tmp_path / "input.sdf"
+    with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.SetForceV3000(request.param == "rdkitV3000")
+        sdw.write(mol)
+    return outpath
+
+
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
+def single_999_atoms_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
+    """Write a single molecule with 999 atoms and no metadata to an sdf.
+
+    This relies on the fact that RDKit does not write hydrogens by default.
+
+    Args:
+        request: pytest fixture configuration handling param passing
+        tmp_path: pytest fixture for writing files to a temp directory
+
+    Returns:
+        Path to the sdf
+    """
+    mol = Chem.MolFromSmiles("C" * 999)
+    outpath = tmp_path / "input.sdf"
+    with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.SetForceV3000(request.param == "rdkitV3000")
+        sdw.write(mol)
+    return outpath
+
+
+@pytest.fixture
+def single_1001_atoms_mol_sdf(tmp_path: Path) -> Path:
+    """Write a single molecule with 1001 atoms and no metadata to an sdf.
+
+    This relies on the fact that RDKit does not write hydrogens by default,
+    and that RDKit falls back to V3000 for molecules of more than 999 atoms.
+
+    Args:
+        tmp_path: pytest fixture for writing files to a temp directory
+
+    Returns:
+        Path to the sdf
+    """
+    mol = Chem.MolFromSmiles("C" * 1001)
+    outpath = tmp_path / "input.sdf"
+    with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.write(mol)
+    return outpath
+
+
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
 def single_titled_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with only title metadata to an sdf.
 
