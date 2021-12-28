@@ -61,7 +61,14 @@ class SDBlock:
         Returns:
             An SDBlock with a parsed in title and lines
         """
-        iterlines = iter(lines)
+
+        def _append_newlines(lines: Iterator[str]) -> Iterator[str]:
+            for line in lines:
+                if not line.endswith("\n"):
+                    line += "\n"
+                yield line
+
+        iterlines = _append_newlines(iter(lines))
         title = next(iterlines).strip()
         mdl = deque(cls.parse_mdl(iterlines))
         metadata = deque(cls.parse_metadata(iterlines))
