@@ -1,5 +1,6 @@
 # mypy: allow-untyped-decorators
 """Test sendoff parsing of metadata on generated SDFs."""
+import io
 from itertools import chain
 
 import pytest
@@ -130,3 +131,48 @@ def test_multiline_record_name_mol_read(
     mol = next(parse_sdf(single_multiline_record_name_mol_sdf))
     records = list(mol.records())
     assert "Rec\nord" not in map(str, chain(zip(*records)))
+
+
+def test_single_mol_newline_write(single_mol_sdf: Pathy) -> None:
+    """An sdf block gets written with as many lines as the input.
+
+    Args:
+        single_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    mols = list(parse_sdf(single_mol_sdf))
+    buffer = io.StringIO()
+    for mol in mols:
+        mol.write(buffer)
+    assert len(buffer.getvalue().splitlines()) == len(
+        open(single_mol_sdf).read().splitlines()
+    )
+
+
+def test_single_mol_newline_write_splitlines(single_mol_sdf: Pathy) -> None:
+    """An sdf block gets written with as many lines as a splitlines input.
+
+    Args:
+        single_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    mols = list(SDBlock.from_lines(open(single_mol_sdf).read().splitlines()))
+    buffer = io.StringIO()
+    for mol in mols:
+        mol.write(buffer)
+    assert len(buffer.getvalue().splitlines()) == len(
+        open(single_mol_sdf).read().splitlines()
+    )
+
+
+def test_single_mol_newline_write_splitlines_no_trailing(single_mol_sdf: Pathy) -> None:
+    """An sdf block written with no trailing newlines has fewer lines than splitlines input.
+
+    Args:
+        single_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    mols = list(SDBlock.from_lines(open(single_mol_sdf).read().splitlines()))
+    buffer = io.StringIO()
+    for mol in mols:
+        mol.write(buffer, with_newlines=False)
+    assert len(buffer.getvalue().splitlines()) < len(
+        open(single_mol_sdf).read().splitlines()
+    )
