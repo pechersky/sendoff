@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 
         param: str
 
-
 else:
     from _pytest.fixtures import FixtureRequest
 
