@@ -21,11 +21,12 @@ else:
     from _pytest.fixtures import FixtureRequest
 
 
-@pytest.fixture
-def single_mol_sdf(tmp_path: Path) -> Path:
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
+def single_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with no metadata to an sdf.
 
     Args:
+        request: pytest fixture configuration handling param passing
         tmp_path: pytest fixture for writing files to a temp directory
 
     Returns:
@@ -34,15 +35,17 @@ def single_mol_sdf(tmp_path: Path) -> Path:
     mol = Chem.MolFromSmiles("C")
     outpath = tmp_path / "input.sdf"
     with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.SetForceV3000(request.param == "rdkitV3000")
         sdw.write(mol)
     return outpath
 
 
-@pytest.fixture
-def double_mol_sdf(tmp_path: Path) -> Path:
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
+def double_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write two molecules with no metadata to an sdf.
 
     Args:
+        request: pytest fixture configuration handling param passing
         tmp_path: pytest fixture for writing files to a temp directory
 
     Returns:
@@ -52,16 +55,18 @@ def double_mol_sdf(tmp_path: Path) -> Path:
     ethane = Chem.MolFromSmiles("CC")
     outpath = tmp_path / "input.sdf"
     with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.SetForceV3000(request.param == "rdkitV3000")
         sdw.write(methane)
         sdw.write(ethane)
     return outpath
 
 
-@pytest.fixture
-def single_titled_mol_sdf(tmp_path: Path) -> Path:
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
+def single_titled_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with only title metadata to an sdf.
 
     Args:
+        request: pytest fixture configuration handling param passing
         tmp_path: pytest fixture for writing files to a temp directory
 
     Returns:
@@ -71,15 +76,17 @@ def single_titled_mol_sdf(tmp_path: Path) -> Path:
     mol.SetProp("_Name", "Title")
     outpath = tmp_path / "input.sdf"
     with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.SetForceV3000(request.param == "rdkitV3000")
         sdw.write(mol)
     return outpath
 
 
-@pytest.fixture
-def single_delimiter_titled_mol_sdf(tmp_path: Path) -> Path:
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
+def single_delimiter_titled_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with delimiter title metadata to an sdf.
 
     Args:
+        request: pytest fixture configuration handling param passing
         tmp_path: pytest fixture for writing files to a temp directory
 
     Returns:
@@ -89,15 +96,19 @@ def single_delimiter_titled_mol_sdf(tmp_path: Path) -> Path:
     mol.SetProp("_Name", "$$$$")
     outpath = tmp_path / "input.sdf"
     with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.SetForceV3000(request.param == "rdkitV3000")
         sdw.write(mol)
     return outpath
 
 
-@pytest.fixture
-def double_first_delimiter_titled_mol_sdf(tmp_path: Path) -> Path:
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
+def double_first_delimiter_titled_mol_sdf(
+    request: FixtureRequest, tmp_path: Path
+) -> Path:
     """Write two molecules with the first as delimiter title metadata to an sdf.
 
     Args:
+        request: pytest fixture configuration handling param passing
         tmp_path: pytest fixture for writing files to a temp directory
 
     Returns:
@@ -109,16 +120,20 @@ def double_first_delimiter_titled_mol_sdf(tmp_path: Path) -> Path:
     other_mol.SetProp("_Name", "Title")
     outpath = tmp_path / "input.sdf"
     with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.SetForceV3000(request.param == "rdkitV3000")
         sdw.write(mol)
         sdw.write(other_mol)
     return outpath
 
 
-@pytest.fixture
-def double_second_delimiter_titled_mol_sdf(tmp_path: Path) -> Path:
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
+def double_second_delimiter_titled_mol_sdf(
+    request: FixtureRequest, tmp_path: Path
+) -> Path:
     """Write two molecules with the second as delimiter title metadata to an sdf.
 
     Args:
+        request: pytest fixture configuration handling param passing
         tmp_path: pytest fixture for writing files to a temp directory
 
     Returns:
@@ -130,12 +145,13 @@ def double_second_delimiter_titled_mol_sdf(tmp_path: Path) -> Path:
     mol.SetProp("_Name", "$$$$")
     outpath = tmp_path / "input.sdf"
     with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.SetForceV3000(request.param == "rdkitV3000")
         sdw.write(other_mol)
         sdw.write(mol)
     return outpath
 
 
-@pytest.fixture(params=["rdkit", "sendoff"])
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
 def single_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with only record value metadata to an sdf.
 
@@ -151,9 +167,10 @@ def single_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     outpath = tmp_path / "input.sdf"
     with Chem.SDWriter(str(outpath)) as sdw:
         sdw.write(mol)
-    if request.param == "rdkit":
+    if request.param.startswith("rdkit"):
         mols = list(Chem.SDMolSupplier(str(outpath)))
         with Chem.SDWriter(str(outpath)) as outh:
+            sdw.SetForceV3000(request.param == "rdkitV3000")
             for mol in mols:
                 mol.SetProp(record, value)
                 outh.write(mol)
@@ -166,7 +183,7 @@ def single_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     return outpath
 
 
-@pytest.fixture(params=["rdkit", "sendoff"])
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
 def single_delimiter_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with delimiter record value metadata to an sdf.
 
@@ -182,9 +199,10 @@ def single_delimiter_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> 
     outpath = tmp_path / "input.sdf"
     with Chem.SDWriter(str(outpath)) as sdw:
         sdw.write(mol)
-    if request.param == "rdkit":
+    if request.param.startswith("rdkit"):
         mols = list(Chem.SDMolSupplier(str(outpath)))
         with Chem.SDWriter(str(outpath)) as outh:
+            sdw.SetForceV3000(request.param == "rdkitV3000")
             for mol in mols:
                 mol.SetProp(record, value)
                 outh.write(mol)
@@ -197,7 +215,7 @@ def single_delimiter_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> 
     return outpath
 
 
-@pytest.fixture(params=["rdkit", "sendoff"])
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
 def single_multiline_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with a multiline record value metadata to an sdf.
 
@@ -213,9 +231,10 @@ def single_multiline_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> 
     outpath = tmp_path / "input.sdf"
     with Chem.SDWriter(str(outpath)) as sdw:
         sdw.write(mol)
-    if request.param == "rdkit":
+    if request.param.startswith("rdkit"):
         mols = list(Chem.SDMolSupplier(str(outpath)))
         with Chem.SDWriter(str(outpath)) as outh:
+            sdw.SetForceV3000(request.param == "rdkitV3000")
             for mol in mols:
                 mol.SetProp(record, value)
                 outh.write(mol)
@@ -228,7 +247,7 @@ def single_multiline_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> 
     return outpath
 
 
-@pytest.fixture(params=["rdkit", "sendoff"])
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
 def single_empty_string_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with an empty string record value to an sdf.
 
@@ -244,9 +263,10 @@ def single_empty_string_record_mol_sdf(request: FixtureRequest, tmp_path: Path) 
     outpath = tmp_path / "input.sdf"
     with Chem.SDWriter(str(outpath)) as sdw:
         sdw.write(mol)
-    if request.param == "rdkit":
+    if request.param.startswith("rdkit"):
         mols = list(Chem.SDMolSupplier(str(outpath)))
         with Chem.SDWriter(str(outpath)) as outh:
+            sdw.SetForceV3000(request.param == "rdkitV3000")
             for mol in mols:
                 mol.SetProp(record, value)
                 outh.write(mol)
@@ -259,7 +279,7 @@ def single_empty_string_record_mol_sdf(request: FixtureRequest, tmp_path: Path) 
     return outpath
 
 
-@pytest.fixture(params=["rdkit", "sendoff"])
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
 def single_multiline_record_name_mol_sdf(
     request: FixtureRequest, tmp_path: Path
 ) -> Path:
@@ -277,9 +297,10 @@ def single_multiline_record_name_mol_sdf(
     outpath = tmp_path / "input.sdf"
     with Chem.SDWriter(str(outpath)) as sdw:
         sdw.write(mol)
-    if request.param == "rdkit":
+    if request.param.startswith("rdkit"):
         mols = list(Chem.SDMolSupplier(str(outpath)))
         with Chem.SDWriter(str(outpath)) as outh:
+            sdw.SetForceV3000(request.param == "rdkitV3000")
             for mol in mols:
                 mol.SetProp(record, value)
                 outh.write(mol)
