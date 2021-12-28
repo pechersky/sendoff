@@ -34,6 +34,7 @@ pre-commit = "^2.15.0"
 flake8-isort = "^4.0.0"
 darglint = "^1.8.0"
 rdkit-pypi = "^2021.3.5"
+tbump = "^6.7.0"
 
 [tool.black]
 line-length = 88
@@ -50,6 +51,24 @@ exclude = '''
   | dist
 )/
 '''
+
+[tool.tbump.version]
+current = "0.1.2"
+
+regex = '''
+  (?P<major>\d+)
+  \.
+  (?P<minor>\d+)
+  \.
+  (?P<patch>\d+)
+  '''
+
+[tool.tbump.git]
+message_template = "Bump to {new_version}"
+tag_template = "v{new_version}"
+
+[[tool.tbump.file]]
+src = "pyproject.toml"
 
 [tool.towncrier]
 # Usage: (Source: https://github.com/python-trio/trio/blob/master/pyproject.toml)
