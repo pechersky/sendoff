@@ -128,6 +128,30 @@ class SDBlock:
         self.metadata.append(value + "\n")
         self.metadata.append("\n")
 
+    def num_atoms(self) -> int:
+        """Return the atoms in MDL structure.
+
+        Returns:
+            Integer for the number of atoms in the SD block.
+
+        Raises:
+            ValueError: indicates there is a parsing error.
+        """
+        frmt = self.mdl[2].strip()
+        if frmt.endswith("V2000"):
+            return int(frmt[:3])
+        elif frmt.endswith("V3000"):
+            prefix = "M  V30 COUNTS"
+            prefix_len = len(prefix)
+            for line in self.mdl:
+                if line.startswith(prefix):
+
+                    atom_count = line[prefix_len:].strip().split()[0]
+                    return int(atom_count)
+            raise ValueError(f"'{prefix}' not found MDL block: {self.mdl}")
+        else:
+            raise ValueError(f"Unable to recognize MDL format: {frmt}")
+
 
 def parse_sdf(sdfpath: Pathy) -> Iterator[SDBlock]:
     """Parse in SDBlocks from a path. Wrapper around SDBlock.from_lines.

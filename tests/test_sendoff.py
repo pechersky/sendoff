@@ -130,3 +130,39 @@ def test_multiline_record_name_mol_read(
     mol = next(parse_sdf(single_multiline_record_name_mol_sdf))
     records = list(mol.records())
     assert "Rec\nord" not in map(str, chain(zip(*records)))
+
+
+def test_num_atoms_in_double_mol_sdf(double_mol_sdf: Pathy) -> None:
+    """The position in the SDF file is how many atoms are in the record.
+
+    Args:
+        double_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    for idx, mol in enumerate(parse_sdf(double_mol_sdf)):
+        assert mol.num_atoms() == idx + 1
+    assert idx == 1
+
+
+def test_num_atoms_in_double_mol_v3000(double_mol_v3000: Pathy) -> None:
+    """The position in the SDF file is how many atoms are in the record.
+
+    Args:
+        double_mol_v3000: pytest fixture of a Path to the sdf
+    """
+    for idx, mol in enumerate(parse_sdf(double_mol_v3000)):
+        assert mol.num_atoms() == idx + 1
+    assert idx == 1
+
+
+def test_num_atoms_999_atom_mol(test_999_atom_mol: Pathy) -> None:
+    """The position in the SDF file is how many atoms are in the record.
+
+    Args:
+        test_999_atom_mol: pytest fixture of a Path to the sdf
+    """
+    data = open(test_999_atom_mol).read()
+    assert "V2000" in data
+    assert "V3000" in data
+    for idx, mol in enumerate(parse_sdf(test_999_atom_mol)):
+        assert mol.num_atoms() == 999
+    assert idx == 1

@@ -1,7 +1,7 @@
 # mypy: allow-untyped-decorators
 """Provide fixtures of SDFs with well- or misbehaved metadata."""
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterator
 
 import pytest
 from rdkit import Chem
@@ -38,6 +38,11 @@ def single_mol_sdf(tmp_path: Path) -> Path:
     return outpath
 
 
+def _double_mols() -> Iterator[Chem.Mol]:
+    yield Chem.MolFromSmiles("C")
+    yield Chem.MolFromSmiles("CC")
+
+
 @pytest.fixture
 def double_mol_sdf(tmp_path: Path) -> Path:
     """Write two molecules with no metadata to an sdf.
@@ -48,12 +53,47 @@ def double_mol_sdf(tmp_path: Path) -> Path:
     Returns:
         Path to the sdf
     """
-    methane = Chem.MolFromSmiles("C")
-    ethane = Chem.MolFromSmiles("CC")
     outpath = tmp_path / "input.sdf"
     with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.write(methane)
-        sdw.write(ethane)
+        for mol in _double_mols():
+            sdw.write(mol)
+    return outpath
+
+
+@pytest.fixture
+def double_mol_v3000(tmp_path: Path) -> Path:
+    """Write two molecules with no metadata to a V3000 sdf.
+
+    Args:
+        tmp_path: pytest fixture for writing files to a temp directory
+
+    Returns:
+        Path to the sdf
+    """
+    outpath = tmp_path / "input.sdf"
+    with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.SetForceV3000(True)
+        for mol in _double_mols():
+            sdw.write(mol)
+    return outpath
+
+
+@pytest.fixture
+def test_999_atom_mol(tmp_path: Path) -> Path:
+    """Write two molecules with 999 atoms to V2000 and V3000.
+
+    Args:
+        tmp_path: pytest fixture for writing files to a temp directory
+
+    Returns:
+        Path to the sdf
+    """
+    mol = Chem.MolFromSmiles("C" * 999)
+    outpath = tmp_path / "input.sdf"
+    with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.write(mol)
+        sdw.SetForceV3000(True)
+        sdw.write(mol)
     return outpath
 
 
