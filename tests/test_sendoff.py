@@ -156,7 +156,7 @@ def test_num_atoms_in_double_mol_v3000(double_mol_v3000: Pathy) -> None:
 
 
 def test_num_atoms_999_atom_mol(test_999_atom_mol: Pathy) -> None:
-    """The position in the SDF file is how many atoms are in the record.
+    """All molecules in the file contain 999 atoms. And both V2000 and V3000.
 
     Args:
         test_999_atom_mol: pytest fixture of a Path to the sdf
