@@ -216,3 +216,43 @@ def test_1001_atoms_mol_num_atoms(single_1001_atoms_mol_sdf: Pathy) -> None:
     """
     mol: SDBlock = next(parse_sdf(single_1001_atoms_mol_sdf))
     assert mol.num_atoms() == 1001
+
+
+def test_0_atoms_mol_num_bonds(single_0_atoms_mol_sdf: Pathy) -> None:
+    """An sdf block with 0 atoms written parses as 0 bonds.
+
+    Args:
+        single_0_atoms_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_0_atoms_mol_sdf))
+    assert mol.num_bonds() == 0
+
+
+def test_star_atom_mol_num_bonds(single_star_atom_mol_sdf: Pathy) -> None:
+    """An sdf block with a single star atom written parses as 0 bonds.
+
+    Args:
+        single_star_atom_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_star_atom_mol_sdf))
+    assert mol.num_bonds() == 0
+
+
+def test_999_atoms_mol_num_bonds(single_999_atoms_mol_sdf: Pathy) -> None:
+    """An sdf block with 999 atoms written parses as 998 bonds.
+
+    Args:
+        single_999_atoms_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_999_atoms_mol_sdf))
+    assert mol.num_bonds() == 998
+
+
+def test_1001_atoms_mol_num_bonds(single_1001_atoms_mol_sdf: Pathy) -> None:
+    """An sdf block with 1001 atoms written parses as 1000 bonds.
+
+    Args:
+        single_1001_atoms_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_1001_atoms_mol_sdf))
+    assert mol.num_bonds() == 1000
