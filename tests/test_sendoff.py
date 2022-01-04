@@ -5,6 +5,11 @@ from itertools import chain
 
 import pytest
 
+from sendoff.ctable import (
+    IndicesDuplicateError,
+    IndicesMismatchError,
+    IndicesOutOfOrderError,
+)
 from sendoff.sdblock import Pathy, SDBlock, parse_sdf
 
 
@@ -256,3 +261,263 @@ def test_1001_atoms_mol_num_bonds(single_1001_atoms_mol_sdf: Pathy) -> None:
     """
     mol: SDBlock = next(parse_sdf(single_1001_atoms_mol_sdf))
     assert mol.num_bonds() == 1000
+
+
+def test_single_mol_v2000_sdf_valid_atom_indices_not_implemented(
+    single_mol_v2000_sdf: Pathy,
+) -> None:
+    """A v2000 sdf block cannot yet be validated for atom indices.
+
+    Args:
+        single_mol_v2000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_mol_v2000_sdf))
+    ctable = mol.ctable()
+    with pytest.raises(NotImplementedError):
+        assert ctable.valid_atom_indices()
+
+
+def test_single_mol_v2000_sdf_valid_bond_indices_not_implemented(
+    single_mol_v2000_sdf: Pathy,
+) -> None:
+    """A v2000 sdf block cannot yet be validated for bond indices.
+
+    Args:
+        single_mol_v2000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_mol_v2000_sdf))
+    ctable = mol.ctable()
+    with pytest.raises(NotImplementedError):
+        assert ctable.valid_bond_indices()
+
+
+def test_single_large_atom_index_valid_atom_indices(
+    single_large_atom_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with large atom indices has valid indices.
+
+    That means that the number of atoms matches the counts line,
+    and each index is unique and integer.
+    Does not check that the indices are 1-indexed and in order.
+
+    Args:
+        single_large_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_large_atom_index_v3000_sdf))
+    ctable = mol.ctable()
+    assert ctable.valid_atom_indices()
+
+
+def test_single_large_atom_index_strict_invalid_atom_indices(
+    single_large_atom_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with large atom indices has invalid indices, when strict.
+
+    That means that the number of atoms matches the counts line,
+    and each index is unique and integer.
+    However, the indices are not 1-indexed and in order.
+
+    Args:
+        single_large_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_large_atom_index_v3000_sdf))
+    ctable = mol.ctable()
+    with pytest.raises(IndicesOutOfOrderError, match="atoms"):
+        ctable.valid_atom_indices(strict=True)
+
+
+def test_single_large_bond_index_valid_bond_indices(
+    single_large_bond_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with large bond indices has valid indices.
+
+    That means that the number of bonds matches the counts line,
+    and each index is unique and integer.
+    Does not check that the indices are 1-indexed and in order.
+
+    Args:
+        single_large_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_large_bond_index_v3000_sdf))
+    ctable = mol.ctable()
+    assert ctable.valid_bond_indices()
+
+
+def test_single_large_bond_index_strict_invalid_bond_indices(
+    single_large_bond_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with large bond indices has invalid indices, when strict.
+
+    That means that the number of bonds matches the counts line,
+    and each index is unique and integer.
+    However, the indices are not 1-indexed and in order.
+
+    Args:
+        single_large_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_large_bond_index_v3000_sdf))
+    ctable = mol.ctable()
+    with pytest.raises(IndicesOutOfOrderError, match="bonds"):
+        ctable.valid_bond_indices(strict=True)
+
+
+def test_single_missing_atom_line_invalid_atom_indices(
+    single_missing_atom_line_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a missing atom line has invalid indices.
+
+    That means that the number of atoms is fewer than the counts line.
+
+    Args:
+        single_missing_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_missing_atom_line_v3000_sdf))
+    ctable = mol.ctable()
+    with pytest.raises(IndicesMismatchError, match="fewer atom lines than count line"):
+        ctable.valid_atom_indices()
+
+
+def test_single_extra_atom_line_invalid_atom_indices(
+    single_extra_atom_line_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a extra atom line has invalid indices.
+
+    That means that the number of atoms is more than the counts line.
+
+    Args:
+        single_extra_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_extra_atom_line_v3000_sdf))
+    ctable = mol.ctable()
+    with pytest.raises(IndicesMismatchError, match="more atom lines than count line"):
+        ctable.valid_atom_indices()
+
+
+def test_single_missing_bond_line_invalid_atom_indices(
+    single_missing_bond_line_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a missing bond line has invalid indices.
+
+    That means that the number of bonds is fewer than the counts line.
+
+    Args:
+        single_missing_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_missing_bond_line_v3000_sdf))
+    ctable = mol.ctable()
+    with pytest.raises(IndicesMismatchError, match="fewer bond lines than count line"):
+        ctable.valid_bond_indices()
+
+
+def test_single_extra_bond_line_invalid_atom_indices(
+    single_extra_bond_line_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a extra bond line has invalid indices.
+
+    That means that the number of bonds is more than the counts line.
+
+    Args:
+        single_extra_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_extra_bond_line_v3000_sdf))
+    ctable = mol.ctable()
+    with pytest.raises(IndicesMismatchError, match="more bond lines than count line"):
+        ctable.valid_bond_indices()
+
+
+def test_single_duplicate_atom_index_invalid_atom_indices(
+    single_duplicate_atom_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a duplicate atom index has invalid indices.
+
+    Args:
+        single_duplicate_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_duplicate_atom_index_v3000_sdf))
+    ctable = mol.ctable()
+    with pytest.raises(IndicesDuplicateError, match="atoms"):
+        ctable.valid_atom_indices()
+
+
+def test_single_duplicate_bond_index_invalid_bond_indices(
+    single_duplicate_bond_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a duplicate bond index has invalid indices.
+
+    Args:
+        single_duplicate_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_duplicate_bond_index_v3000_sdf))
+    ctable = mol.ctable()
+    with pytest.raises(IndicesDuplicateError, match="bonds"):
+        ctable.valid_bond_indices()
+
+
+def test_single_shuffled_atom_lines_valid_atom_indices(
+    single_shuffled_atom_lines_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with shuffled atom lines has valid indices.
+
+    That means that the number of atoms matches the counts line,
+    and each index is unique and integer.
+    Does not check that the indices are 1-indexed and in order.
+
+    Args:
+        single_shuffled_atom_lines_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_shuffled_atom_lines_v3000_sdf))
+    ctable = mol.ctable()
+    assert ctable.valid_atom_indices()
+
+
+def test_single_shuffled_atom_lines_strict_invalid_atom_indices(
+    single_shuffled_atom_lines_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with shuffled atom lines has invalid indices, when strict.
+
+    That means that the number of atoms matches the counts line,
+    and each index is unique and integer.
+    However, the indices are not 1-indexed and in order.
+
+    Args:
+        single_shuffled_atom_lines_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_shuffled_atom_lines_v3000_sdf))
+    ctable = mol.ctable()
+    with pytest.raises(IndicesOutOfOrderError, match="atoms"):
+        ctable.valid_atom_indices(strict=True)
+
+
+def test_single_shuffled_bond_lines_valid_bond_indices(
+    single_shuffled_bond_lines_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with shuffled bond lines has valid indices.
+
+    That means that the number of bonds matches the counts line,
+    and each index is unique and integer.
+    Does not check that the indices are 1-indexed and in order.
+
+    Args:
+        single_shuffled_bond_lines_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_shuffled_bond_lines_v3000_sdf))
+    ctable = mol.ctable()
+    assert ctable.valid_bond_indices()
+
+
+def test_single_shuffled_bond_lines_strict_invalid_bond_indices(
+    single_shuffled_bond_lines_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with shuffled bond lines has invalid indices, when strict.
+
+    That means that the number of bonds matches the counts line,
+    and each index is unique and integer.
+    However, the indices are not 1-indexed and in order.
+
+    Args:
+        single_shuffled_bond_lines_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_shuffled_bond_lines_v3000_sdf))
+    ctable = mol.ctable()
+    with pytest.raises(IndicesOutOfOrderError, match="bonds"):
+        ctable.valid_bond_indices(strict=True)

@@ -1,6 +1,7 @@
 """Reading and validating connection tables from SDFs."""
 from __future__ import annotations
 
+import itertools as itt
 from collections import deque
 from enum import Enum
 from typing import Iterable, Tuple
@@ -11,6 +12,18 @@ class CTableFormat(Enum):
 
     V2000 = "V2000"
     V3000 = "V3000"
+
+
+class IndicesMismatchError(Exception):
+    """When then number of atom or bond lines does not match the counts line."""
+
+
+class IndicesOutOfOrderError(Exception):
+    """When then atom or bond lines are not in increasing index order."""
+
+
+class IndicesDuplicateError(Exception):
+    """When then atom or bond lines have duplicate indices."""
 
 
 class CTable:
@@ -130,3 +143,89 @@ class CTable:
         num_atoms = int(sline[3])
         num_bonds = int(sline[4])
         return num_atoms, num_bonds
+
+    def valid_atom_indices(self, strict: bool = False) -> bool:
+        """Validate that the atom lines match the counts line.
+
+        If strict, make sure they are 1-indexed and in order.
+
+        Args:
+            strict: the indices start with 1, and increment by one.
+
+        Raises:
+            IndicesDuplicateError: if an atom line met has an index seen before
+            IndicesMismatchError: if number of atom lines does not match count line
+            IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
+            NotImplementedError: if trying to validate a V2000 format table
+
+        Returns:
+            If all the checks pass, return True.
+        """
+        if self.format is not CTableFormat.V3000:
+            raise NotImplementedError
+        atomlines = itt.takewhile(
+            lambda x: not str.startswith(x, "M  V30 END ATOM"),
+            # title source comment compat begin counts begin
+            itt.islice(self.lines, 7, None),
+        )
+        seen_indices: set[int] = set()
+        for line_ix, line in enumerate(atomlines):
+            sline = line.split()
+            atom_ix = int(sline[2])
+            if strict and line_ix + 1 != atom_ix:
+                raise IndicesOutOfOrderError("atoms")
+            if atom_ix in seen_indices:
+                raise IndicesDuplicateError("atoms")
+            seen_indices.add(atom_ix)
+        if len(seen_indices) < self.num_atoms:
+            raise IndicesMismatchError("fewer atom lines than count line")
+        if len(seen_indices) > self.num_atoms:
+            raise IndicesMismatchError("more atom lines than count line")
+        return True
+
+    def valid_bond_indices(self, strict: bool = False) -> bool:
+        """Validate that the bond lines match the counts line.
+
+        If strict, make sure they are 1-indexed and in order.
+
+        Args:
+            strict: the indices start with 1, and increment by one.
+
+        Raises:
+            IndicesDuplicateError: if an bond line met has an index seen before
+            IndicesMismatchError: if number of bond lines does not match count line
+            IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
+            NotImplementedError: if trying to validate a V2000 format table
+
+        Returns:
+            If all the checks pass, return True.
+        """
+        if self.format is not CTableFormat.V3000:
+            raise NotImplementedError
+        if self.format is not CTableFormat.V3000:
+            raise NotImplementedError
+        bondlines = itt.takewhile(
+            lambda x: not str.startswith(x, "M  V30 END BOND"),
+            # islice(..., 1, None) means to drop one
+            itt.islice(
+                itt.dropwhile(
+                    lambda x: not str.startswith(x, "M  V30 BEGIN BOND"), self.lines
+                ),
+                1,
+                None,
+            ),
+        )
+        seen_indices: set[int] = set()
+        for line_ix, line in enumerate(bondlines):
+            sline = line.split()
+            bond_ix = int(sline[2])
+            if strict and line_ix + 1 != bond_ix:
+                raise IndicesOutOfOrderError("bonds")
+            if bond_ix in seen_indices:
+                raise IndicesDuplicateError("bonds")
+            seen_indices.add(bond_ix)
+        if len(seen_indices) < self.num_bonds:
+            raise IndicesMismatchError("fewer bond lines than count line")
+        if len(seen_indices) > self.num_bonds:
+            raise IndicesMismatchError("more bond lines than count line")
+        return True

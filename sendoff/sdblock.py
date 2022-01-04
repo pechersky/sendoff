@@ -134,7 +134,16 @@ class SDBlock:
         self.metadata.append(value + "\n")
         self.metadata.append("\n")
 
-    # TODO: factor out CTable construction from num_atoms and num_bonds
+    def ctable(self) -> CTable:
+        """Parse out the underlying CTable object from the SDBlock.
+
+        Returns:
+            The CTable object, titled with the SDBlock.title,
+                parsed in from the SDBlock.mdl, but without validation.
+        """
+        ctable = CTable(chain([self.title], self.mdl))
+        return ctable
+
     def num_atoms(self) -> int:
         """Get number of atoms as indicated in the MDL block.
 
@@ -145,7 +154,7 @@ class SDBlock:
         Returns:
             The number of atoms, parsed in from the counts line.
         """
-        ctable = CTable(chain([self.title], self.mdl))
+        ctable = self.ctable()
         return ctable.num_atoms
 
     def num_bonds(self) -> int:
@@ -158,7 +167,7 @@ class SDBlock:
         Returns:
             The number of bonds, parsed in from the counts line.
         """
-        ctable = CTable(chain([self.title], self.mdl))
+        ctable = self.ctable()
         return ctable.num_bonds
 
 

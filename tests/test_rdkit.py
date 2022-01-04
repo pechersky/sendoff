@@ -212,3 +212,155 @@ def test_1001_atoms_mol_num_bonds(single_1001_atoms_mol_sdf: Pathy) -> None:
     """
     mol = next(Chem.SDMolSupplier(str(single_1001_atoms_mol_sdf)))
     assert mol.GetNumBonds() == 1000
+
+
+def test_single_large_atom_index_valid_atom_indices(
+    single_large_atom_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with large atom indices has valid indices.
+
+    That means that the number of atoms matches the counts line,
+    and each index is unique and integer. That means RDKit does not complain.
+    Does not check that the indices are 1-indexed and in order.
+
+    Args:
+        single_large_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_large_atom_index_v3000_sdf)))
+    assert mol.GetNumAtoms() == 9
+
+
+def test_single_large_bond_index_valid_bond_indices(
+    single_large_bond_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with large bond indices has valid indices.
+
+    That means that the number of bonds matches the counts line,
+    and each index is unique and integer. That means RDKit does not complain.
+    Does not check that the indices are 1-indexed and in order.
+
+    Args:
+        single_large_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_large_bond_index_v3000_sdf)))
+    assert mol.GetNumBonds() == 9
+
+
+def test_single_missing_atom_line_invalid_atom_indices(
+    single_missing_atom_line_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a missing atom line has invalid indices.
+
+    That means that the number of atoms is fewer than the counts line,
+    and RDKit won't read the molecule.
+
+    Args:
+        single_missing_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_missing_atom_line_v3000_sdf)))
+    assert mol is None
+
+
+def test_single_extra_atom_line_invalid_atom_indices(
+    single_extra_atom_line_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a extra atom line has invalid indices.
+
+    That means that the number of atoms is more than the counts line,
+    and RDKit won't read the molecule.
+
+    Args:
+        single_extra_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_extra_atom_line_v3000_sdf)))
+    assert mol is None
+
+
+def test_single_missing_bond_line_invalid_atom_indices(
+    single_missing_bond_line_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a missing bond line has invalid indices.
+
+    That means that the number of bonds is fewer than the counts line,
+    and RDKit won't read the molecule.
+
+    Args:
+        single_missing_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_missing_bond_line_v3000_sdf)))
+    assert mol is None
+
+
+def test_single_extra_bond_line_invalid_atom_indices(
+    single_extra_bond_line_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a extra bond line has invalid indices.
+
+    That means that the number of bonds is more than the counts line,
+    and RDKit won't read the molecule.
+
+    Args:
+        single_extra_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_extra_bond_line_v3000_sdf)))
+    assert mol is None
+
+
+def test_single_duplicate_atom_index_valid_atom_indices(
+    single_duplicate_atom_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a duplicate atom index has valid indices.
+
+    That means that the number of atoms is weird,
+    yet RDKit will read the molecule.
+
+    Args:
+        single_duplicate_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_duplicate_atom_index_v3000_sdf)))
+    assert mol.GetNumAtoms() == 9
+
+
+def test_single_duplicate_bond_index_valid_bond_indices(
+    single_duplicate_bond_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a duplicate bond index has valid indices.
+
+    That means that the number of bonds is weird,
+    yet RDKit will read the molecule.
+
+    Args:
+        single_duplicate_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_duplicate_bond_index_v3000_sdf)))
+    assert mol.GetNumBonds() == 9
+
+
+def test_single_shuffled_atom_lines_valid_atom_indices(
+    single_shuffled_atom_lines_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with shuffled atom lines has valid indices.
+
+    That means that the number of atoms is weird,
+    yet RDKit will read the molecule.
+
+    Args:
+        single_shuffled_atom_lines_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_shuffled_atom_lines_v3000_sdf)))
+    assert mol.GetNumAtoms() == 9
+
+
+def test_single_shuffled_bond_lines_valid_bond_indices(
+    single_shuffled_bond_lines_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with shuffled bond lines has valid indices.
+
+    That means that the number of bonds is weird,
+    yet RDKit will read the molecule.
+
+    Args:
+        single_shuffled_bond_lines_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol = next(Chem.SDMolSupplier(str(single_shuffled_bond_lines_v3000_sdf)))
+    assert mol.GetNumBonds() == 9
