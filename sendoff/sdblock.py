@@ -170,6 +170,20 @@ class SDBlock:
         ctable = self.ctable()
         return ctable.num_bonds
 
+    def renumber_indices(self) -> None:
+        """Renumber atom and bond indices to be 1-indexed and in order.
+
+        Utilizes the underlying CTable's methods, and overwrites
+        this object's mdl.
+        """
+        ctable = self.ctable()
+        ctable.renumber_indices()
+        # not copy, because we don't care about the ctable we just constructed
+        self.mdl = ctable.lines
+        # pop left, because that is the title line we keep separately
+        self.mdl.popleft()
+        return
+
 
 def parse_sdf(sdfpath: Pathy) -> Iterator[SDBlock]:
     """Parse in SDBlocks from a path. Wrapper around SDBlock.from_lines.

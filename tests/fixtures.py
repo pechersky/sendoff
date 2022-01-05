@@ -893,3 +893,21 @@ def single_mol_v2000_sdf(tmp_path: Path) -> Path:
         sdw.SetForceV3000(False)
         sdw.write(mol)
     return outpath
+
+
+@pytest.fixture()
+def single_mol_v3000_sdf(tmp_path: Path) -> Path:
+    """Write a single molecule with no metadata to an sdf, forced to v3000.
+
+    Args:
+        tmp_path: pytest fixture for writing files to a temp directory
+
+    Returns:
+        Path to the sdf
+    """
+    mol = Chem.MolFromSmiles("C")
+    outpath = tmp_path / "input.sdf"
+    with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.SetForceV3000(True)
+        sdw.write(mol)
+    return outpath

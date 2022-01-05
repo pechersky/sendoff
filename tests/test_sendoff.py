@@ -521,3 +521,203 @@ def test_single_shuffled_bond_lines_strict_invalid_bond_indices(
     ctable = mol.ctable()
     with pytest.raises(IndicesOutOfOrderError, match="bonds"):
         ctable.valid_bond_indices(strict=True)
+
+
+def test_single_mol_v2000_sdf_renumber_indices_not_implemented(
+    single_mol_v2000_sdf: Pathy,
+) -> None:
+    """A v2000 sdf block cannot yet have indices renumbered.
+
+    Args:
+        single_mol_v2000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_mol_v2000_sdf))
+    with pytest.raises(NotImplementedError):
+        mol.renumber_indices()
+
+
+def test_single_large_atom_index_strict_valid_atom_indices_renumbered(
+    single_large_atom_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with large atom indices has strict valid indices, after renumbering.
+
+    That means that the number of atoms matches the counts line,
+    and each index is unique and integer.
+    The indices are 1-indexed and in order after renumbering.
+
+    Args:
+        single_large_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_large_atom_index_v3000_sdf))
+    mol.renumber_indices()
+    ctable = mol.ctable()
+    assert ctable.valid_atom_indices(strict=True)
+
+
+def test_single_large_bond_index_strict_invalid_bond_indices_renumbered(
+    single_large_bond_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with large bond indices has strict valid indices, after renumbering.
+
+    That means that the number of atoms matches the counts line,
+    and each index is unique and integer.
+    The indices are 1-indexed and in order after renumbering.
+
+    Args:
+        single_large_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_large_bond_index_v3000_sdf))
+    mol.renumber_indices()
+    ctable = mol.ctable()
+    assert ctable.valid_bond_indices(strict=True)
+
+
+def test_single_missing_atom_line_valid_atom_indices_after_renumbering(
+    single_missing_atom_line_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a missing atom line has stric valid indices, after renumbering.
+
+    Args:
+        single_missing_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_missing_atom_line_v3000_sdf))
+    mol.renumber_indices()
+    ctable = mol.ctable()
+    assert ctable.valid_atom_indices(strict=True)
+
+
+def test_single_extra_atom_line_valid_atom_indices_after_renumbering(
+    single_extra_atom_line_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a extra atom line has strict valid indices, after renumbering.
+
+    Args:
+        single_extra_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_extra_atom_line_v3000_sdf))
+    mol.renumber_indices()
+    ctable = mol.ctable()
+    assert ctable.valid_atom_indices(strict=True)
+
+
+def test_single_missing_bond_line_valid_atom_indices_after_renumbering(
+    single_missing_bond_line_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a missing bond line has strict valid indices, after renumbering.
+
+    Args:
+        single_missing_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_missing_bond_line_v3000_sdf))
+    mol.renumber_indices()
+    ctable = mol.ctable()
+    assert ctable.valid_bond_indices(strict=True)
+
+
+def test_single_extra_bond_line_valid_atom_indices_after_renumbering(
+    single_extra_bond_line_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a extra bond line has strict valid indices, after renumbering.
+
+    Args:
+        single_extra_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_extra_bond_line_v3000_sdf))
+    mol.renumber_indices()
+    ctable = mol.ctable()
+    assert ctable.valid_bond_indices(strict=True)
+
+
+def test_single_duplicate_atom_index_invalid_atom_indices_even_renumbering(
+    single_duplicate_atom_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a duplicate atom index in bonds is invalid in renumbering.
+
+    Args:
+        single_duplicate_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_duplicate_atom_index_v3000_sdf))
+    with pytest.raises(IndicesDuplicateError, match="atom index mapping in bond"):
+        mol.renumber_indices()
+
+
+def test_single_duplicate_bond_index_valid_bond_indices_after_renumbering(
+    single_duplicate_bond_index_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with a duplicate bond index has strict valid indices after renumbering.
+
+    Args:
+        single_duplicate_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_duplicate_bond_index_v3000_sdf))
+    mol.renumber_indices()
+    ctable = mol.ctable()
+    assert ctable.valid_bond_indices(strict=True)
+
+
+def test_single_shuffled_atom_lines_strict_valid_atom_indices_after_renumbering(
+    single_shuffled_atom_lines_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with shuffled atom lines has strict valid indices, after renumbering.
+
+    That means that the number of atoms matches the counts line,
+    and each index is unique and integer.
+    After renumbering, the indices are 1-indexed and in order.
+
+    Args:
+        single_shuffled_atom_lines_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_shuffled_atom_lines_v3000_sdf))
+    mol.renumber_indices()
+    ctable = mol.ctable()
+    assert ctable.valid_atom_indices(strict=True)
+
+
+def test_single_shuffled_bond_lines_strict_valid_bond_indices_after_renumbering(
+    single_shuffled_bond_lines_v3000_sdf: Pathy,
+) -> None:
+    """An sdf block with shuffled bond lines has strict valid indices, after renumbering.
+
+    That means that the number of bonds matches the counts line,
+    and each index is unique and integer.
+    After renumbering, the indices are 1-indexed and in order.
+
+    Args:
+        single_shuffled_bond_lines_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_shuffled_bond_lines_v3000_sdf))
+    mol.renumber_indices()
+    ctable = mol.ctable()
+    assert ctable.valid_bond_indices(strict=True)
+
+
+def test_single_mol_v3000_sdf_idempotent_renumber(
+    single_mol_v3000_sdf: Pathy,
+) -> None:
+    """A V3000 sdf block generated by RDKit, renumbered, is the same as the input.
+
+    Args:
+        single_mol_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_mol_v3000_sdf))
+    mol.renumber_indices()
+    buffer = io.StringIO()
+    mol.write(buffer)
+    assert buffer.getvalue() == open(single_mol_v3000_sdf).read()
+
+
+def test_single_mol_v3000_sdf_idempotent_renumber_with_splitlines(
+    single_mol_v3000_sdf: Pathy,
+) -> None:
+    """A V3000 sdf block generated by RDKit, renumbered, is the same as the input.
+
+    Args:
+        single_mol_v3000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(
+        SDBlock.from_lines(open(single_mol_v3000_sdf).read().splitlines())
+    )
+    mol.renumber_indices()
+    buffer = io.StringIO()
+    mol.write(buffer)
+    assert buffer.getvalue() == open(single_mol_v3000_sdf).read()
