@@ -70,6 +70,9 @@ tag_template = "v{new_version}"
 [[tool.tbump.file]]
 src = "pyproject.toml"
 
+[[tool.tbump.file]]
+src = "sendoff/__init__.py"
+
 [tool.towncrier]
 # Usage: (Source: https://github.com/python-trio/trio/blob/master/pyproject.toml)
 # - PRs should drop a file like "issuenumber.feature" in newsfragments
