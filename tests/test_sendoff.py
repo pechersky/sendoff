@@ -554,7 +554,7 @@ def test_single_large_atom_index_strict_valid_atom_indices_renumbered(
     assert ctable.valid_atom_indices(strict=True)
 
 
-def test_single_large_bond_index_strict_invalid_bond_indices_renumbered(
+def test_single_large_bond_index_strict_valid_bond_indices_renumbered(
     single_large_bond_index_v3000_sdf: Pathy,
 ) -> None:
     """An sdf block with large bond indices has strict valid indices, after renumbering.
