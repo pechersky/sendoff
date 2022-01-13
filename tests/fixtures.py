@@ -396,6 +396,40 @@ def single_multiline_record_name_mol_sdf(
     return outpath
 
 
+@pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
+def single_right_angle_bracket_record_name_mol_sdf(
+    request: FixtureRequest, tmp_path: Path
+) -> Path:
+    """Write a single molecule with record name with a right angle bracket to an sdf.
+
+    Args:
+        request: pytest fixture configuration handling param passing
+        tmp_path: pytest fixture for writing files to a temp directory
+
+    Returns:
+        Path to the sdf
+    """
+    record, value = ("Rec>ord", "Value")
+    mol = Chem.MolFromSmiles("C")
+    outpath = tmp_path / "input.sdf"
+    with Chem.SDWriter(str(outpath)) as sdw:
+        sdw.write(mol)
+    if request.param.startswith("rdkit"):
+        mols = list(Chem.SDMolSupplier(str(outpath)))
+        with Chem.SDWriter(str(outpath)) as outh:
+            sdw.SetForceV3000(request.param == "rdkitV3000")
+            for mol in mols:
+                mol.SetProp(record, value)
+                outh.write(mol)
+    elif request.param == "sendoff":
+        mols = list(parse_sdf(outpath))
+        with open(outpath, "w") as outh:
+            for mol in mols:
+                mol.append_record(record, value)
+                mol.write(outh)
+    return outpath
+
+
 @pytest.fixture()
 def single_large_atom_index_v3000_sdf(tmp_path: Path) -> Path:
     """Write a single molecule to a v3000 sdf with large atom indices.

@@ -183,6 +183,32 @@ def test_single_mol_newline_write_splitlines_no_trailing(single_mol_sdf: Pathy) 
     )
 
 
+def test_right_angle_bracket_record_name_mol_read_field_name_changed(
+    single_right_angle_bracket_record_name_mol_sdf: Pathy,
+) -> None:
+    """An sdf with a record name with a ">" is not present in the read data.
+
+    Args:
+        single_right_angle_bracket_record_name_mol_sdf: fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_right_angle_bracket_record_name_mol_sdf))
+    records = list(mol.records())
+    assert "Rec>ord" not in map(str, chain(zip(*records)))
+
+
+def test_right_angle_bracket_record_name_mol_read_data_at_modified_field(
+    single_right_angle_bracket_record_name_mol_sdf: Pathy,
+) -> None:
+    """An sdf with a record name with a ">" contains data at a modified field name.
+
+    Args:
+        single_right_angle_bracket_record_name_mol_sdf: fixture of a Path to the sdf
+    """
+    mol: SDBlock = next(parse_sdf(single_right_angle_bracket_record_name_mol_sdf))
+    records = list(mol.records())
+    assert records == [("Rec", "Value")]
+
+
 def test_0_atoms_mol_num_atoms(single_0_atoms_mol_sdf: Pathy) -> None:
     """An sdf block with 0 atoms written parses as 0 atoms.
 
