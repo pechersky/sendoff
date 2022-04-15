@@ -25,7 +25,7 @@ flake8 = "^3.9.2"
 xdoctest = "^0.15.8"
 flake8-docstrings = "^1.6.0"
 pydocstyle = "^6.1.1"
-black = {version = "^21.9b0", allow-prereleases = true}
+black = "^22.3.0"
 pytest-cov = "^2.12.1"
 pytest-mock = "^3.6.1"
 coverage = "^5.5"

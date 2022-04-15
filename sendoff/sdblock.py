@@ -102,7 +102,7 @@ class SDBlock:
                 continue
             # something of the form `> ___<___>___` where `_` is anything
             record_name = (
-                record_line.split("> ", 1)[1].strip().rsplit(">")[0].split("<", 1)[1]
+                record_line.split("> ", 1)[1].strip().rsplit(">", 1)[0].split("<", 1)[1]
             )
             yield record_name, str.join("\n", chunk)
 
