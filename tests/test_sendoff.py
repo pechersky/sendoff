@@ -169,7 +169,7 @@ def test_single_mol_newline_write_splitlines(single_mol_sdf: Pathy) -> None:
 
 
 def test_single_mol_newline_write_splitlines_no_trailing(single_mol_sdf: Pathy) -> None:
-    """An sdf block written with no trailing newlines has fewer lines than splitlines input.
+    """An sdf block written with no trailing newlines has fewer lines than input.
 
     Args:
         single_mol_sdf: pytest fixture of a Path to the sdf
@@ -616,7 +616,7 @@ def test_single_extra_atom_line_valid_atom_indices_after_renumbering(
 def test_single_missing_bond_line_valid_atom_indices_after_renumbering(
     single_missing_bond_line_v3000_sdf: Pathy,
 ) -> None:
-    """An sdf block with a missing bond line has strict valid indices, after renumbering.
+    """An sdf block with a missing bond line has strict valid indices after renumbering.
 
     Args:
         single_missing_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
@@ -657,7 +657,7 @@ def test_single_duplicate_atom_index_invalid_atom_indices_even_renumbering(
 def test_single_duplicate_bond_index_valid_bond_indices_after_renumbering(
     single_duplicate_bond_index_v3000_sdf: Pathy,
 ) -> None:
-    """An sdf block with a duplicate bond index has strict valid indices after renumbering.
+    """An sdf block w/ duplicate bond index has strict valid indices after renumbering.
 
     Args:
         single_duplicate_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
@@ -671,7 +671,7 @@ def test_single_duplicate_bond_index_valid_bond_indices_after_renumbering(
 def test_single_shuffled_atom_lines_strict_valid_atom_indices_after_renumbering(
     single_shuffled_atom_lines_v3000_sdf: Pathy,
 ) -> None:
-    """An sdf block with shuffled atom lines has strict valid indices, after renumbering.
+    """An sdf block w/ shuffled atom lines has strict valid indices, after renumbering.
 
     That means that the number of atoms matches the counts line,
     and each index is unique and integer.
@@ -689,7 +689,7 @@ def test_single_shuffled_atom_lines_strict_valid_atom_indices_after_renumbering(
 def test_single_shuffled_bond_lines_strict_valid_bond_indices_after_renumbering(
     single_shuffled_bond_lines_v3000_sdf: Pathy,
 ) -> None:
-    """An sdf block with shuffled bond lines has strict valid indices, after renumbering.
+    """An sdf block w/ shuffled bond lines has strict valid indices, after renumbering.
 
     That means that the number of bonds matches the counts line,
     and each index is unique and integer.
