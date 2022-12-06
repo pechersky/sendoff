@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "sendoff"
-version = "0.1.5"
+version = "0.1.6"
 description = "The minimal SDF metadata parser"
 authors = ["Yakov Pechersky <ypechersky@treeline.bio>"]
 license = "MIT"
@@ -52,7 +52,7 @@ exclude = '''
 '''
 
 [tool.tbump.version]
-current = "0.1.5"
+current = "0.1.6"
 
 regex = '''
   (?P<major>\d+)
