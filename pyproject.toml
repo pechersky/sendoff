@@ -15,7 +15,7 @@ include = [
 [tool.poetry.dependencies]
 python = "^3.8"
 
-[tool.poetry.dev-dependencies]
+[tool.poetry.group.dev.dependencies]
 pytest = "^5.2"
 tox = "^3.24.3"
 tox-poetry-installer = "^0.8.1"
@@ -30,10 +30,10 @@ coverage = "^5.5"
 towncrier = "^21.3.0"
 pre-commit = "^2.15.0"
 darglint = "^1.8.0"
-rdkit-pypi = "^2021.3.5"
 tbump = "^6.7.0"
 mypy = "^0.910"
 isort = {version = "^5.9.3", extras = ["pyproject"]}
+rdkit = "^2022.9.2"
 
 [tool.black]
 line-length = 88
