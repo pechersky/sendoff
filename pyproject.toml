@@ -13,26 +13,26 @@ include = [
 ]
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.8.1"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^5.2"
+pytest = "^7.4.3"
 tox = "^3.24.3"
-tox-poetry-installer = "^0.8.1"
-flake8 = "^5.0.3"
-xdoctest = "^0.15.8"
-flake8-docstrings = "^1.6.0"
-pydocstyle = "^6.1.1"
-black = "^22.3.0"
-pytest-cov = "^2.12.1"
-pytest-mock = "^3.6.1"
-coverage = "^5.5"
-towncrier = "^21.3.0"
-pre-commit = "^2.15.0"
-darglint = "^1.8.0"
-tbump = "^6.7.0"
-mypy = "^0.910"
-isort = {version = "^5.9.3", extras = ["pyproject"]}
+tox-poetry-installer = "^0.10.3"
+flake8 = "^6.1.0"
+xdoctest = "^1.1.2"
+flake8-docstrings = "^1.7.0"
+pydocstyle = "^6.3.0"
+black = "^23.10.1"
+pytest-cov = "^4.1.0"
+pytest-mock = "^3.12.0"
+coverage = "^7.3.2"
+towncrier = "^23.10.0"
+pre-commit = "^3.5.0"
+darglint = "^1.8.1"
+tbump = "^6.11.0"
+mypy = "^1.6.1"
+isort = "^5.12.0"
 rdkit = "^2022.9.2"
 
 [tool.black]

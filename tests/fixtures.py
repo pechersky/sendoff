@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from _pytest.fixtures import FixtureRequest as __FixtureRequest
 
     # This is to provide a proper type; we are subclassing Any, which causes mypy warn
-    class FixtureRequest(__FixtureRequest):  # type: ignore
+    class FixtureRequest(__FixtureRequest):
         """FixtureRequest wrapper class to provide param attribute."""
 
         param: str
