@@ -10,7 +10,7 @@ from typing import Iterable, Iterator, Tuple, Union
 
 from sendoff.ctable import CTable
 
-Pathy = Union[str, bytes, os.PathLike]
+Pathy = Union[str, bytes, "os.PathLike[str]"]
 
 
 @dataclass
