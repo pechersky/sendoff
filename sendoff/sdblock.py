@@ -1,4 +1,5 @@
 """Separating an SDF into molecule "SDBlock"s of chemical data and metadata."""
+
 from __future__ import annotations
 
 import os

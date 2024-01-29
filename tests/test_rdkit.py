@@ -1,4 +1,5 @@
 """Test rdkit parsing of metadata on generated SDFs."""
+
 from rdkit import Chem
 
 from sendoff.sdblock import Pathy

@@ -1,4 +1,5 @@
 """Reading and validating connection tables from SDFs."""
+
 from __future__ import annotations
 
 import itertools as itt
