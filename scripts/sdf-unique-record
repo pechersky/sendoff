@@ -7,6 +7,7 @@ record field (provided by `--field`). The retained entries are written to the fi
 provided by `--output`. This utility supports piping in and out, and as such, has
 the same issue as other POSIX tools, you cannot write to the same file as the input.
 """
+
 from __future__ import annotations
 
 import argparse
