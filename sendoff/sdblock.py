@@ -6,9 +6,10 @@ import os
 from collections import deque
 from dataclasses import dataclass
 from io import TextIOWrapper
-from itertools import chain, groupby
+from itertools import chain
 from typing import Iterable, Iterator, Tuple, Union
 
+import sendoff.native as native
 from sendoff.ctable import CTable
 
 Pathy = Union[str, bytes, "os.PathLike[str]"]
@@ -32,10 +33,8 @@ class SDBlock:
         Yields:
             str lines comprising the MDL block
         """
-        for line in lines:
+        for line in native.mdl_iter(lines):
             yield line
-            if line.startswith("M  END"):
-                return
 
     @classmethod
     def parse_metadata(cls, lines: Iterable[str]) -> Iterable[str]:
@@ -48,9 +47,7 @@ class SDBlock:
         Yields:
             str lines comprising the metadata, excluding the $$$$ delimiter
         """
-        for line in lines:
-            if line.startswith("$$$$"):
-                return
+        for line in native.metadata_iter(lines):
             yield line
 
     @classmethod
@@ -64,11 +61,7 @@ class SDBlock:
         Returns:
             An SDBlock with a parsed in title and lines
         """
-        iterlines = iter(lines)
-        title = next(iterlines).strip()
-        mdl = deque(cls.parse_mdl(iterlines))
-        metadata = deque(cls.parse_metadata(iterlines))
-        return SDBlock(title, mdl, metadata)
+        return native.from_block_lines(cls, SDBlock, lines)
 
     @classmethod
     def from_lines(cls, lines: Iterable[str]) -> Iterator[SDBlock]:
@@ -82,12 +75,8 @@ class SDBlock:
         Yields:
             SDBlocks parsed in from the lines
         """
-        block: deque[str] = deque()
-        for line in lines:
-            block.append(line)
-            if line.startswith("$$$$"):
-                yield cls.from_block_lines(block)
-                block = deque()
+        for block in native.blocks_iter(cls, lines):
+            yield block
 
     def records(self) -> Iterable[Tuple[str, str]]:
         """Generate SD metadata records one by one.
@@ -96,16 +85,8 @@ class SDBlock:
             Tuples of str, str of record, value.
                 The value includes any newlines if it is multiline
         """
-        # make data chunks by breaking on empty lines
-        for _, chunk in groupby((line.strip() for line in self.metadata), bool):
-            record_line: str = next(chunk)
-            if not record_line.startswith("> "):
-                continue
-            # something of the form `> ___<___>___` where `_` is anything
-            record_name = (
-                record_line.split("> ", 1)[1].strip().rsplit(">", 1)[0].split("<", 1)[1]
-            )
-            yield record_name, str.join("\n", chunk)
+        for record in native.records_iter(self):
+            yield record
 
     def write(self, outh: TextIOWrapper, with_newlines: bool = True) -> None:
         """Write an SDBlock to a file-like handle.
@@ -116,12 +97,7 @@ class SDBlock:
                 The newline character is appended only if it wasn't in the line
 
         """
-        print(self.title, file=outh)
-        for line in chain(self.mdl, self.metadata):
-            outh.write(line)
-            if with_newlines and not line.endswith("\n"):
-                outh.write("\n")
-        outh.write("$$$$\n")
+        native.write(self, outh, with_newlines)
 
     def append_record(self, record_name: str, value: str) -> None:
         """Append a field and value to the SD data record.
@@ -131,9 +107,7 @@ class SDBlock:
             value: str for value, with no terminating newline
 
         """
-        self.metadata.append(f"> <{record_name}>\n")
-        self.metadata.append(value + "\n")
-        self.metadata.append("\n")
+        native.append_record(self, record_name, value)
 
     def ctable(self) -> CTable:
         """Parse out the underlying CTable object from the SDBlock.
@@ -142,8 +116,7 @@ class SDBlock:
             The CTable object, titled with the SDBlock.title,
                 parsed in from the SDBlock.mdl, but without validation.
         """
-        ctable = CTable(chain([self.title], self.mdl))
-        return ctable
+        return CTable(chain([self.title], self.mdl))
 
     def num_atoms(self) -> int:
         """Get number of atoms as indicated in the MDL block.
@@ -155,8 +128,7 @@ class SDBlock:
         Returns:
             The number of atoms, parsed in from the counts line.
         """
-        ctable = self.ctable()
-        return ctable.num_atoms
+        return self.ctable().num_atoms
 
     def num_bonds(self) -> int:
         """Get number of bonds as indicated in the MDL block.
@@ -168,8 +140,7 @@ class SDBlock:
         Returns:
             The number of bonds, parsed in from the counts line.
         """
-        ctable = self.ctable()
-        return ctable.num_bonds
+        return self.ctable().num_bonds
 
     def renumber_indices(self) -> None:
         """Renumber atom and bond indices to be 1-indexed and in order.
@@ -179,11 +150,8 @@ class SDBlock:
         """
         ctable = self.ctable()
         ctable.renumber_indices()
-        # not copy, because we don't care about the ctable we just constructed
         self.mdl = ctable.lines
-        # pop left, because that is the title line we keep separately
         self.mdl.popleft()
-        return
 
 
 def parse_sdf(sdfpath: Pathy) -> Iterator[SDBlock]:
@@ -195,4 +163,4 @@ def parse_sdf(sdfpath: Pathy) -> Iterator[SDBlock]:
     Returns:
         An Iterator of SDBlocks parsed in from the lines in the file
     """
-    return SDBlock.from_lines(open(sdfpath).readlines())
+    return SDBlock.from_lines(native.read_sdf_lines(sdfpath))

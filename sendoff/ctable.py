@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import itertools as itt
-from collections import defaultdict, deque
+import sys
+from collections import deque
 from enum import Enum
 from typing import Iterable, Tuple
+
+import sendoff.native as native
 
 
 class CTableFormat(Enum):
@@ -56,20 +58,7 @@ class CTable:
                 be supplied as the first in lines.
 
         """
-        self.lines = deque(lines)
-        iterlines = iter(self.lines)
-        self.title = next(iterlines).strip()
-        self.source = next(iterlines)
-        self.comment = next(iterlines)
-        self.counts = next(iterlines)
-        self.format = self.parse_format(self.counts)
-        if self.format is CTableFormat.V3000:
-            next(iterlines)  # CTAB BEGIN line
-            self.counts = next(iterlines).strip()
-            self.num_atoms, self.num_bonds = self.parse_v3000_counts(self.counts)
-        else:
-            self.num_atoms, self.num_bonds = self.parse_v2000_counts(self.counts)
-        return
+        native.ctable_init(self, lines, CTableFormat.V3000)
 
     @staticmethod
     def parse_format(line: str) -> CTableFormat:
@@ -89,9 +78,7 @@ class CTable:
         Returns:
             A CTAB format, based on the end of the counts line
         """
-        sline = line.strip().split()
-        ctformat = CTableFormat[sline[-1]]
-        return ctformat
+        return native.parse_format(line, CTableFormat)
 
     @staticmethod
     def parse_v2000_counts(line: str) -> Tuple[int, int]:
@@ -118,9 +105,7 @@ class CTable:
                 the number of bonds indicated by the counts line.
                     Not the actual number of bonds lines further down.)
         """
-        num_atoms = int(line[:3])
-        num_bonds = int(line[3:6])
-        return num_atoms, num_bonds
+        return native.parse_v2000_counts(line)
 
     @staticmethod
     def parse_v3000_counts(line: str) -> Tuple[int, int]:
@@ -140,10 +125,7 @@ class CTable:
                 the number of bonds indicated by the counts line.
                     Not the actual number of bonds lines further down.)
         """
-        sline = line.split()
-        num_atoms = int(sline[3])
-        num_bonds = int(sline[4])
-        return num_atoms, num_bonds
+        return native.parse_v3000_counts(line)
 
     def atomlines(self) -> Iterable[str]:
         """Get atom lines in the atom table, assumed to be after 7 lines.
@@ -151,12 +133,7 @@ class CTable:
         Returns:
             A single-use iterable of the atom lines
         """
-        atomlines = itt.takewhile(
-            lambda x: not str.startswith(x, "M  V30 END ATOM"),
-            # title source comment compat begin counts begin
-            itt.islice(self.lines, 7, None),
-        )
-        return atomlines
+        return native.atomlines(self)
 
     def bondlines(self) -> Iterable[str]:
         """Get bond lines in the bond table.
@@ -168,18 +145,7 @@ class CTable:
         Returns:
             A single-use iterable of the bond lines
         """
-        bondlines = itt.takewhile(
-            lambda x: not str.startswith(x, "M  V30 END BOND"),
-            # islice(..., 1, None) means to drop one
-            itt.islice(
-                itt.dropwhile(
-                    lambda x: not str.startswith(x, "M  V30 BEGIN BOND"), self.lines
-                ),
-                1,
-                None,
-            ),
-        )
-        return bondlines
+        return native.bondlines(self)
 
     def valid_atom_indices(self, strict: bool = False) -> bool:
         """Validate that the atom lines match the counts line.
@@ -200,22 +166,9 @@ class CTable:
         Returns:
             If all the checks pass, return True.
         """
-        if self.format is not CTableFormat.V3000:
-            raise NotImplementedError
-        seen_indices: set[int] = set()
-        for line_ix, line in enumerate(self.atomlines()):
-            sline = line.split()
-            atom_ix = int(sline[2])
-            if strict and line_ix + 1 != atom_ix:
-                raise IndicesOutOfOrderError("atoms")
-            if atom_ix in seen_indices:
-                raise IndicesDuplicateError("atoms")
-            seen_indices.add(atom_ix)
-        if len(seen_indices) < self.num_atoms:
-            raise IndicesMismatchError("fewer atom lines than count line")
-        if len(seen_indices) > self.num_atoms:
-            raise IndicesMismatchError("more atom lines than count line")
-        return True
+        return native.valid_atom_indices(
+            self, strict, CTableFormat.V3000, sys.modules[__name__]
+        )
 
     def valid_bond_indices(self, strict: bool = False) -> bool:
         """Validate that the bond lines match the counts line.
@@ -236,24 +189,11 @@ class CTable:
         Returns:
             If all the checks pass, return True.
         """
-        if self.format is not CTableFormat.V3000:
-            raise NotImplementedError
-        seen_indices: set[int] = set()
-        for line_ix, line in enumerate(self.bondlines()):
-            sline = line.split()
-            bond_ix = int(sline[2])
-            if strict and line_ix + 1 != bond_ix:
-                raise IndicesOutOfOrderError("bonds")
-            if bond_ix in seen_indices:
-                raise IndicesDuplicateError("bonds")
-            seen_indices.add(bond_ix)
-        if len(seen_indices) < self.num_bonds:
-            raise IndicesMismatchError("fewer bond lines than count line")
-        if len(seen_indices) > self.num_bonds:
-            raise IndicesMismatchError("more bond lines than count line")
-        return True
+        return native.valid_bond_indices(
+            self, strict, CTableFormat.V3000, sys.modules[__name__]
+        )
 
-    def renumber_indices(self) -> None:  # noqa: max-complexity: 13
+    def renumber_indices(self) -> None:
         """Renumber the indices in the block, including changing counts line.
 
         Iterating through the atom lines, replace the indexes into a
@@ -277,69 +217,4 @@ class CTable:
                 original indices to use in the remapping.
             NotImplementedError: if trying to renumber in a V2000 format table
         """
-        if self.format is not CTableFormat.V3000:
-            raise NotImplementedError
-        new_atomlines: deque[str] = deque()
-        new_bondlines: deque[str] = deque()
-        # old_ix: [new_ix, new_ix2, ...]
-        atom_index_mapping: defaultdict[int, list[int]] = defaultdict(list)
-        prefix = "M  V30 "
-        len_prefix = len(prefix)
-        for line_ix, atomline in enumerate(self.atomlines()):
-            sline = atomline.split()
-            atom_ix = int(sline[2])
-            new_ix = line_ix + 1
-            atom_index_mapping[atom_ix].append(new_ix)
-            # can't use str.join because we want to preserve all whitespace properly
-            # but we do assume that `M  V30 ` is correctly done by the spec
-            skip_chars = len_prefix + len(sline[2])
-            nline = f"{prefix}{new_ix}" + atomline[skip_chars:]
-            new_atomlines.append(nline)
-        for line_ix, bondline in enumerate(self.bondlines()):
-            # here, we take less care to retain the whitespace and just
-            # reconstruct the line with single whitespace
-            sline = bondline.split()
-            new_ix = line_ix + 1
-            old_from_ix = int(sline[4])
-            old_to_ix = int(sline[5])
-            if 1 < len(atom_index_mapping[old_from_ix]) or 1 < len(
-                atom_index_mapping[old_to_ix]
-            ):
-                raise IndicesDuplicateError("atom index mapping in bond")
-            new_from_ix = atom_index_mapping[old_from_ix][0]
-            new_to_ix = atom_index_mapping[old_to_ix][0]
-            trailing = "\n" if bondline[-1] == "\n" else ""
-            # not doing anything to the bond order
-            nline = f"{prefix}{new_ix} {sline[3]} {new_from_ix} {new_to_ix}{trailing}"
-            new_bondlines.append(nline)
-        trailing = "\n" if self.counts[-1] == "\n" else ""
-        scounts = self.counts.split()
-        # suffix could be empty, but if not, prepend with space to help with constuction
-        # but for now, assume that count lines are well-formed and aren't missing specs
-        suffix = " " + str.join(" ", scounts[5:])
-        new_counts = f"{prefix}COUNTS {len(new_atomlines)} {len(new_bondlines)}{suffix}"
-        new_lines: deque[str] = deque()
-        appending = True
-        for line in self.lines:
-            if appending:
-                new_lines.append(line)
-            if line.startswith("M  V30 COUNTS"):
-                # unappend, place ours
-                new_lines.pop()
-                new_lines.append(new_counts)
-            if line.startswith("M  V30 BEGIN ATOM"):
-                # stop appending the old atom lines, iterate through them
-                appending = False
-            if line.startswith("M  V30 END ATOM"):
-                appending = True
-                new_lines.extend(new_atomlines)
-                new_lines.append(line)
-            if line.startswith("M  V30 BEGIN BOND"):
-                # stop appending the old bond lines, iterate through them
-                appending = False
-            if line.startswith("M  V30 END BOND"):
-                appending = True
-                new_lines.extend(new_bondlines)
-                new_lines.append(line)
-        self.lines = new_lines
-        return
+        native.renumber_ctable(self, CTableFormat.V3000, IndicesDuplicateError)
