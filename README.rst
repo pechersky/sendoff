@@ -24,3 +24,17 @@ to simple tools to interrogate the files while not modifying the file is crucial
 This package also tried to document the "canonical" ways metadata is handled by the larger
 packages. To wit, there are tests to monitor how, for example, rdkit deals with molecules
 that have multiline record values, or a "$$$$" molecule title.
+
+Native typing stubs
+-------------------
+
+The PyO3 extension stubs are generated from Rust signatures and documentation. After
+changing the Python-facing Rust API, regenerate ``sendoff/native.pyi`` from the repository
+root with:
+
+.. code-block:: console
+
+   maturin develop --features stubgen --generate-stubs --locked
+   black sendoff/native.pyi
+
+Do not edit ``sendoff/native.pyi`` manually.

@@ -25,6 +25,7 @@ crate-type = ["cdylib"]
 
 [features]
 coverage = []
+stubgen = ["pyo3/experimental-inspect"]
 
 [dependencies]
 pyo3 = { version = "=0.29.3", features = ["abi3-py311"] }
