@@ -60,7 +60,11 @@ class SDBlock:
         Returns:
             An SDBlock with a parsed in title and lines
         """
-        return native.from_block_lines(cls, SDBlock, lines)
+        iterlines = iter(lines)
+        title = next(iterlines).strip()
+        mdl = deque(cls.parse_mdl(iterlines))
+        metadata = deque(cls.parse_metadata(iterlines))
+        return SDBlock(title, mdl, metadata)
 
     @classmethod
     def from_lines(cls, lines: Iterable[str]) -> Iterator[SDBlock]:
@@ -74,8 +78,12 @@ class SDBlock:
         Yields:
             SDBlocks parsed in from the lines
         """
-        for block in native.blocks_iter(cls, lines):
-            yield block
+        block: deque[str] = deque()
+        for line in lines:
+            block.append(line)
+            if line.startswith("$$$$"):
+                yield cls.from_block_lines(block)
+                block = deque()
 
     def records(self) -> Iterable[Tuple[str, str]]:
         """Generate SD metadata records one by one.
@@ -162,4 +170,4 @@ def parse_sdf(sdfpath: Pathy) -> Iterator[SDBlock]:
     Returns:
         An Iterator of SDBlocks parsed in from the lines in the file
     """
-    return SDBlock.from_lines(native.read_sdf_lines(sdfpath))
+    return SDBlock.from_lines(open(sdfpath).readlines())

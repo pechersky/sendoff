@@ -2,14 +2,14 @@ use pyo3::{
     class::{PyTraverseError, PyVisit},
     exceptions::{PyRuntimeError, PyStopIteration, PyValueError},
     prelude::*,
-    types::{PyIterator, PyString},
+    types::PyIterator,
 };
 
-use crate::core::{framing::FramingMode, whitespace};
+use crate::core::framing::{BlockState, FramingMode, FramingState};
 
 #[pyclass(name = "FramingIter", module = "sendoff.native")]
 struct FramingIter {
-    mode: FramingMode,
+    framing: FramingState,
     lines: Option<Py<PyAny>>,
     iterator: Option<Py<PyAny>>,
     current: Option<Py<PyAny>>,
@@ -69,7 +69,7 @@ pub(crate) fn generator_error(py: Python<'_>, error: PyErr) -> PyErr {
         return error;
     }
 
-    let runtime = PyRuntimeError::new_err("generator raised StopIteration");
+    let runtime = pyo3::exceptions::PyRuntimeError::new_err("generator raised StopIteration");
     runtime.set_cause(py, Some(error.clone_ref(py)));
     runtime.set_context(py, Some(error));
     if let Err(error) = runtime.value(py).setattr("__suppress_context__", true) {
@@ -124,13 +124,13 @@ fn next_item(py: Python<'_>, iterator: &Py<PyAny>) -> PyResult<Option<Py<PyAny>>
 
 fn framing_step(slf: &Bound<'_, FramingIter>) -> PyResult<Option<Py<PyAny>>> {
     let py = slf.py();
-    let mode_is_mdl = matches!(slf.borrow().mode, FramingMode::Mdl);
-    let prefix = slf.borrow().mode.prefix();
-
-    if mode_is_mdl {
-        let current = slf.borrow().current.as_ref().map(|line| line.clone_ref(py));
-        if let Some(line) = current
-            && has_prefix(py, &line, prefix)?
+    let current = slf.borrow().current.as_ref().map(|line| line.clone_ref(py));
+    if let Some(line) = current {
+        let prefix = slf.borrow().framing.prefix();
+        if slf
+            .borrow()
+            .framing
+            .stop_before_next(has_prefix(py, &line, prefix)?)
         {
             slf.borrow_mut().finish();
             return Ok(None);
@@ -143,8 +143,16 @@ fn framing_step(slf: &Bound<'_, FramingIter>) -> PyResult<Option<Py<PyAny>>> {
         return Ok(None);
     };
 
+    let should_yield = if slf.borrow().framing.checks_current() {
+        true
+    } else {
+        let prefix = slf.borrow().framing.prefix();
+        slf.borrow()
+            .framing
+            .yield_line(has_prefix(py, &line, prefix)?)
+    };
     slf.borrow_mut().current = Some(line.clone_ref(py));
-    if !mode_is_mdl && has_prefix(py, &line, prefix)? {
+    if !should_yield {
         slf.borrow_mut().finish();
         return Ok(None);
     }
@@ -156,7 +164,7 @@ fn mdl_iter(lines: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     Py::new(
         lines.py(),
         FramingIter {
-            mode: FramingMode::Mdl,
+            framing: FramingState::new(FramingMode::Mdl),
             lines: Some(lines.clone().unbind()),
             iterator: None,
             current: None,
@@ -172,7 +180,7 @@ fn metadata_iter(lines: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     Py::new(
         lines.py(),
         FramingIter {
-            mode: FramingMode::Metadata,
+            framing: FramingState::new(FramingMode::Metadata),
             lines: Some(lines.clone().unbind()),
             iterator: None,
             current: None,
@@ -188,9 +196,7 @@ struct BlocksIter {
     cls: Option<Py<PyAny>>,
     lines: Option<Py<PyAny>>,
     iterator: Option<Py<PyAny>>,
-    block: Option<Py<PyAny>>,
-    current: Option<Py<PyAny>>,
-    reset_after_yield: bool,
+    blocks: BlockState<Py<PyAny>>,
     done: bool,
     running: bool,
 }
@@ -200,9 +206,7 @@ impl BlocksIter {
         self.cls = None;
         self.lines = None;
         self.iterator = None;
-        self.block = None;
-        self.current = None;
-        self.reset_after_yield = false;
+        self.blocks = BlockState::new();
         self.done = true;
     }
 }
@@ -238,8 +242,10 @@ impl BlocksIter {
         visit.call(&self.cls)?;
         visit.call(&self.lines)?;
         visit.call(&self.iterator)?;
-        visit.call(&self.block)?;
-        visit.call(&self.current)
+        for line in self.blocks.lines() {
+            visit.call(line)?;
+        }
+        Ok(())
     }
 
     fn __clear__(&mut self) {
@@ -269,90 +275,37 @@ fn blocks_iterator(slf: &Bound<'_, BlocksIter>) -> PyResult<Py<PyAny>> {
     Ok(iterator)
 }
 
-fn empty_deque(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    Ok(py
-        .import("collections")?
-        .getattr("deque")?
-        .call0()?
-        .unbind())
-}
-
 fn blocks_step(slf: &Bound<'_, BlocksIter>) -> PyResult<Option<Py<PyAny>>> {
     let py = slf.py();
-    if slf.borrow().reset_after_yield {
-        let block = empty_deque(py)?;
-        let mut state = slf.borrow_mut();
-        state.block = Some(block);
-        state.reset_after_yield = false;
-    }
-
-    if slf.borrow().block.is_none() {
-        let block = empty_deque(py)?;
-        slf.borrow_mut().block = Some(block);
-    }
-
     let iterator = blocks_iterator(slf)?;
     loop {
         let Some(line) = next_item(py, &iterator)? else {
             slf.borrow_mut().finish();
             return Ok(None);
         };
-        slf.borrow_mut().current = Some(line.clone_ref(py));
-
-        let block = slf
-            .borrow()
-            .block
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("native iterator state was cleared"))?
-            .clone_ref(py);
-        block.bind(py).call_method1("append", (line.bind(py),))?;
-        if !has_prefix(py, &line, "$$$$")? {
+        let delimiter = has_prefix(py, &line, "$$$$")?;
+        let Some(lines) = slf.borrow_mut().blocks.push(line, delimiter) else {
             continue;
-        }
+        };
 
+        let deque = py.import("collections")?.getattr("deque")?;
+        let block_lines = deque.call0()?;
+        for line in lines {
+            block_lines.call_method1("append", (line,))?;
+        }
         let cls = slf
             .borrow()
             .cls
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("native iterator state was cleared"))?
             .clone_ref(py);
-        let parsed = cls
+        return cls
             .bind(py)
-            .call_method1("from_block_lines", (block.bind(py),))
-            .map_err(|error| generator_error(py, error))?
-            .unbind();
-        slf.borrow_mut().reset_after_yield = true;
-        return Ok(Some(parsed));
+            .call_method1("from_block_lines", (block_lines,))
+            .map_err(|error| generator_error(py, error))
+            .map(Bound::unbind)
+            .map(Some);
     }
-}
-
-#[pyfunction]
-fn from_block_lines(
-    cls: &Bound<'_, PyAny>,
-    block_type: &Bound<'_, PyAny>,
-    lines: &Bound<'_, PyAny>,
-) -> PyResult<Py<PyAny>> {
-    let py = lines.py();
-    let iterator = lines.try_iter()?;
-    let builtins = py.import("builtins")?;
-    let title = builtins
-        .getattr("next")?
-        .call1((iterator.as_any(),))?
-        .into_any();
-    let title = if let Some(text) = super::exact_text(&title)? {
-        let stripped = text.trim_matches(whitespace);
-        if stripped == text {
-            title.clone()
-        } else {
-            PyString::new(py, stripped).into_any()
-        }
-    } else {
-        title.call_method0("strip")?
-    };
-    let deque = py.import("collections")?.getattr("deque")?;
-    let mdl = deque.call1((cls.call_method1("parse_mdl", (iterator.as_any(),))?,))?;
-    let metadata = deque.call1((cls.call_method1("parse_metadata", (iterator.as_any(),))?,))?;
-    block_type.call1((title, mdl, metadata)).map(Bound::unbind)
 }
 
 #[pyfunction]
@@ -363,9 +316,7 @@ fn blocks_iter(cls: &Bound<'_, PyAny>, lines: &Bound<'_, PyAny>) -> PyResult<Py<
             cls: Some(cls.clone().unbind()),
             lines: Some(lines.clone().unbind()),
             iterator: None,
-            block: None,
-            current: None,
-            reset_after_yield: false,
+            blocks: BlockState::new(),
             done: false,
             running: false,
         },
@@ -373,20 +324,11 @@ fn blocks_iter(cls: &Bound<'_, PyAny>, lines: &Bound<'_, PyAny>) -> PyResult<Py<
     .map(Py::into_any)
 }
 
-#[pyfunction]
-fn read_sdf_lines(sdfpath: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    let builtins = sdfpath.py().import("builtins")?;
-    let file = builtins.getattr("open")?.call1((sdfpath,))?;
-    file.call_method0("readlines").map(Bound::unbind)
-}
-
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FramingIter>()?;
     m.add_class::<BlocksIter>()?;
     m.add_function(wrap_pyfunction!(mdl_iter, m)?)?;
     m.add_function(wrap_pyfunction!(metadata_iter, m)?)?;
-    m.add_function(wrap_pyfunction!(from_block_lines, m)?)?;
     m.add_function(wrap_pyfunction!(blocks_iter, m)?)?;
-    m.add_function(wrap_pyfunction!(read_sdf_lines, m)?)?;
     Ok(())
 }

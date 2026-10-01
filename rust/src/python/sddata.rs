@@ -7,13 +7,7 @@ use pyo3::{
 };
 
 use super::framing::generator_error;
-use crate::core::{sddata, whitespace};
-
-enum RecordInput {
-    Item(Py<PyAny>, bool),
-    End,
-    KeyStop,
-}
+use crate::core::sddata::{self, Input, JoinedValue, Line, Name, RecordsState, Value};
 
 #[pyclass(name = "RecordsIter", module = "sendoff.native")]
 struct RecordsIter {
@@ -21,9 +15,8 @@ struct RecordsIter {
     iterator: Option<Py<PyAny>>,
     raw_line: Option<Py<PyAny>>,
     line: Option<Py<PyAny>>,
-    pending: Option<(Py<PyAny>, bool)>,
-    drain_key: Option<bool>,
-    exhausted: bool,
+    core: RecordsState,
+    objects: Vec<Option<Py<PyAny>>>,
     done: bool,
     running: bool,
 }
@@ -34,10 +27,32 @@ impl RecordsIter {
         self.iterator = None;
         self.raw_line = None;
         self.line = None;
-        self.pending = None;
-        self.drain_key = None;
-        self.exhausted = true;
+        self.core = RecordsState::new();
+        self.objects.clear();
         self.done = true;
+    }
+
+    fn store(&mut self, value: Py<PyAny>) -> usize {
+        let source = self.objects.len();
+        self.objects.push(Some(value));
+        source
+    }
+
+    fn source(&self, py: Python<'_>, source: usize) -> PyResult<Py<PyAny>> {
+        self.objects
+            .get(source)
+            .and_then(Option::as_ref)
+            .map(|value| value.clone_ref(py))
+            .ok_or_else(|| PyRuntimeError::new_err("native record source was cleared"))
+    }
+
+    fn retain_pending(&mut self) {
+        let pending = self.core.pending_sources();
+        for (source, value) in self.objects.iter_mut().enumerate() {
+            if Some(source) != pending.0 && Some(source) != pending.1 {
+                *value = None;
+            }
+        }
     }
 }
 
@@ -75,8 +90,8 @@ impl RecordsIter {
         visit.call(&self.iterator)?;
         visit.call(&self.raw_line)?;
         visit.call(&self.line)?;
-        if let Some((line, _)) = &self.pending {
-            visit.call(line)?;
+        for value in &self.objects {
+            visit.call(value)?;
         }
         Ok(())
     }
@@ -120,47 +135,90 @@ fn next_item(py: Python<'_>, iterator: &Py<PyAny>) -> PyResult<Option<Py<PyAny>>
     }
 }
 
-fn next_record_input(slf: &Bound<'_, RecordsIter>) -> PyResult<RecordInput> {
+fn next_record_input(slf: &Bound<'_, RecordsIter>) -> PyResult<Input> {
     let py = slf.py();
     let iterator = source_iterator(slf)?;
     let Some(raw_line) = next_item(py, &iterator)? else {
-        return Ok(RecordInput::End);
+        return Ok(Input::End);
     };
     slf.borrow_mut().raw_line = Some(raw_line.clone_ref(py));
-    let raw_line_bound = raw_line.bind(py);
-    let line = if let Some(text) = super::exact_text(raw_line_bound)? {
-        let stripped = text.trim_matches(whitespace);
+    let raw_bound = raw_line.bind(py);
+    let (line, text) = if let Some(text) = super::exact_text(raw_bound)? {
+        let stripped = sddata::trimmed(text);
         if stripped == text {
-            raw_line.clone_ref(py)
+            (raw_line.clone_ref(py), Some(text.to_owned()))
         } else {
-            PyString::new(py, stripped).into_any().unbind()
+            (
+                PyString::new(py, stripped).into_any().unbind(),
+                Some(stripped.to_owned()),
+            )
         }
     } else {
-        raw_line_bound
-            .call_method0("strip")
-            .map_err(|error| generator_error(py, error))?
-            .unbind()
+        (
+            raw_bound
+                .call_method0("strip")
+                .map_err(|error| generator_error(py, error))?
+                .unbind(),
+            None,
+        )
     };
     slf.borrow_mut().line = Some(line.clone_ref(py));
-    let key = if let Some(text) = super::exact_text(line.bind(py))? {
-        Ok(!text.is_empty())
-    } else {
-        line.bind(py).is_truthy()
+    let key = match text.as_deref() {
+        Some(text) => !text.is_empty(),
+        None => match line.bind(py).is_truthy() {
+            Ok(key) => key,
+            Err(error) if error.is_instance_of::<PyStopIteration>(py) => {
+                return Ok(Input::KeyStop);
+            }
+            Err(error) => return Err(error),
+        },
     };
-    match key {
-        Ok(key) => Ok(RecordInput::Item(line, key)),
-        Err(error) if error.is_instance_of::<PyStopIteration>(py) => Ok(RecordInput::KeyStop),
-        Err(error) => Err(error),
-    }
+    let header = match text.as_deref() {
+        Some(text) => sddata::is_header(text),
+        None => {
+            let result = line
+                .bind(py)
+                .call_method1("startswith", ("> ",))
+                .map_err(|error| generator_error(py, error))?;
+            result
+                .is_truthy()
+                .map_err(|error| generator_error(py, error))?
+        }
+    };
+    let source = {
+        let mut state = slf.borrow_mut();
+        state.store(line)
+    };
+    let name = if header {
+        if let Some(text) = text.as_deref() {
+            let name = sddata::record_name(text)
+                .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
+            Some(Name::Text(name.to_owned()))
+        } else {
+            let name = python_record_name(
+                py,
+                &slf.borrow()
+                    .line
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("native iterator state was cleared"))?
+                    .clone_ref(py),
+            )?;
+            let source = slf.borrow_mut().store(name);
+            Some(Name::Source(source))
+        }
+    } else {
+        None
+    };
+    Ok(Input::Item(Line {
+        key,
+        header,
+        name,
+        value: Value { source, text },
+    }))
 }
 
-fn record_name(py: Python<'_>, line: &Py<PyAny>) -> PyResult<Py<PyAny>> {
+fn python_record_name(py: Python<'_>, line: &Py<PyAny>) -> PyResult<Py<PyAny>> {
     let line = line.bind(py);
-    if let Some(text) = super::exact_text(line)? {
-        let name = sddata::record_name(text)
-            .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
-        return Ok(PyString::new(py, name).into_any().unbind());
-    }
     let split = line
         .call_method1("split", ("> ", 1))
         .map_err(|error| generator_error(py, error))?;
@@ -185,110 +243,51 @@ fn record_name(py: Python<'_>, line: &Py<PyAny>) -> PyResult<Py<PyAny>> {
         .map_err(|error| generator_error(py, error))
 }
 
-fn is_header(py: Python<'_>, line: &Py<PyAny>) -> PyResult<bool> {
-    let line = line.bind(py);
-    if let Some(text) = super::exact_text(line)? {
-        return Ok(text.starts_with("> "));
-    }
-    let result = line
-        .call_method1("startswith", ("> ",))
-        .map_err(|error| generator_error(py, error))?;
-    result
-        .is_truthy()
-        .map_err(|error| generator_error(py, error))
-}
-
-fn drain_group(slf: &Bound<'_, RecordsIter>, key: bool, key_stop_ends: bool) -> PyResult<bool> {
-    loop {
-        match next_record_input(slf)? {
-            RecordInput::Item(_, next_key) if next_key == key => {}
-            RecordInput::Item(line, next_key) => {
-                slf.borrow_mut().pending = Some((line, next_key));
-                return Ok(true);
-            }
-            RecordInput::End => return Ok(false),
-            RecordInput::KeyStop if key_stop_ends => return Ok(false),
-            RecordInput::KeyStop => {}
-        }
-    }
-}
-
-fn join_values(py: Python<'_>, values: &[Py<PyAny>]) -> PyResult<Py<PyAny>> {
-    if values.len() == 1 && super::exact_text(values[0].bind(py))?.is_some() {
-        return Ok(values[0].clone_ref(py));
-    }
-    let mut joined = String::new();
-    for (index, value) in values.iter().enumerate() {
-        let Some(text) = super::exact_text(value.bind(py))? else {
-            let python_values = PyList::empty(py);
-            for value in values {
-                python_values.append(value.bind(py))?;
-            }
-            return PyString::new(py, "\n")
-                .call_method1("join", (python_values,))
-                .map(Bound::unbind);
-        };
-        if index > 0 {
-            joined.push('\n');
-        }
-        joined.push_str(text);
-    }
-    Ok(PyString::new(py, &joined).into_any().unbind())
-}
-
 fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
     let py = slf.py();
-    if slf.borrow().exhausted {
-        return Ok(None);
-    }
-    let drain_key = slf.borrow_mut().drain_key.take();
-    if let Some(key) = drain_key
-        && !drain_group(slf, key, false)?
+    let mut core = {
+        let mut state = slf.borrow_mut();
+        std::mem::take(&mut state.core)
+    };
+    let result = core.next_record(|| next_record_input(slf));
     {
-        return Ok(None);
+        let mut state = slf.borrow_mut();
+        state.core = core;
     }
-    loop {
-        let next = slf.borrow_mut().pending.take();
-        let (line, key) = match next {
-            Some(item) => item,
-            None => match next_record_input(slf)? {
-                RecordInput::Item(line, key) => (line, key),
-                RecordInput::End | RecordInput::KeyStop => return Ok(None),
-            },
+    let record = match result {
+        Ok(Some(record)) => record,
+        Ok(None) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let (name, value) = {
+        let state = slf.borrow();
+        let name = match record.name {
+            Name::Text(name) => PyString::new(py, &name).into_any().unbind(),
+            Name::Source(source) => state.source(py, source)?,
         };
-
-        if !is_header(py, &line)? {
-            if !drain_group(slf, key, true)? {
-                return Ok(None);
+        let value = match record.value {
+            JoinedValue::Source(source) => state.source(py, source)?,
+            JoinedValue::Text(value) => PyString::new(py, &value).into_any().unbind(),
+            JoinedValue::Fallback(sources) => {
+                let values = PyList::empty(py);
+                for source in sources {
+                    values.append(state.source(py, source)?.bind(py))?;
+                }
+                PyString::new(py, "\n")
+                    .call_method1("join", (values,))
+                    .map(Bound::unbind)?
             }
-            continue;
-        }
-
-        let name = record_name(py, &line)?;
-        let mut values = Vec::new();
-        loop {
-            match next_record_input(slf)? {
-                RecordInput::Item(value, next_key) if next_key == key => values.push(value),
-                RecordInput::Item(line, next_key) => {
-                    slf.borrow_mut().pending = Some((line, next_key));
-                    break;
-                }
-                RecordInput::End => {
-                    slf.borrow_mut().exhausted = true;
-                    break;
-                }
-                RecordInput::KeyStop => {
-                    slf.borrow_mut().drain_key = Some(key);
-                    break;
-                }
-            }
-        }
-        let value = join_values(py, &values)?;
-        return PyTuple::new(py, [name, value])
-            .map(Bound::into_any)
-            .map(Bound::unbind)
-            .map(Some);
+        };
+        (name, value)
+    };
+    {
+        let mut state = slf.borrow_mut();
+        state.retain_pending();
     }
+    PyTuple::new(py, [name, value])
+        .map(Bound::into_any)
+        .map(Bound::unbind)
+        .map(Some)
 }
 
 #[pyfunction]
@@ -300,9 +299,8 @@ fn records_iter(block: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
             iterator: None,
             raw_line: None,
             line: None,
-            pending: None,
-            drain_key: None,
-            exhausted: false,
+            core: RecordsState::new(),
+            objects: Vec::new(),
             done: false,
             running: false,
         },
@@ -327,7 +325,7 @@ fn write_lines(
         outh.call_method1("write", (&line,))?;
         if with_newlines.is_truthy()? {
             let ends_with_newline = match super::exact_text(&line)? {
-                Some(text) => text.ends_with('\n'),
+                Some(text) => !sddata::needs_newline(text),
                 None => line.call_method1("endswith", ("\n",))?.is_truthy()?,
             };
             if !ends_with_newline {
@@ -368,7 +366,6 @@ fn formatted_header<'py>(
         return Ok(PyString::new(py, &sddata::header(record_name)).into_any());
     }
     let spec = PyString::new(py, "");
-    // Both operands are live Python objects under the GIL.
     let formatted = unsafe {
         Bound::from_owned_ptr_or_err(
             py,
@@ -387,7 +384,6 @@ fn python_add<'py>(
     left: &Bound<'py, PyAny>,
     right: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    // Both operands are live Python objects under the GIL.
     let ptr = unsafe { ffi::PyNumber_Add(left.as_ptr(), right.as_ptr()) };
     unsafe { Bound::from_owned_ptr_or_err(py, ptr) }
 }
