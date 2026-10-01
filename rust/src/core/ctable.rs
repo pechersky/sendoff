@@ -31,3 +31,15 @@ pub fn parse_v3000_counts(text: &str) -> Option<(i128, i128)> {
     let mut tokens = text.split(whitespace).filter(|token| !token.is_empty());
     Some((integer(tokens.nth(3)?)?, integer(tokens.next()?)?))
 }
+
+pub fn token(text: &str, position: usize) -> Option<&str> {
+    text.split(whitespace)
+        .filter(|token| !token.is_empty())
+        .nth(position)
+}
+
+pub fn after_characters(text: &str, count: usize) -> &str {
+    text.char_indices()
+        .nth(count)
+        .map_or("", |(offset, _)| &text[offset..])
+}
