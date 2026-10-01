@@ -178,30 +178,20 @@ impl<T> Default for RecordsState<T> {
     }
 }
 
-fn join_values<T>(values: Vec<Value<T>>) -> JoinedValue<T> {
-    if values.len() == 1 && values[0].text.is_some() {
-        let mut values = values.into_iter();
-        let value = match values.next() {
-            Some(value) => value,
-            None => unreachable!("one value was checked above"),
-        };
-        return JoinedValue::Source(value.payload);
+fn join_values<T>(mut values: Vec<Value<T>>) -> JoinedValue<T> {
+    if values.iter().any(|value| value.text.is_none()) {
+        return JoinedValue::Fallback(values.into_iter().map(|value| value.payload).collect());
+    }
+    if values.len() == 1 {
+        return JoinedValue::Source(values.pop().expect("one value was checked").payload);
     }
 
     let mut joined = String::new();
-    let mut first = true;
-    let mut values = values.into_iter();
-    while let Some(value) = values.next() {
-        let Some(text) = value.text else {
-            let mut fallback = vec![value.payload];
-            fallback.extend(values.map(|value| value.payload));
-            return JoinedValue::Fallback(fallback);
-        };
-        if !first {
+    for (index, value) in values.into_iter().enumerate() {
+        if index > 0 {
             joined.push('\n');
         }
-        first = false;
-        joined.push_str(&text);
+        joined.push_str(value.text.as_deref().expect("all values have UTF-8 text"));
     }
     JoinedValue::Text(joined)
 }

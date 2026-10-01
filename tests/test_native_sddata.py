@@ -1,4 +1,4 @@
-"""Exercise the private Rust metadata and writing algorithms directly."""
+"""Exercise metadata and writing behavior through the public Python API."""
 
 from __future__ import annotations
 

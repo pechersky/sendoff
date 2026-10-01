@@ -1,7 +1,7 @@
 """Guard the public Python contract while separating the Rust core."""
 
 from collections import deque
-from typing import SupportsIndex
+from typing import Iterator, SupportsIndex
 
 import pytest
 
@@ -43,6 +43,7 @@ def test_record_values_do_not_call_header_protocol() -> None:
 def test_metadata_checks_each_marker_once() -> None:
     """Do not repeat the previous line's marker protocol on the next resume."""
     calls: list[str] = []
+    iterator: Iterator[str]
 
     class Line(str):
         def startswith(
@@ -52,10 +53,27 @@ def test_metadata_checks_each_marker_once() -> None:
             end: SupportsIndex | None = None,
         ) -> bool:
             calls.append(str(self))
+            if self == "value":
+                with pytest.raises(ValueError, match="^generator already executing$"):
+                    next(iterator)
             return super().startswith(prefix, start, end)
 
-    assert list(SDBlock.parse_metadata([Line("value"), Line("$$$$")])) == ["value"]
+    iterator = iter(SDBlock.parse_metadata([Line("value"), Line("$$$$")]))
+    assert list(iterator) == ["value"]
     assert calls == ["value", "$$$$"]
+
+
+@pytest.mark.parametrize("position", [0, 1, 2])
+def test_record_join_keeps_all_values_with_surrogates(position: int) -> None:
+    """Retain preceding and following values when Python must join the text.
+
+    Args:
+        position: Location of the non-UTF-8 Python string in the value group.
+    """
+    values = ["first", "second"]
+    values.insert(position, "\ud800")
+    block = SDBlock("", deque(), deque(["> <key>", *values, ""]))
+    assert list(block.records()) == [("key", "\n".join(values))]
 
 
 def test_renumber_preserves_unchanged_line_objects() -> None:
