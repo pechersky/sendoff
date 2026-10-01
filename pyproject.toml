@@ -106,6 +106,7 @@ cmd = "cargo check && git add -- Cargo.lock"
 # - PRs should drop a file like "issuenumber.feature" in newsfragments
 #   (or "bugfix", "doc", "removal", "misc")
 # - At release time after bumping version number, run:
+#   VIRTUAL_ENV="$PWD/.venv" .venv/bin/maturin develop --locked
 #   .venv/bin/towncrier --draft, then .venv/bin/towncrier
 package = "sendoff"
 filename = "doc/changelog.rst"

@@ -104,9 +104,11 @@ excludes ``.github/`` YAML. Rust fmt/Clippy hooks run for Cargo/Rust changes.
 Rust exports ``CARGO_PKG_VERSION``, and Python reads that export. tbump updates
 Cargo and its own configuration, then runs ``cargo check`` to synchronize and
 stage ``Cargo.lock`` before a version commit. Inspect
-``tbump --dry-run --no-push <version>`` before release work; no 1.0.0 bump, tag or
-publishing is authorized by this scaffold. Changelog drafts use
-``.venv/bin/towncrier --draft``.
+``tbump --dry-run --no-push --no-tag <version>`` before release work.
+After a version bump, rebuild the editable extension with ``maturin develop``
+before reading Python's version or running ``.venv/bin/towncrier --draft``;
+``cargo check`` synchronizes the lock but does not reinstall the binary.
+No 1.0.0 bump, tag or publishing is authorized by this scaffold.
 
 Private leaf interface and ownership
 ------------------------------------
