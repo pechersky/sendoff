@@ -19,16 +19,11 @@ pub fn parse_v3000_counts(line: &str) -> Option<(i64, i64)> {
     Some((atoms, bonds))
 }
 
-pub fn parse_format(line: &str) -> Option<&'static str> {
+pub fn parse_format(line: &str) -> Option<&str> {
     let mut fields = line
         .split(|character: char| {
             character.is_ascii_whitespace() || ('\u{1c}'..='\u{1f}').contains(&character)
         })
         .filter(|field| !field.is_empty());
-    let format = fields.next_back()?;
-    match format {
-        "V2000" => Some("V2000"),
-        "V3000" => Some("V3000"),
-        _ => None,
-    }
+    fields.next_back()
 }

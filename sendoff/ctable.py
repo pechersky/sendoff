@@ -91,9 +91,7 @@ class CTable:
         Returns:
             A CTAB format, based on the end of the counts line
         """
-        sline = line.strip().split()
-        ctformat = CTableFormat[sline[-1]]
-        return ctformat
+        return CTableFormat[native.parse_format(line)]
 
     @staticmethod
     def parse_v2000_counts(line: str) -> Tuple[int, int]:
