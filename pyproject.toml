@@ -59,8 +59,6 @@ include = [
     {path = ".pre-commit-config.yaml", format = "sdist"},
     {path = ".isort.cfg", format = "sdist"},
     {path = ".flake8", format = "sdist"},
-    {path = "doc/changelog.rst", format = "sdist"},
-    {path = "newsfragments/*", format = "sdist"},
 ]
 exclude = ["sendoff/*.so", "sendoff/__pycache__/**"]
 
