@@ -4,13 +4,19 @@ use std::convert::Infallible;
 
 /// The parsed data stored in one molecule block.
 pub struct SDBlock {
+    /// The stripped molecule title.
     pub title: String,
+    /// The MDL lines, including the `M  END` marker.
     pub mdl: Vec<String>,
+    /// The SD metadata lines, excluding the `$$$$` delimiter.
     pub metadata: Vec<String>,
 }
 
 impl SDBlock {
-    /// Parse blocks from lines, returning only blocks ending in `$$$$`.
+    /// Parse SDBlocks from a sequence of lines.
+    ///
+    /// Blocks are separated by lines starting with `$$$$`; any unterminated
+    /// lines at the end of the input are ignored.
     pub fn from_lines<I, E>(lines: &mut I) -> Result<Vec<Self>, E>
     where
         I: Iterator<Item = Result<String, E>>,
@@ -40,18 +46,22 @@ impl SDBlock {
         }
     }
 
-    /// Return the parsed metadata records.
+    /// Generate SD metadata records.
+    ///
+    /// Each value includes embedded newlines when it spans multiple lines.
     pub fn records(&self) -> Vec<(String, String)> {
         crate::core::sddata::records(&self.metadata)
     }
 
-    /// Append an SD metadata record.
+    /// Append a field and value to the SD data record.
     pub fn append_record(&mut self, record_name: &str, value: &str) {
         let (name, value, separator) = crate::core::sddata::append_record(record_name, value);
         self.metadata.extend([name, value, separator]);
     }
 
     /// Return the title and MDL lines expected by `CTable`.
+    ///
+    /// The returned lines are parsed as a CTable without additional validation.
     pub fn ctable_lines(&self) -> Vec<String> {
         let mut lines = Vec::with_capacity(self.mdl.len() + 1);
         lines.push(self.title.clone());

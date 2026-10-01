@@ -1,4 +1,3 @@
-from collections.abc import Sequence
 from typing import Any, Final, final
 
 __version__: Final[str]
@@ -123,6 +122,10 @@ class SDBlock:
     def ctable(self, /) -> CTable:
         """
         Parse out the underlying CTable object from the SDBlock.
+
+        Returns:
+            The CTable titled with this SDBlock's title, parsed from its MDL
+            lines without validation.
         """
     @staticmethod
     def from_lines(lines: Any) -> Any:
@@ -138,24 +141,37 @@ class SDBlock:
         """
     def num_atoms(self, /) -> int:
         """
-        Get the number of atoms indicated in the MDL block.
+        Get the number of atoms as indicated in the MDL block.
+
+        The count is read from the counts line and may differ from the number
+        of atom lines.
+
+        Returns:
+            The number of atoms parsed from the counts line.
         """
     def num_bonds(self, /) -> int:
         """
-        Get the number of bonds indicated in the MDL block.
+        Get the number of bonds as indicated in the MDL block.
+
+        The count is read from the counts line and may differ from the number
+        of bond lines.
+
+        Returns:
+            The number of bonds parsed from the counts line.
         """
     def records(self, /) -> list[tuple[str, str]]:
         """
-        Generate SD metadata records one by one.
+        Generate SD metadata records.
 
         Returns:
-            Tuples of record name and value. Multiline values include newlines.
+            Tuples of record name and value. The value includes any newlines
+            if it is multiline.
         """
     def renumber_indices(self, /) -> None:
         """
         Renumber atom and bond indices to be 1-indexed and in order.
 
-        Utilizes the underlying CTable's renumbering and replaces this object's MDL lines.
+        Utilizes the underlying CTable's renumbering and overwrites this object's MDL lines.
         """
     @property
     def title(self, /) -> str:
@@ -171,14 +187,3 @@ class SDBlock:
             with_newlines: each line is written with a trailing "\\n".
                 The newline character is appended only if it was not in the line.
         """
-
-def append_record(record_name: str, value: str) -> tuple[str, str, str]: ...
-def parse_mdl(lines: Any) -> list[str]: ...
-def parse_metadata(lines: Any) -> list[str]: ...
-def records(metadata: Sequence[str]) -> list[tuple[str, str]]: ...
-def serialize_sdfblock(
-    title: str,
-    mdl_lines: Sequence[str],
-    metadata_lines: Sequence[str],
-    with_newlines: bool,
-) -> str: ...

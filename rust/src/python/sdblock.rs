@@ -41,10 +41,11 @@ impl PySDBlock {
         &self.inner.title
     }
 
-    /// Generate SD metadata records one by one.
+    /// Generate SD metadata records.
     ///
     /// Returns:
-    ///     Tuples of record name and value. Multiline values include newlines.
+    ///     Tuples of record name and value. The value includes any newlines
+    ///     if it is multiline.
     fn records(&self) -> Vec<(String, String)> {
         self.inner.records()
     }
@@ -71,53 +72,43 @@ impl PySDBlock {
     }
 
     /// Parse out the underlying CTable object from the SDBlock.
+    ///
+    /// Returns:
+    ///     The CTable titled with this SDBlock's title, parsed from its MDL
+    ///     lines without validation.
     fn ctable(&self) -> PyResult<PyCTable> {
         PyCTable::from_lines(self.inner.ctable_lines())
     }
 
-    /// Get the number of atoms indicated in the MDL block.
+    /// Get the number of atoms as indicated in the MDL block.
+    ///
+    /// The count is read from the counts line and may differ from the number
+    /// of atom lines.
+    ///
+    /// Returns:
+    ///     The number of atoms parsed from the counts line.
     fn num_atoms(&self) -> PyResult<i64> {
         Ok(self.ctable()?.num_atoms_value())
     }
 
-    /// Get the number of bonds indicated in the MDL block.
+    /// Get the number of bonds as indicated in the MDL block.
+    ///
+    /// The count is read from the counts line and may differ from the number
+    /// of bond lines.
+    ///
+    /// Returns:
+    ///     The number of bonds parsed from the counts line.
     fn num_bonds(&self) -> PyResult<i64> {
         Ok(self.ctable()?.num_bonds_value())
     }
 
     /// Renumber atom and bond indices to be 1-indexed and in order.
     ///
-    /// Utilizes the underlying CTable's renumbering and replaces this object's MDL lines.
+    /// Utilizes the underlying CTable's renumbering and overwrites this object's MDL lines.
     fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
         let mut ctable = self.ctable()?;
         ctable.renumber_indices_for_block(py)?;
         self.inner.mdl = ctable.lines_after_title();
         Ok(())
     }
-}
-
-#[pyfunction]
-pub(crate) fn parse_mdl(lines: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
-    let mut lines = lines
-        .try_iter()?
-        .map(|line| line.and_then(|line| line.extract::<String>()));
-    sdblock::parse_mdl(&mut lines)
-}
-
-#[pyfunction]
-pub(crate) fn parse_metadata(lines: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
-    let mut lines = lines
-        .try_iter()?
-        .map(|line| line.and_then(|line| line.extract::<String>()));
-    sdblock::parse_metadata(&mut lines)
-}
-
-#[pyfunction]
-pub(crate) fn serialize_sdfblock(
-    title: &str,
-    mdl_lines: Vec<String>,
-    metadata_lines: Vec<String>,
-    with_newlines: bool,
-) -> String {
-    sdblock::serialize(title, &mdl_lines, &metadata_lines, with_newlines)
 }
