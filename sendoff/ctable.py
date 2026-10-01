@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 from enum import Enum
 from typing import Iterable, Tuple
 
-from sendoff import native as _native
+import sendoff.native as native
 
 
 class CTableFormat(Enum):
@@ -91,12 +91,9 @@ class CTable:
         Returns:
             A CTAB format, based on the end of the counts line
         """
-        if type(line) is str and line.isascii():
-            format_name = _native._parse_format(line)
-            if format_name is not None:
-                return CTableFormat[format_name]
         sline = line.strip().split()
-        return CTableFormat[sline[-1]]
+        ctformat = CTableFormat[sline[-1]]
+        return ctformat
 
     @staticmethod
     def parse_v2000_counts(line: str) -> Tuple[int, int]:
@@ -123,12 +120,7 @@ class CTable:
                 the number of bonds indicated by the counts line.
                     Not the actual number of bonds lines further down.)
         """
-        if type(line) is str and line.isascii():
-            try:
-                return _native._parse_v2000_counts(line)
-            except ValueError:
-                pass
-        return int(line[:3]), int(line[3:6])
+        return native.parse_v2000_counts(line)
 
     @staticmethod
     def parse_v3000_counts(line: str) -> Tuple[int, int]:
@@ -148,12 +140,7 @@ class CTable:
                 the number of bonds indicated by the counts line.
                     Not the actual number of bonds lines further down.)
         """
-        if type(line) is str and line.isascii():
-            counts = _native._parse_v3000_counts(line)
-            if counts is not None:
-                return counts
-        sline = line.split()
-        return int(sline[3]), int(sline[4])
+        return native.parse_v3000_counts(line)
 
     def atomlines(self) -> Iterable[str]:
         """Get atom lines in the atom table, assumed to be after 7 lines.

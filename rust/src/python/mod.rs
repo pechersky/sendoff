@@ -17,9 +17,9 @@ fn flush_coverage() -> PyResult<()> {
     Ok(())
 }
 
-pub fn register(_module: &Bound<'_, PyModule>) -> PyResult<()> {
-    ctable::register(_module)?;
+pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    ctable::register(module)?;
     #[cfg(feature = "coverage")]
-    _module.add_function(wrap_pyfunction!(flush_coverage, _module)?)?;
+    module.add_function(wrap_pyfunction!(flush_coverage, module)?)?;
     Ok(())
 }
