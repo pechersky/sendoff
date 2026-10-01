@@ -12,7 +12,6 @@ include = [
     "/rust/**/*.rs",
     "/sendoff/**/*.py",
     "/sendoff/*.pyi",
-    "/sendoff/py.typed",
     "/pyproject.toml",
     "/README.rst",
     "/LICENSE",
