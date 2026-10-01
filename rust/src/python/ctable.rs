@@ -1,63 +1,188 @@
 use pyo3::prelude::*;
+use pyo3::types::PyModule;
 
 use crate::core::ctable;
 
-#[pyfunction]
-fn parse_v2000_counts(line: &str) -> PyResult<(i64, i64)> {
-    ctable::parse_v2000_counts(line)
-        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+/// Handle a Connection table (CTAB) from a single molecule block.
+///
+/// Parsed in based on https://en.wikipedia.org/wiki/Chemical_table_file.
+/// As part of parsing, record the title, the source line, the comment line,
+/// and the counts line. The rest of the lines are kept but not parsed.
+/// The counts line is parsed to infer the format and the number of atoms.
+/// Note, the number of atoms in the counts line might not actually
+/// be the number of lines of atoms.
+#[pyclass(name = "CTable", module = "sendoff.native")]
+pub(crate) struct PyCTable {
+    inner: ctable::CTable,
 }
 
-#[pyfunction]
-fn parse_v3000_counts(line: &str) -> PyResult<(i64, i64)> {
-    ctable::parse_v3000_counts(line)
-        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("invalid V3000 counts"))
+#[pymethods]
+impl PyCTable {
+    /// Parse in lines representing the CTAB, including the title line.
+    ///
+    /// Args:
+    ///     lines: an Iterable of str that comprises the CTAB
+    ///         The title line is parsed in by the SDBlock, and should
+    ///         be supplied as the first in lines.
+    #[new]
+    fn new(lines: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let lines = lines
+            .try_iter()?
+            .map(|line| line?.extract::<String>())
+            .collect::<PyResult<Vec<_>>>()?;
+        let inner = ctable::CTable::parse(lines).map_err(|error| match error {
+            ctable::CTableParseError::UnknownFormat(token) => {
+                pyo3::exceptions::PyKeyError::new_err(token)
+            }
+            ctable::CTableParseError::InvalidV2000Counts(error) => {
+                pyo3::exceptions::PyValueError::new_err(error.to_string())
+            }
+            ctable::CTableParseError::InvalidV3000Counts => {
+                pyo3::exceptions::PyValueError::new_err("invalid V3000 counts")
+            }
+        })?;
+        Ok(Self { inner })
+    }
+
+    /// Return a copy of the original connection-table lines.
+    #[getter]
+    fn lines(&self) -> Vec<String> {
+        self.inner.lines.clone()
+    }
+
+    /// Return the atom count from the counts line.
+    #[getter]
+    fn num_atoms(&self) -> i64 {
+        self.inner.num_atoms
+    }
+
+    /// Return the bond count from the counts line.
+    #[getter]
+    fn num_bonds(&self) -> i64 {
+        self.inner.num_bonds
+    }
+
+    /// Validate that the atom lines match the counts line.
+    ///
+    /// If strict, make sure they are 1-indexed and in order.
+    /// This can break if the V3000 block has "-" terminated lines,
+    ///     which means that the next line is a continuation of the previous.
+    ///
+    /// Args:
+    ///     strict: the indices start with 1, and increment by one.
+    ///
+    /// Raises:
+    ///     IndicesDuplicateError: if an atom line met has an index seen before
+    ///     IndicesMismatchError: if number of atom lines does not match count line
+    ///     IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
+    ///     NotImplementedError: if trying to validate a V2000 format table
+    ///
+    /// Returns:
+    ///     If all the checks pass, return True.
+    #[pyo3(signature = (strict: "bool" = false))]
+    fn valid_atom_indices(&self, py: Python<'_>, strict: bool) -> PyResult<bool> {
+        match self.inner.valid_atom_indices(strict) {
+            Ok(()) => Ok(true),
+            Err("not_implemented") => Err(pyo3::exceptions::PyNotImplementedError::new_err(())),
+            Err("out_of_order") => Err(custom_error(py, "IndicesOutOfOrderError", "atoms")?),
+            Err("duplicate") => Err(custom_error(py, "IndicesDuplicateError", "atoms")?),
+            Err("fewer") => Err(custom_error(
+                py,
+                "IndicesMismatchError",
+                "fewer atom lines than count line",
+            )?),
+            Err("more") => Err(custom_error(
+                py,
+                "IndicesMismatchError",
+                "more atom lines than count line",
+            )?),
+            Err(error) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "unknown atom index validation result: {error}"
+            ))),
+        }
+    }
+
+    /// Validate that the bond lines match the counts line.
+    ///
+    /// If strict, make sure they are 1-indexed and in order.
+    /// This can break if the V3000 block has "-" terminated lines,
+    ///     which means that the next line is a continuation of the previous.
+    ///
+    /// Args:
+    ///     strict: the indices start with 1, and increment by one.
+    ///
+    /// Raises:
+    ///     IndicesDuplicateError: if an bond line met has an index seen before
+    ///     IndicesMismatchError: if number of bond lines does not match count line
+    ///     IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
+    ///     NotImplementedError: if trying to validate a V2000 format table
+    ///
+    /// Returns:
+    ///     If all the checks pass, return True.
+    #[pyo3(signature = (strict: "bool" = false))]
+    fn valid_bond_indices(&self, py: Python<'_>, strict: bool) -> PyResult<bool> {
+        match self.inner.valid_bond_indices(strict) {
+            Ok(()) => Ok(true),
+            Err("not_implemented") => Err(pyo3::exceptions::PyNotImplementedError::new_err(())),
+            Err("out_of_order") => Err(custom_error(py, "IndicesOutOfOrderError", "bonds")?),
+            Err("duplicate") => Err(custom_error(py, "IndicesDuplicateError", "bonds")?),
+            Err("fewer") => Err(custom_error(
+                py,
+                "IndicesMismatchError",
+                "fewer bond lines than count line",
+            )?),
+            Err("more") => Err(custom_error(
+                py,
+                "IndicesMismatchError",
+                "more bond lines than count line",
+            )?),
+            Err(error) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "unknown bond index validation result: {error}"
+            ))),
+        }
+    }
+
+    /// Renumber the indices in the block, including changing counts line.
+    ///
+    /// Iterating through the atom lines, replace the indexes into a
+    /// 1-indexed order, keeping track of what maps to what.
+    /// Then, renumber the bond lines, making sure to map the new atom indices
+    /// properly.
+    /// At the end, regenerate the counts line to match the number of atom and bond
+    /// lines.
+    /// This will run regardless of whether the indices are already valid.
+    /// It cannot fix duplicate atom indices properly if the duplicate one
+    /// occurs in the bond lines, and will raise an error.
+    /// The lines are then in-place replaced within the CTable object.
+    /// Only implemented for V3000 tables.
+    ///
+    /// This can break if the V3000 block has "-" terminated lines,
+    ///     which means that the next line is a continuation of the previous.
+    ///
+    /// Raises:
+    ///     IndicesDuplicateError: if there was a duplicate atom index, and it was used
+    ///         somewhere in a bond line. Raised, because it is not clear which of the
+    ///         original indices to use in the remapping.
+    ///     NotImplementedError: if trying to renumber in a V2000 format table
+    fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
+        match self.inner.renumber_indices() {
+            Ok(()) => Ok(()),
+            Err("not_implemented") => Err(pyo3::exceptions::PyNotImplementedError::new_err(())),
+            Err("duplicate") => Err(custom_error(
+                py,
+                "IndicesDuplicateError",
+                "atom index mapping in bond",
+            )?),
+            Err(error) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "unknown renumbering result: {error}"
+            ))),
+        }
+    }
 }
 
-#[pyfunction]
-fn parse_format(line: &str) -> String {
-    ctable::parse_format(line)
-        .expect("expected a final CTable format token")
-        .to_owned()
-}
-
-#[pyfunction]
-fn atom_line_range(lines: Vec<String>) -> (usize, usize) {
-    ctable::atom_line_range(&lines)
-}
-
-#[pyfunction]
-fn bond_line_range(lines: Vec<String>) -> (usize, usize) {
-    ctable::bond_line_range(&lines)
-}
-
-#[pyfunction]
-fn validate_atom_indices(lines: Vec<String>, num_atoms: usize, strict: bool) -> Option<String> {
-    ctable::validate_atom_indices(&lines, num_atoms, strict)
-        .err()
-        .map(str::to_owned)
-}
-
-#[pyfunction]
-fn validate_bond_indices(lines: Vec<String>, num_bonds: usize, strict: bool) -> Option<String> {
-    ctable::validate_bond_indices(&lines, num_bonds, strict)
-        .err()
-        .map(str::to_owned)
-}
-
-#[pyfunction]
-fn renumber_indices(lines: Vec<String>, counts: &str) -> Option<Vec<String>> {
-    ctable::renumber_indices(&lines, counts)
-}
-
-pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(parse_v2000_counts, module)?)?;
-    module.add_function(wrap_pyfunction!(parse_v3000_counts, module)?)?;
-    module.add_function(wrap_pyfunction!(parse_format, module)?)?;
-    module.add_function(wrap_pyfunction!(atom_line_range, module)?)?;
-    module.add_function(wrap_pyfunction!(bond_line_range, module)?)?;
-    module.add_function(wrap_pyfunction!(validate_atom_indices, module)?)?;
-    module.add_function(wrap_pyfunction!(validate_bond_indices, module)?)?;
-    module.add_function(wrap_pyfunction!(renumber_indices, module)?)?;
-    Ok(())
+fn custom_error(py: Python<'_>, name: &str, message: &str) -> PyResult<PyErr> {
+    let instance = PyModule::import(py, "sendoff.ctable")?
+        .getattr(name)?
+        .call1((message,))?;
+    Ok(PyErr::from_value(instance))
 }

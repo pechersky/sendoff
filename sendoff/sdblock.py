@@ -170,10 +170,7 @@ class SDBlock:
         """
         ctable = self.ctable()
         ctable.renumber_indices()
-        # not copy, because we don't care about the ctable we just constructed
-        self.mdl = ctable.lines
-        # pop left, because that is the title line we keep separately
-        self.mdl.popleft()
+        self.mdl = deque(ctable.lines[1:])
         return
 
 

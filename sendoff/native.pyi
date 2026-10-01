@@ -1,29 +1,110 @@
-from collections import deque
+from collections.abc import Sequence
+from typing import Any, Final, final
 
-__version__: str
+__version__: Final[str]
 
-def parse_v2000_counts(line: str) -> tuple[int, int]: ...
+@final
+class CTable:
+    """
+    Handle a Connection table (CTAB) from a single molecule block.
 
-def parse_v3000_counts(line: str) -> tuple[int, int]: ...
+    Parsed in based on https://en.wikipedia.org/wiki/Chemical_table_file.
+    As part of parsing, record the title, the source line, the comment line,
+    and the counts line. The rest of the lines are kept but not parsed.
+    The counts line is parsed to infer the format and the number of atoms.
+    Note, the number of atoms in the counts line might not actually
+    be the number of lines of atoms.
+    """
 
-def parse_format(line: str) -> str: ...
+    def __new__(cls, /, lines: Any) -> CTable:
+        """
+        Parse in lines representing the CTAB, including the title line.
 
-def atom_line_range(lines: list[str]) -> tuple[int, int]: ...
+        Args:
+            lines: an Iterable of str that comprises the CTAB
+                The title line is parsed in by the SDBlock, and should
+                be supplied as the first in lines.
+        """
+    @property
+    def lines(self, /) -> list[str]:
+        """
+        Return a copy of the original connection-table lines.
+        """
+    @property
+    def num_atoms(self, /) -> int:
+        """
+        Return the atom count from the counts line.
+        """
+    @property
+    def num_bonds(self, /) -> int:
+        """
+        Return the bond count from the counts line.
+        """
+    def renumber_indices(self, /) -> None:
+        """
+        Renumber the indices in the block, including changing counts line.
 
-def bond_line_range(lines: list[str]) -> tuple[int, int]: ...
+        Iterating through the atom lines, replace the indexes into a
+        1-indexed order, keeping track of what maps to what.
+        Then, renumber the bond lines, making sure to map the new atom indices
+        properly.
+        At the end, regenerate the counts line to match the number of atom and bond
+        lines.
+        This will run regardless of whether the indices are already valid.
+        It cannot fix duplicate atom indices properly if the duplicate one
+        occurs in the bond lines, and will raise an error.
+        The lines are then in-place replaced within the CTable object.
+        Only implemented for V3000 tables.
 
-def validate_atom_indices(
-    lines: list[str], num_atoms: int, strict: bool
-) -> str | None: ...
+        This can break if the V3000 block has "-" terminated lines,
+            which means that the next line is a continuation of the previous.
 
-def validate_bond_indices(
-    lines: list[str], num_bonds: int, strict: bool
-) -> str | None: ...
+        Raises:
+            IndicesDuplicateError: if there was a duplicate atom index, and it was used
+                somewhere in a bond line. Raised, because it is not clear which of the
+                original indices to use in the remapping.
+            NotImplementedError: if trying to renumber in a V2000 format table
+        """
+    def valid_atom_indices(self, /, strict: "bool" = False) -> bool:
+        """
+        Validate that the atom lines match the counts line.
 
-def renumber_indices(lines: list[str], counts: str) -> list[str] | None: ...
+        If strict, make sure they are 1-indexed and in order.
+        This can break if the V3000 block has "-" terminated lines,
+            which means that the next line is a continuation of the previous.
 
-def append_record(
-    record_name: str, value: str
-) -> tuple[str, str, str]: ...
+        Args:
+            strict: the indices start with 1, and increment by one.
 
-def records(metadata: list[str] | deque[str]) -> list[tuple[str, str]]: ...
+        Raises:
+            IndicesDuplicateError: if an atom line met has an index seen before
+            IndicesMismatchError: if number of atom lines does not match count line
+            IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
+            NotImplementedError: if trying to validate a V2000 format table
+
+        Returns:
+            If all the checks pass, return True.
+        """
+    def valid_bond_indices(self, /, strict: "bool" = False) -> bool:
+        """
+        Validate that the bond lines match the counts line.
+
+        If strict, make sure they are 1-indexed and in order.
+        This can break if the V3000 block has "-" terminated lines,
+            which means that the next line is a continuation of the previous.
+
+        Args:
+            strict: the indices start with 1, and increment by one.
+
+        Raises:
+            IndicesDuplicateError: if an bond line met has an index seen before
+            IndicesMismatchError: if number of bond lines does not match count line
+            IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
+            NotImplementedError: if trying to validate a V2000 format table
+
+        Returns:
+            If all the checks pass, return True.
+        """
+
+def append_record(record_name: str, value: str) -> tuple[str, str, str]: ...
+def records(metadata: Sequence[str]) -> list[tuple[str, str]]: ...
