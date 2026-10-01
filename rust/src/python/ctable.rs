@@ -38,6 +38,13 @@ fn validate_atom_indices(lines: Vec<String>, num_atoms: usize, strict: bool) -> 
         .map(str::to_owned)
 }
 
+#[pyfunction]
+fn validate_bond_indices(lines: Vec<String>, num_bonds: usize, strict: bool) -> Option<String> {
+    ctable::validate_bond_indices(&lines, num_bonds, strict)
+        .err()
+        .map(str::to_owned)
+}
+
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(parse_v2000_counts, module)?)?;
     module.add_function(wrap_pyfunction!(parse_v3000_counts, module)?)?;
@@ -45,5 +52,6 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(atom_line_range, module)?)?;
     module.add_function(wrap_pyfunction!(bond_line_range, module)?)?;
     module.add_function(wrap_pyfunction!(validate_atom_indices, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_bond_indices, module)?)?;
     Ok(())
 }

@@ -226,20 +226,20 @@ class CTable:
         """
         if self.format is not CTableFormat.V3000:
             raise NotImplementedError
-        seen_indices: set[int] = set()
-        for line_ix, line in enumerate(self.bondlines()):
-            sline = line.split()
-            bond_ix = int(sline[2])
-            if strict and line_ix + 1 != bond_ix:
+        error = native.validate_bond_indices(list(self.lines), self.num_bonds, strict)
+        match error:
+            case None:
+                return True
+            case "out_of_order":
                 raise IndicesOutOfOrderError("bonds")
-            if bond_ix in seen_indices:
+            case "duplicate":
                 raise IndicesDuplicateError("bonds")
-            seen_indices.add(bond_ix)
-        if len(seen_indices) < self.num_bonds:
-            raise IndicesMismatchError("fewer bond lines than count line")
-        if len(seen_indices) > self.num_bonds:
-            raise IndicesMismatchError("more bond lines than count line")
-        return True
+            case "fewer":
+                raise IndicesMismatchError("fewer bond lines than count line")
+            case "more":
+                raise IndicesMismatchError("more bond lines than count line")
+            case _:
+                raise RuntimeError(f"unknown bond index validation result: {error}")
 
     def renumber_indices(self) -> None:  # noqa: max-complexity: 13
         """Renumber the indices in the block, including changing counts line.

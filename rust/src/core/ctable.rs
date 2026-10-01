@@ -63,25 +63,42 @@ pub fn validate_atom_indices(
     strict: bool,
 ) -> Result<(), &'static str> {
     let (start, end) = atom_line_range(lines);
+    validate_indices(&lines[start..end], num_atoms, strict)
+}
+
+pub fn validate_bond_indices(
+    lines: &[String],
+    num_bonds: usize,
+    strict: bool,
+) -> Result<(), &'static str> {
+    let (start, end) = bond_line_range(lines);
+    validate_indices(&lines[start..end], num_bonds, strict)
+}
+
+fn validate_indices(
+    lines: &[String],
+    expected_count: usize,
+    strict: bool,
+) -> Result<(), &'static str> {
     let mut seen_indices = HashSet::new();
-    for (line_index, line) in lines[start..end].iter().enumerate() {
-        let atom_index = line
+    for (line_index, line) in lines.iter().enumerate() {
+        let index = line
             .split_whitespace()
             .nth(2)
-            .expect("atom line has no index")
+            .expect("index line has no index")
             .parse::<i64>()
-            .expect("atom index is not an integer");
-        if strict && (line_index + 1) as i64 != atom_index {
+            .expect("index is not an integer");
+        if strict && (line_index + 1) as i64 != index {
             return Err("out_of_order");
         }
-        if !seen_indices.insert(atom_index) {
+        if !seen_indices.insert(index) {
             return Err("duplicate");
         }
     }
-    if seen_indices.len() < num_atoms {
+    if seen_indices.len() < expected_count {
         return Err("fewer");
     }
-    if seen_indices.len() > num_atoms {
+    if seen_indices.len() > expected_count {
         return Err("more");
     }
     Ok(())
