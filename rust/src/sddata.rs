@@ -21,6 +21,7 @@ struct RecordsIter {
     raw_line: Option<Py<PyAny>>,
     line: Option<Py<PyAny>>,
     pending: Option<(Py<PyAny>, bool)>,
+    drain_key: Option<bool>,
     exhausted: bool,
     done: bool,
     running: bool,
@@ -33,6 +34,7 @@ impl RecordsIter {
         self.raw_line = None;
         self.line = None;
         self.pending = None;
+        self.drain_key = None;
         self.exhausted = true;
         self.done = true;
     }
@@ -205,7 +207,7 @@ fn is_header(py: Python<'_>, line: &Py<PyAny>) -> PyResult<bool> {
         .map_err(|error| generator_error(py, error))
 }
 
-fn drain_group(slf: &Bound<'_, RecordsIter>, key: bool) -> PyResult<bool> {
+fn drain_group(slf: &Bound<'_, RecordsIter>, key: bool, key_stop_ends: bool) -> PyResult<bool> {
     loop {
         match next_record_input(slf)? {
             RecordInput::Item(_, next_key) if next_key == key => {}
@@ -213,7 +215,9 @@ fn drain_group(slf: &Bound<'_, RecordsIter>, key: bool) -> PyResult<bool> {
                 slf.borrow_mut().pending = Some((line, next_key));
                 return Ok(true);
             }
-            RecordInput::End | RecordInput::KeyStop => return Ok(false),
+            RecordInput::End => return Ok(false),
+            RecordInput::KeyStop if key_stop_ends => return Ok(false),
+            RecordInput::KeyStop => {}
         }
     }
 }
@@ -246,6 +250,12 @@ fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
     if slf.borrow().exhausted {
         return Ok(None);
     }
+    let drain_key = slf.borrow_mut().drain_key.take();
+    if let Some(key) = drain_key
+        && !drain_group(slf, key, false)?
+    {
+        return Ok(None);
+    }
     loop {
         let next = slf.borrow_mut().pending.take();
         let (line, key) = match next {
@@ -257,7 +267,7 @@ fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
         };
 
         if !is_header(py, &line)? {
-            if !drain_group(slf, key)? {
+            if !drain_group(slf, key, true)? {
                 return Ok(None);
             }
             continue;
@@ -272,8 +282,12 @@ fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
                     slf.borrow_mut().pending = Some((line, next_key));
                     break;
                 }
-                RecordInput::End | RecordInput::KeyStop => {
+                RecordInput::End => {
                     slf.borrow_mut().exhausted = true;
+                    break;
+                }
+                RecordInput::KeyStop => {
+                    slf.borrow_mut().drain_key = Some(key);
                     break;
                 }
             }
@@ -296,6 +310,7 @@ fn records_iter(block: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
             raw_line: None,
             line: None,
             pending: None,
+            drain_key: None,
             exhausted: false,
             done: false,
             running: false,

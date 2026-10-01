@@ -159,6 +159,49 @@ def test_native_records_cleanup_rejects_reentrant_finalizer_safely() -> None:
         next(records)
 
 
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("different-key", [("one", "v"), ("two", "w")]),
+        ("same-key", [("one", "v")]),
+        ("initial-key-stop", []),
+    ],
+)
+def test_native_records_resume_after_inner_key_stop(
+    case: str, expected: list[tuple[str, str]]
+) -> None:
+    """Match groupby when bool raises StopIteration inside a record chunk.
+
+    Args:
+        case: Which grouping transition to exercise.
+        expected: Literal records produced by the Python grouping behavior.
+    """
+
+    class StopBool(str):
+        def strip(self, chars: str | None = None) -> str:
+            return self
+
+        def __bool__(self) -> bool:
+            raise StopIteration("key stopped")
+
+    metadata_by_case = {
+        "different-key": [
+            "> <one>",
+            "v",
+            StopBool("stop"),
+            "",
+            "> <two>",
+            "w",
+        ],
+        "same-key": ["> <one>", "v", StopBool("stop"), "> <two>", "w"],
+        "initial-key-stop": [StopBool("stop"), "> <one>", "w"],
+    }
+    records = getattr(native, "records_iter")(
+        SDBlock("title", deque(), deque(metadata_by_case[case]))
+    )
+    assert list(records) == expected
+
+
 def test_native_records_parse_exact_text_with_python_whitespace() -> None:
     """Trim and split normal Unicode metadata with Python-compatible whitespace."""
     block = SDBlock(
