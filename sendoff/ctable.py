@@ -145,10 +145,12 @@ class CTable:
                 the number of bonds indicated by the counts line.
                     Not the actual number of bonds lines further down.)
         """
+        if type(line) is str and line.isascii():
+            counts = _native._parse_v3000_counts(line)
+            if counts is not None:
+                return counts
         sline = line.split()
-        num_atoms = int(sline[3])
-        num_bonds = int(sline[4])
-        return num_atoms, num_bonds
+        return int(sline[3]), int(sline[4])
 
     def atomlines(self) -> Iterable[str]:
         """Get atom lines in the atom table, assumed to be after 7 lines.
