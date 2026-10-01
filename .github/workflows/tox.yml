@@ -1,89 +1,39 @@
-name: Test and publish
+name: Test
 
 on:
-  - push
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
-        python-version: [3.8, 3.9]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install tox dependencies
+        check-latest: true
+        allow-prereleases: false
+        freethreaded: false
+    - name: Set up Rust
       run: |
-        python -m pip install --upgrade pip
-        pip install tox tox-gh-actions
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-        installer-parallel: true
-    - name: Load cached poetry venv
-      id: cached-poetry-dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          .venv
-          .tox
-          ~/.cache/pip
-        key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}
-    - name: Install package dependencies
-      if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-      run: poetry install --no-interaction --no-root
-    - name: Install library
-      run: poetry install --no-interaction
+        rustup toolchain install stable --profile minimal
+        rustup default stable
+        rustup component add llvm-tools-preview
     - name: Test with tox
-      run: tox
-
-  publish:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: [3.9]
-    needs: test
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
-    steps:
-    - uses: actions/checkout@v1
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-        installer-parallel: true
-    - name: Load cached poetry venv
-      id: cached-poetry-dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          .venv
-          .tox
-          ~/.cache/pip
-        key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}
-    - name: Check pyproject.toml validity
-      run: poetry check --no-interaction
-    - name: Check if tag version matches project version
       run: |
-        TAG=$(git describe HEAD --tags --abbrev=0)
-        PROJECT_VERSION=$(poetry version --short)
-        echo $TAG
-        echo $PROJECT_VERSION
-        if [[ "$TAG" != "v$PROJECT_VERSION" ]]; then exit 1; fi
-    - name: Build
-      run: poetry build
-    - name: Publish
-      uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        user: __token__
-        password: ${{ secrets.PYPI_API_TOKEN }}
+        python -m pip install --disable-pip-version-check 'tox>=4.24,<5'
+        python -m tox -e py
