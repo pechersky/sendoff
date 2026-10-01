@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+mod ctable;
+
 #[cfg(feature = "coverage")]
 #[pyfunction]
 fn flush_coverage() -> PyResult<()> {
@@ -16,6 +18,7 @@ fn flush_coverage() -> PyResult<()> {
 }
 
 pub fn register(_module: &Bound<'_, PyModule>) -> PyResult<()> {
+    ctable::register(_module)?;
     #[cfg(feature = "coverage")]
     _module.add_function(wrap_pyfunction!(flush_coverage, _module)?)?;
     Ok(())

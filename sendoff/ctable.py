@@ -7,6 +7,8 @@ from collections import defaultdict, deque
 from enum import Enum
 from typing import Iterable, Tuple
 
+from sendoff import native as _native
+
 
 class CTableFormat(Enum):
     """The format a CTAB comes in, either V2000 or V3000."""
@@ -118,9 +120,12 @@ class CTable:
                 the number of bonds indicated by the counts line.
                     Not the actual number of bonds lines further down.)
         """
-        num_atoms = int(line[:3])
-        num_bonds = int(line[3:6])
-        return num_atoms, num_bonds
+        if type(line) is str and line.isascii():
+            try:
+                return _native._parse_v2000_counts(line)
+            except ValueError:
+                pass
+        return int(line[:3]), int(line[3:6])
 
     @staticmethod
     def parse_v3000_counts(line: str) -> Tuple[int, int]:
