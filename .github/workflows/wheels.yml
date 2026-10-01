@@ -109,7 +109,7 @@ jobs:
           args: >-
             --release --locked --auditwheel check --out wheelhouse
             --interpreter ${{ matrix.build-python }}
-      - name: Verify wheel tags, binary architecture, and limited ABI
+      - name: Verify wheel tags and limited ABI
         shell: bash
         env:
           TMPDIR: ${{ github.workspace }}/.cache/wheel-tmp

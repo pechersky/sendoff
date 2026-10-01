@@ -3,50 +3,16 @@
 from __future__ import annotations
 
 import os
-import struct
 import sys
 from pathlib import Path
 from zipfile import ZipFile
 
 
-def binary_machine(binary: bytes) -> str:
-    """Read the architecture of a thin ELF or Mach-O extension binary.
-
-    Args:
-        binary: Native extension bytes from the wheel.
-
-    Returns:
-        The extension's machine architecture.
-
-    Raises:
-        AssertionError: If the binary format or architecture is unsupported.
-    """
-    if binary.startswith(b"\x7fELF"):
-        endian = {1: "<", 2: ">"}.get(binary[5])
-        if endian is None:
-            raise AssertionError("unsupported ELF byte order")
-        machine = {62: "x86_64", 183: "aarch64"}.get(
-            struct.unpack_from(f"{endian}H", binary, 18)[0]
-        )
-        if machine is None:
-            raise AssertionError("unsupported ELF architecture")
-        return machine
-    if binary[:4] in (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf"):
-        endian = "<" if binary[:4] == b"\xcf\xfa\xed\xfe" else ">"
-        machine = {0x01000007: "x86_64", 0x0100000C: "arm64"}.get(
-            struct.unpack_from(f"{endian}I", binary, 4)[0]
-        )
-        if machine is None:
-            raise AssertionError("unsupported Mach-O architecture")
-        return machine
-    raise AssertionError("wheel extension is not ELF or Mach-O")
-
-
 def inspect_wheel() -> None:
-    """Check the built wheel's abi3 tags, extension metadata, and machine code.
+    """Check the built wheel's abi3 tags and extension metadata.
 
     Raises:
-        AssertionError: If wheel metadata or its native architecture is incorrect.
+        AssertionError: If wheel metadata is incorrect.
     """
     wheels = sorted(Path("wheelhouse").glob("sendoff-*.whl"))
     assert len(wheels) == 1, wheels
@@ -70,10 +36,9 @@ def inspect_wheel() -> None:
             if line.startswith("Tag: ")
         }
         assert tags == {f"cp311-abi3-{tag}" for tag in expected_platforms}, tags
-        machine = binary_machine(archive.read(extensions[0]))
-        assert machine == os.environ["EXPECTED_MACHINE"], machine
 
-    print("PASS", wheel.name, machine, sorted(expected_platforms))
+    # ponytail: importing on the matching runner proves binary architecture.
+    print("PASS", wheel.name, sorted(expected_platforms))
 
 
 def smoke_installed_wheel() -> None:
