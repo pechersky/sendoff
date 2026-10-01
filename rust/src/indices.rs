@@ -1,17 +1,10 @@
+use crate::{exact_text, whitespace};
 use pyo3::prelude::*;
 use pyo3::{
     exceptions::{PyIndexError, PyNotImplementedError},
     types::{PyDict, PyList, PySlice, PyString},
 };
 use std::collections::{HashMap, HashSet};
-
-fn exact_text<'a>(value: &'a Bound<'_, PyAny>) -> Option<&'a str> {
-    if value.is_exact_instance_of::<PyString>() {
-        value.cast::<PyString>().ok()?.to_str().ok()
-    } else {
-        None
-    }
-}
 
 enum Tokens<'py> {
     Text(Vec<String>),
@@ -20,9 +13,9 @@ enum Tokens<'py> {
 
 impl<'py> Tokens<'py> {
     fn split(line: &Bound<'py, PyAny>) -> PyResult<Self> {
-        if let Some(text) = exact_text(line) {
+        if let Some(text) = exact_text(line)? {
             Ok(Self::Text(
-                text.split(|c: char| c.is_whitespace() || matches!(c, '\u{1c}'..='\u{1f}'))
+                text.split(whitespace)
                     .filter(|token| !token.is_empty())
                     .map(str::to_owned)
                     .collect(),
@@ -150,7 +143,7 @@ fn valid_bond_indices(
 }
 
 fn startswith(line: &Bound<'_, PyAny>, prefix: &str) -> PyResult<bool> {
-    match exact_text(line) {
+    match exact_text(line)? {
         Some(text) => Ok(text.starts_with(prefix)),
         None => line.call_method1("startswith", (prefix,))?.is_truthy(),
     }
@@ -183,7 +176,7 @@ fn renumber_ctable(
             Tokens::Protocol(_) => tokens.get(py, 2)?.len()?,
         };
         let prefix = format!("M  V30 {new_index}");
-        let replacement = if let Some(text) = exact_text(line) {
+        let replacement = if let Some(text) = exact_text(line)? {
             let offset = text
                 .char_indices()
                 .nth(skip)
@@ -220,7 +213,7 @@ fn renumber_ctable(
             .get(&to)
             .and_then(|values| values.first())
             .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
-        let trailing = if let Some(text) = exact_text(line) {
+        let trailing = if let Some(text) = exact_text(line)? {
             text.ends_with('\n')
         } else {
             line.get_item(-1)?.eq(PyString::new(py, "\n"))?
@@ -246,7 +239,7 @@ fn renumber_ctable(
     // The unused newline check is still observable on protocol operands.
     {
         let counts = table.getattr("counts")?;
-        if let Some(text) = exact_text(&counts) {
+        if let Some(text) = exact_text(&counts)? {
             if text.is_empty() {
                 return Err(PyIndexError::new_err("string index out of range"));
             }
