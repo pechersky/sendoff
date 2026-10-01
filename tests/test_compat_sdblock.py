@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import gc
 import io
 import os
+import weakref
 from collections import deque
 from pathlib import Path
 from types import GeneratorType
-from typing import Any, Callable, Iterable, Iterator, cast
+from typing import Any, Callable, Iterable, Iterator, SupportsIndex, cast
 
 import pytest
 
@@ -333,3 +335,119 @@ def test_external_iterables_are_accepted_without_sequence_access() -> None:
     input_lines: Iterable[str] = Lines()
     block = next(SDBlock.from_lines(input_lines))
     assert (block.num_atoms(), block.num_bonds()) == (2, 1)
+
+
+def test_title_unicode_whitespace_and_unchanged_identity() -> None:
+    """Keep Python whitespace, unchanged string objects and lone surrogates."""
+    assert SDBlock.from_block_lines(["\u001c\u00a0title\u2003\u001f"]).title == "title"
+    title = "".join(["plain", " title"])
+    assert SDBlock.from_block_lines([title]).title is title
+    assert SDBlock.from_block_lines(["\ud800 title "]).title == "\ud800 title"
+
+
+def test_mdl_marker_callback_runs_after_yield() -> None:
+    """Do not inspect the terminator until the caller resumes the generator."""
+    calls: list[str] = []
+
+    class Marker(str):
+        def startswith(
+            self,
+            prefix: str | tuple[str, ...],
+            start: SupportsIndex | None = 0,
+            end: SupportsIndex | None = None,
+        ) -> bool:
+            calls.append(str(self))
+            return super().startswith(prefix, start, end)
+
+    lines = iter(SDBlock.parse_mdl([Marker("M  END")]))
+    assert next(lines) == "M  END"
+    assert calls == []
+    assert list(lines) == []
+    assert calls == ["M  END"]
+
+
+def test_marker_stopiteration_retains_generator_error_cause() -> None:
+    """Keep Python's generator error and original cause for marker failures."""
+
+    class Marker(str):
+        def startswith(
+            self,
+            prefix: str | tuple[str, ...],
+            start: SupportsIndex | None = 0,
+            end: SupportsIndex | None = None,
+        ) -> bool:
+            raise StopIteration("marker failed")
+
+    with pytest.raises(
+        RuntimeError, match="^generator raised StopIteration$"
+    ) as caught:
+        next(iter(SDBlock.parse_metadata([Marker("value")])))
+    cause = caught.value.__cause__
+    assert isinstance(cause, StopIteration)
+    assert cause.args == ("marker failed",)
+    assert cause is caught.value.__context__
+
+
+@pytest.mark.parametrize(
+    ("method", "values"),
+    [
+        ("parse_mdl", ["raw"]),
+        ("parse_metadata", ["raw"]),
+        ("from_lines", ["title", "$$$$"]),
+    ],
+)
+def test_generator_source_cycles_are_collectable(
+    method: str, values: list[str]
+) -> None:
+    """Collect retained sources when a public generator is abandoned.
+
+    Args:
+        method: public SDBlock generator method
+        values: input lines supplied to the generator
+    """
+
+    class Source:
+        def __init__(self) -> None:
+            self.values = iter(values)
+            self.generator: object | None = None
+
+        def __iter__(self) -> Source:
+            return self
+
+        def __next__(self) -> str:
+            return next(self.values)
+
+    source = Source()
+    generator = iter(getattr(SDBlock, method)(source))
+    source.generator = generator
+    source_ref = weakref.ref(source)
+    next(generator)
+    del source, generator
+    gc.collect()
+    assert source_ref() is None
+
+
+def test_factory_keeps_input_block_alive_through_yield() -> None:
+    """Retain the input block even when a subclass constructs an unrelated block."""
+    references: list[weakref.ReferenceType[str]] = []
+
+    class Line(str):
+        pass
+
+    def source() -> Iterator[str]:
+        for value in ("title", "$$$$"):
+            line = Line(value)
+            references.append(weakref.ref(line))
+            yield line
+
+    class Factory(SDBlock):
+        @classmethod
+        def from_block_lines(cls, lines: Iterable[str]) -> SDBlock:
+            return SDBlock("unrelated", deque(), deque())
+
+    blocks = Factory.from_lines(source())
+    assert next(blocks).title == "unrelated"
+    assert references[0]() is not None
+    assert list(blocks) == []
+    gc.collect()
+    assert references[0]() is None
