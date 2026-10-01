@@ -1,0 +1,170 @@
+name: Build native wheels
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - pyproject.toml
+      - rust/**
+      - sendoff/**
+      - tests/ci_wheel_smoke.py
+      - .github/workflows/wheels.yml
+  pull_request:
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - pyproject.toml
+      - rust/**
+      - sendoff/**
+      - tests/ci_wheel_smoke.py
+      - .github/workflows/wheels.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  wheel:
+    name: ${{ matrix.artifact }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            artifact: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+            machine: x86_64
+            python-arch: x64
+            container: quay.io/pypa/manylinux2014_x86_64:latest
+            build-python: /opt/python/cp311-cp311/bin/python
+            platform-tags: manylinux_2_17_x86_64.manylinux2014_x86_64
+            deployment: ""
+          - runner: ubuntu-24.04-arm
+            artifact: linux-aarch64
+            target: aarch64-unknown-linux-gnu
+            machine: aarch64
+            python-arch: arm64
+            container: quay.io/pypa/manylinux2014_aarch64:latest
+            build-python: /opt/python/cp311-cp311/bin/python
+            platform-tags: manylinux_2_17_aarch64.manylinux2014_aarch64
+            deployment: ""
+          - runner: macos-15-intel
+            artifact: macos-x86_64
+            target: x86_64-apple-darwin
+            machine: x86_64
+            python-arch: x64
+            container: "off"
+            build-python: python3.11
+            platform-tags: macosx_10_15_x86_64
+            deployment: "10.15"
+          - runner: macos-15
+            artifact: macos-arm64
+            target: aarch64-apple-darwin
+            machine: arm64
+            python-arch: arm64
+            container: "off"
+            build-python: python3.11
+            platform-tags: macosx_11_0_arm64
+            deployment: "11.0"
+    env:
+      EXPECTED_MACHINE: ${{ matrix.machine }}
+      EXPECTED_PLATFORM_TAGS: ${{ matrix.platform-tags }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up CPython 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          architecture: ${{ matrix.python-arch }}
+          check-latest: true
+          allow-prereleases: false
+          freethreaded: false
+      - name: Verify native runner and prepare build directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -c 'import os, platform; assert platform.machine() == os.environ["EXPECTED_MACHINE"]'
+          mkdir -p "$GITHUB_WORKSPACE/.cache/wheel-tmp" wheelhouse
+      - name: Build locked release wheel on native architecture
+        uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
+        env:
+          TMPDIR: ${{ github.workspace }}/.cache/wheel-tmp
+        with:
+          maturin-version: v1.15.0
+          rust-toolchain: "1.98.0"
+          target: ${{ matrix.target }}
+          manylinux: "2014"
+          container: ${{ matrix.container }}
+          working-directory: .
+          docker-options: --env TMPDIR=${{ github.workspace }}/.cache/wheel-tmp --env EXPECTED_MACHINE=${{ matrix.machine }}
+          before-script-linux: |
+            test "$(uname -m)" = "$EXPECTED_MACHINE"
+          args: >-
+            --release --locked --auditwheel check --out wheelhouse
+            --interpreter ${{ matrix.build-python }}
+      - name: Verify wheel tags, binary architecture, and limited ABI
+        shell: bash
+        env:
+          TMPDIR: ${{ github.workspace }}/.cache/wheel-tmp
+        run: |
+          set -euo pipefail
+          python tests/ci_wheel_smoke.py inspect
+          python -m venv .cache/abi3audit
+          .cache/abi3audit/bin/python -m pip install --disable-pip-version-check abi3audit==0.0.26 abi3info==2026.9.25
+          .cache/abi3audit/bin/python -m abi3audit --strict --verbose wheelhouse/sendoff-*.whl
+      - name: Install and smoke-test on CPython 3.11
+        shell: bash
+        env:
+          TMPDIR: ${{ github.workspace }}/.cache/wheel-tmp
+        run: |
+          set -euo pipefail
+          python -m venv .cache/python311
+          .cache/python311/bin/python -m pip install --no-index --no-deps wheelhouse/sendoff-*.whl
+          EXPECTED_PYTHON_MINOR=11 .cache/python311/bin/python -I tests/ci_wheel_smoke.py smoke
+      - name: Set up latest stable GIL-enabled CPython
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.x"
+          architecture: ${{ matrix.python-arch }}
+          check-latest: true
+          allow-prereleases: false
+          freethreaded: false
+      - name: Install and smoke-test the same wheel on latest CPython
+        shell: bash
+        env:
+          TMPDIR: ${{ github.workspace }}/.cache/wheel-tmp
+        run: |
+          set -euo pipefail
+          python -m venv .cache/python-latest
+          .cache/python-latest/bin/python -m pip install --no-index --no-deps wheelhouse/sendoff-*.whl
+          EXPECTED_PYTHON_MINOR=latest .cache/python-latest/bin/python -I tests/ci_wheel_smoke.py smoke
+      - name: Build source distribution once
+        if: matrix.artifact == 'linux-x86_64'
+        shell: bash
+        env:
+          TMPDIR: ${{ github.workspace }}/.cache/wheel-tmp
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check maturin==1.15.0
+          python -m maturin sdist --out wheelhouse
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sendoff-wheel-${{ matrix.artifact }}
+          path: wheelhouse/sendoff-*.whl
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload source distribution
+        if: matrix.artifact == 'linux-x86_64'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sendoff-sdist
+          path: wheelhouse/sendoff-*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
