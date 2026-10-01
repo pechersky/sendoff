@@ -9,9 +9,9 @@ from typing import Any, Callable, Iterable, Iterator, SupportsIndex, cast
 
 import pytest
 
+import sendoff.ctable as ctable_module
 from sendoff.ctable import CTable
 from tests.compat_literals import V2000, V3000
-import sendoff.ctable as ctable_module
 
 
 def outcome(table: object, operation: str, strict: object = False) -> object:

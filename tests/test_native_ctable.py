@@ -366,7 +366,7 @@ def test_count_hook_unpack_diagnostics(
             return result
 
     table = Receiver.__new__(Receiver)
-    with pytest.raises(error_type) as caught:
+    with pytest.raises(error_type):
         CTable.__init__(table, V2000.splitlines())
     assert not hasattr(table, "num_atoms")
 

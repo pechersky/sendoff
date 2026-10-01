@@ -1,5 +1,5 @@
 use super::exact_text;
-use crate::core::{ctable, whitespace};
+use crate::core::ctable;
 use pyo3::prelude::*;
 use pyo3::{exceptions::PyIndexError, types::PySlice};
 
@@ -65,17 +65,14 @@ fn parse_v3000_counts<'py>(
                 bonds.into_pyobject(py)?.into_any(),
             ));
         }
-        let mut tokens = text.split(whitespace).filter(|token| !token.is_empty());
         let atoms = integer(
             py,
-            tokens
-                .nth(3)
+            ctable::token(text, 3)
                 .ok_or_else(|| PyIndexError::new_err("list index out of range"))?,
         )?;
         let bonds = integer(
             py,
-            tokens
-                .next()
+            ctable::token(text, 4)
                 .ok_or_else(|| PyIndexError::new_err("list index out of range"))?,
         )?;
         return Ok((atoms, bonds));
