@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools as itt
 import sys
 from collections import deque
 from enum import Enum
@@ -58,7 +59,19 @@ class CTable:
                 be supplied as the first in lines.
 
         """
-        native.ctable_init(self, lines, CTableFormat.V3000)
+        self.lines = deque(lines)
+        iterlines = iter(self.lines)
+        self.title = next(iterlines).strip()
+        self.source = next(iterlines)
+        self.comment = next(iterlines)
+        self.counts = next(iterlines)
+        self.format = self.parse_format(self.counts)
+        if self.format is CTableFormat.V3000:
+            next(iterlines)
+            self.counts = next(iterlines).strip()
+            self.num_atoms, self.num_bonds = self.parse_v3000_counts(self.counts)
+        else:
+            self.num_atoms, self.num_bonds = self.parse_v2000_counts(self.counts)
 
     @staticmethod
     def parse_format(line: str) -> CTableFormat:
@@ -133,7 +146,10 @@ class CTable:
         Returns:
             A single-use iterable of the atom lines
         """
-        return native.atomlines(self)
+        return itt.takewhile(
+            lambda line: not str.startswith(line, "M  V30 END ATOM"),
+            itt.islice(self.lines, 7, None),
+        )
 
     def bondlines(self) -> Iterable[str]:
         """Get bond lines in the bond table.
@@ -145,7 +161,17 @@ class CTable:
         Returns:
             A single-use iterable of the bond lines
         """
-        return native.bondlines(self)
+        return itt.takewhile(
+            lambda line: not str.startswith(line, "M  V30 END BOND"),
+            itt.islice(
+                itt.dropwhile(
+                    lambda line: not str.startswith(line, "M  V30 BEGIN BOND"),
+                    self.lines,
+                ),
+                1,
+                None,
+            ),
+        )
 
     def valid_atom_indices(self, strict: bool = False) -> bool:
         """Validate that the atom lines match the counts line.

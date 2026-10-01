@@ -17,19 +17,28 @@ from sendoff.ctable import CTable, CTableFormat, IndicesMismatchError
 from tests.compat_literals import V2000, V3000
 
 native = import_module("sendoff.native")
-init: Callable[..., None] = getattr(native, "ctable_init")
+
+
+def init(table: CTable, lines: Iterable[str], v3000: object = None) -> None:
+    """Invoke the public constructor while retaining the retired helper shape.
+
+    Args:
+        table: Object receiving the parsed CTable fields.
+        lines: Input CTAB lines.
+        v3000: Retired native helper compatibility argument.
+    """
+    CTable.__init__(table, lines)
+
+
 parse_format: Callable[..., CTableFormat] = getattr(native, "parse_format")
 v2000_counts: Callable[..., Tuple[int, int]] = getattr(native, "parse_v2000_counts")
 v3000_counts: Callable[..., Tuple[int, int]] = getattr(native, "parse_v3000_counts")
-atomlines: Callable[..., Iterator[str]] = getattr(native, "atomlines")
-bondlines: Callable[..., Iterator[str]] = getattr(native, "bondlines")
 
 
 class NativeTable(CTable):
     """Provide test-only thin adapters without editing the public facade."""
 
-    def __init__(self, lines: Iterable[str]) -> None:
-        init(self, lines, CTableFormat.V3000)
+    __init__ = CTable.__init__
 
     @staticmethod
     def parse_format(line: str) -> CTableFormat:
@@ -66,22 +75,6 @@ class NativeTable(CTable):
             Atom and bond counts.
         """
         return v3000_counts(line)
-
-    def atomlines(self) -> Iterable[str]:
-        """Return the native atom-line iterator.
-
-        Returns:
-            Atom lines.
-        """
-        return atomlines(self)
-
-    def bondlines(self) -> Iterable[str]:
-        """Return the native bond-line iterator.
-
-        Returns:
-            Bond lines.
-        """
-        return bondlines(self)
 
 
 def test_plain_counts_and_indices_do_not_call_python_int(
@@ -181,12 +174,9 @@ def test_unchanged_strip_preserves_raw_string_identity() -> None:
 def test_exports_and_keyword_arguments() -> None:
     """Expose required positional-or-keyword operands, not coercing signatures."""
     expected = {
-        "ctable_init": ("table", "lines", "v3000"),
         "parse_format": ("line", "formats"),
         "parse_v2000_counts": ("line",),
         "parse_v3000_counts": ("line",),
-        "atomlines": ("table",),
-        "bondlines": ("table",),
     }
     for name, operands in expected.items():
         function = getattr(native, name)
@@ -198,18 +188,12 @@ def test_exports_and_keyword_arguments() -> None:
             and parameter.default is inspect.Parameter.empty
             for parameter in parameters.values()
         )
-    table = CTable.__new__(CTable)
-    assert (
-        getattr(native, "ctable_init")(
-            table=table, lines=V3000.splitlines(), v3000=CTableFormat.V3000
-        )
-        is None
-    )
+    table = CTable(V3000.splitlines())
     assert parse_format(line="V2000", formats=CTableFormat) is CTableFormat.V2000
     assert v2000_counts(line="002001") == (2, 1)
     assert v3000_counts(line="M V30 COUNTS 2 1") == (2, 1)
-    assert type(atomlines(table=table)) is itertools.takewhile
-    assert type(bondlines(table=table)) is itertools.takewhile
+    assert type(table.atomlines()) is itertools.takewhile
+    assert type(table.bondlines()) is itertools.takewhile
 
 
 @pytest.mark.parametrize("text", [V2000, V3000])
@@ -751,7 +735,7 @@ def test_raw_prefixes_spill_marker_consumption_and_protocol_timing(method: str) 
     Args:
         method: The raw iterator factory.
     """
-    function = atomlines if method == "atomlines" else bondlines
+    function = getattr(CTable, method)
 
     class Text(str):
         def startswith(self, prefix: Any, *args: Any) -> bool:
@@ -778,9 +762,9 @@ def test_raw_prefixes_spill_marker_consumption_and_protocol_timing(method: str) 
     assert next(source) == (lines[10] if method == "atomlines" else lines[13])
     assert list(raw) == []
     table.lines = deque(line for line in lines if "END ATOM" not in line)
-    assert list(atomlines(table))[-1] == "M  END"
+    assert list(CTable.atomlines(table))[-1] == "M  END"
     table.lines = deque(line for line in lines if "BEGIN BOND" not in line)
-    assert list(bondlines(table)) == []
+    assert list(CTable.bondlines(table)) == []
     table.lines = deque(lines)
     table.lines[9] = " M  V30 END ATOM"
     table.lines[12] = " M  V30 END BOND"
