@@ -1,6 +1,6 @@
 [package]
 name = "sendoff"
-version = "1.0.0"
+version = "0.1.6"
 edition = "2024"
 description = "The minimal SDF metadata parser"
 license = "MIT"

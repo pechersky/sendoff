@@ -81,7 +81,7 @@ exclude = '''
 '''
 
 [tool.tbump.version]
-current = "1.0.0"
+current = "0.1.6"
 
 regex = '''
   (?P<major>\d+)

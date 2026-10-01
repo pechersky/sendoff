@@ -1,5 +1,5 @@
-1.0.0 (unreleased)
-==================
+Native backend (unreleased)
+===========================
 
 The parser, SDData processing, count parsing, validation and renumbering now
 use a Rust/PyO3 backend. Ordinary text and index processing use Rust's standard
