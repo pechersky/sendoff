@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 
 mod ctable;
+mod sddata;
 
 #[cfg(feature = "coverage")]
 #[pyfunction]
@@ -19,6 +20,7 @@ fn flush_coverage() -> PyResult<()> {
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     ctable::register(module)?;
+    sddata::register(module)?;
     #[cfg(feature = "coverage")]
     module.add_function(wrap_pyfunction!(flush_coverage, module)?)?;
     Ok(())

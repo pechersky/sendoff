@@ -9,6 +9,8 @@ from io import TextIOWrapper
 from itertools import chain, groupby
 from typing import Iterable, Iterator, Tuple, Union
 
+import sendoff.native as native
+
 from sendoff.ctable import CTable
 
 Pathy = Union[str, bytes, "os.PathLike[str]"]
@@ -131,9 +133,7 @@ class SDBlock:
             value: str for value, with no terminating newline
 
         """
-        self.metadata.append(f"> <{record_name}>\n")
-        self.metadata.append(value + "\n")
-        self.metadata.append("\n")
+        self.metadata.extend(native.append_record(record_name, value))
 
     def ctable(self) -> CTable:
         """Parse out the underlying CTable object from the SDBlock.
