@@ -1,4 +1,5 @@
-use crate::{exact_text, whitespace};
+use super::exact_text;
+use crate::core::{indices::Index, whitespace};
 use pyo3::prelude::*;
 use pyo3::{
     exceptions::{PyIndexError, PyNotImplementedError},
@@ -60,12 +61,6 @@ impl<'py> Tokens<'py> {
                 .extract()?,
         ))
     }
-}
-
-#[derive(Eq, Hash, PartialEq)]
-enum Index {
-    Small(i128),
-    Large(Vec<u8>),
 }
 
 fn domain_error(errors: &Bound<'_, PyAny>, name: &str, message: &str) -> PyResult<PyErr> {

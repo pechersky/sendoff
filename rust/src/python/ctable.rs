@@ -1,4 +1,5 @@
-use crate::{exact_text, unicode_text, whitespace};
+use super::{exact_text, unicode_text};
+use crate::core::{ctable, whitespace};
 use pyo3::prelude::*;
 use pyo3::{
     exceptions::{PyIndexError, PyTypeError, PyValueError},
@@ -21,9 +22,7 @@ fn strip<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
 }
 
 fn integer<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyAny>> {
-    if text.len() <= 40
-        && let Ok(value) = text.trim().parse::<i128>()
-    {
+    if let Some(value) = ctable::integer(text) {
         return Ok(value.into_pyobject(py)?.into_any());
     }
     // Unicode digits, underscores, overflow and diagnostics retain Python's int rules.
@@ -147,10 +146,8 @@ fn parse_format<'py>(
     formats: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     if let Some(text) = exact_text(line)? {
-        let format = text
-            .split(whitespace)
-            .rfind(|token| !token.is_empty())
-            .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
+        let format =
+            ctable::format(text).ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
         return formats.get_item(format);
     }
     formats.get_item(
@@ -166,18 +163,14 @@ fn parse_v2000_counts<'py>(
     line: &Bound<'py, PyAny>,
 ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
     if let Some(text) = exact_text(line)? {
-        let middle = text
-            .char_indices()
-            .nth(3)
-            .map_or(text.len(), |(offset, _)| offset);
-        let end = text
-            .char_indices()
-            .nth(6)
-            .map_or(text.len(), |(offset, _)| offset);
-        return Ok((
-            integer(py, &text[..middle])?,
-            integer(py, &text[middle..end])?,
-        ));
+        if let Some((atoms, bonds)) = ctable::parse_v2000_counts(text) {
+            return Ok((
+                atoms.into_pyobject(py)?.into_any(),
+                bonds.into_pyobject(py)?.into_any(),
+            ));
+        }
+        let (atoms, bonds) = ctable::v2000_fields(text);
+        return Ok((integer(py, atoms)?, integer(py, bonds)?));
     }
     let builtins = py.import("builtins")?;
     let atoms = builtins
@@ -195,6 +188,12 @@ fn parse_v3000_counts<'py>(
     line: &Bound<'py, PyAny>,
 ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
     if let Some(text) = exact_text(line)? {
+        if let Some((atoms, bonds)) = ctable::parse_v3000_counts(text) {
+            return Ok((
+                atoms.into_pyobject(py)?.into_any(),
+                bonds.into_pyobject(py)?.into_any(),
+            ));
+        }
         let mut tokens = text.split(whitespace).filter(|token| !token.is_empty());
         let atoms = integer(
             py,

@@ -5,10 +5,7 @@ use pyo3::{
     types::{PyIterator, PyString},
 };
 
-enum FramingMode {
-    Mdl,
-    Metadata,
-}
+use crate::core::{framing::FramingMode, whitespace};
 
 #[pyclass(name = "FramingIter", module = "sendoff.native")]
 struct FramingIter {
@@ -83,7 +80,7 @@ pub(crate) fn generator_error(py: Python<'_>, error: PyErr) -> PyErr {
 
 fn has_prefix(py: Python<'_>, line: &Py<PyAny>, prefix: &str) -> PyResult<bool> {
     let line = line.bind(py);
-    if let Some(text) = crate::exact_text(line)? {
+    if let Some(text) = super::exact_text(line)? {
         return Ok(text.starts_with(prefix));
     }
     let matched = line
@@ -128,11 +125,12 @@ fn next_item(py: Python<'_>, iterator: &Py<PyAny>) -> PyResult<Option<Py<PyAny>>
 fn framing_step(slf: &Bound<'_, FramingIter>) -> PyResult<Option<Py<PyAny>>> {
     let py = slf.py();
     let mode_is_mdl = matches!(slf.borrow().mode, FramingMode::Mdl);
+    let prefix = slf.borrow().mode.prefix();
 
     if mode_is_mdl {
         let current = slf.borrow().current.as_ref().map(|line| line.clone_ref(py));
         if let Some(line) = current
-            && has_prefix(py, &line, "M  END")?
+            && has_prefix(py, &line, prefix)?
         {
             slf.borrow_mut().finish();
             return Ok(None);
@@ -146,7 +144,7 @@ fn framing_step(slf: &Bound<'_, FramingIter>) -> PyResult<Option<Py<PyAny>>> {
     };
 
     slf.borrow_mut().current = Some(line.clone_ref(py));
-    if !mode_is_mdl && has_prefix(py, &line, "$$$$")? {
+    if !mode_is_mdl && has_prefix(py, &line, prefix)? {
         slf.borrow_mut().finish();
         return Ok(None);
     }
@@ -341,8 +339,8 @@ fn from_block_lines(
         .getattr("next")?
         .call1((iterator.as_any(),))?
         .into_any();
-    let title = if let Some(text) = crate::exact_text(&title)? {
-        let stripped = text.trim_matches(crate::whitespace);
+    let title = if let Some(text) = super::exact_text(&title)? {
+        let stripped = text.trim_matches(whitespace);
         if stripped == text {
             title.clone()
         } else {

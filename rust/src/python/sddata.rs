@@ -6,7 +6,8 @@ use pyo3::{
     types::{PyDict, PyIterator, PyList, PyString, PyTuple},
 };
 
-use crate::framing::generator_error;
+use super::framing::generator_error;
+use crate::core::{sddata, whitespace};
 
 enum RecordInput {
     Item(Py<PyAny>, bool),
@@ -127,8 +128,8 @@ fn next_record_input(slf: &Bound<'_, RecordsIter>) -> PyResult<RecordInput> {
     };
     slf.borrow_mut().raw_line = Some(raw_line.clone_ref(py));
     let raw_line_bound = raw_line.bind(py);
-    let line = if let Some(text) = crate::exact_text(raw_line_bound)? {
-        let stripped = text.trim_matches(crate::whitespace);
+    let line = if let Some(text) = super::exact_text(raw_line_bound)? {
+        let stripped = text.trim_matches(whitespace);
         if stripped == text {
             raw_line.clone_ref(py)
         } else {
@@ -141,7 +142,7 @@ fn next_record_input(slf: &Bound<'_, RecordsIter>) -> PyResult<RecordInput> {
             .unbind()
     };
     slf.borrow_mut().line = Some(line.clone_ref(py));
-    let key = if let Some(text) = crate::exact_text(line.bind(py))? {
+    let key = if let Some(text) = super::exact_text(line.bind(py))? {
         Ok(!text.is_empty())
     } else {
         line.bind(py).is_truthy()
@@ -155,18 +156,8 @@ fn next_record_input(slf: &Bound<'_, RecordsIter>) -> PyResult<RecordInput> {
 
 fn record_name(py: Python<'_>, line: &Py<PyAny>) -> PyResult<Py<PyAny>> {
     let line = line.bind(py);
-    if let Some(text) = crate::exact_text(line)? {
-        let remainder = text
-            .split_once("> ")
-            .map(|(_, remainder)| remainder)
-            .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
-        let remainder = remainder.trim_matches(crate::whitespace);
-        let first = remainder
-            .rsplit_once('>')
-            .map_or(remainder, |(first, _)| first);
-        let name = first
-            .split_once('<')
-            .map(|(_, name)| name)
+    if let Some(text) = super::exact_text(line)? {
+        let name = sddata::record_name(text)
             .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
         return Ok(PyString::new(py, name).into_any().unbind());
     }
@@ -196,7 +187,7 @@ fn record_name(py: Python<'_>, line: &Py<PyAny>) -> PyResult<Py<PyAny>> {
 
 fn is_header(py: Python<'_>, line: &Py<PyAny>) -> PyResult<bool> {
     let line = line.bind(py);
-    if let Some(text) = crate::exact_text(line)? {
+    if let Some(text) = super::exact_text(line)? {
         return Ok(text.starts_with("> "));
     }
     let result = line
@@ -223,12 +214,12 @@ fn drain_group(slf: &Bound<'_, RecordsIter>, key: bool, key_stop_ends: bool) -> 
 }
 
 fn join_values(py: Python<'_>, values: &[Py<PyAny>]) -> PyResult<Py<PyAny>> {
-    if values.len() == 1 && crate::exact_text(values[0].bind(py))?.is_some() {
+    if values.len() == 1 && super::exact_text(values[0].bind(py))?.is_some() {
         return Ok(values[0].clone_ref(py));
     }
     let mut joined = String::new();
     for (index, value) in values.iter().enumerate() {
-        let Some(text) = crate::exact_text(value.bind(py))? else {
+        let Some(text) = super::exact_text(value.bind(py))? else {
             let python_values = PyList::empty(py);
             for value in values {
                 python_values.append(value.bind(py))?;
@@ -335,7 +326,7 @@ fn write_lines(
         let line = item?;
         outh.call_method1("write", (&line,))?;
         if with_newlines.is_truthy()? {
-            let ends_with_newline = match crate::exact_text(&line)? {
+            let ends_with_newline = match super::exact_text(&line)? {
                 Some(text) => text.ends_with('\n'),
                 None => line.call_method1("endswith", ("\n",))?.is_truthy()?,
             };
@@ -373,12 +364,8 @@ fn formatted_header<'py>(
     py: Python<'py>,
     record_name: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    if let Some(record_name) = crate::exact_text(record_name)? {
-        let mut header = String::with_capacity(record_name.len() + 6);
-        header.push_str("> <");
-        header.push_str(record_name);
-        header.push_str(">\n");
-        return Ok(PyString::new(py, &header).into_any());
+    if let Some(record_name) = super::exact_text(record_name)? {
+        return Ok(PyString::new(py, &sddata::header(record_name)).into_any());
     }
     let spec = PyString::new(py, "");
     // Both operands are live Python objects under the GIL.
@@ -420,11 +407,8 @@ fn append_record(
 
     let metadata = block.getattr("metadata")?;
     let append = metadata.getattr("append")?;
-    let value = if let Some(value) = crate::exact_text(value)? {
-        let mut line = String::with_capacity(value.len() + 1);
-        line.push_str(value);
-        line.push('\n');
-        PyString::new(py, &line).into_any()
+    let value = if let Some(value) = super::exact_text(value)? {
+        PyString::new(py, &sddata::value_line(value)).into_any()
     } else {
         python_add(py, value, PyString::new(py, "\n").as_any())?
     };
