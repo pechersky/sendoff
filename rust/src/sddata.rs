@@ -21,6 +21,7 @@ struct RecordsIter {
     raw_line: Option<Py<PyAny>>,
     line: Option<Py<PyAny>>,
     pending: Option<(Py<PyAny>, bool)>,
+    exhausted: bool,
     done: bool,
     running: bool,
 }
@@ -32,6 +33,7 @@ impl RecordsIter {
         self.raw_line = None;
         self.line = None;
         self.pending = None;
+        self.exhausted = true;
         self.done = true;
     }
 }
@@ -44,7 +46,9 @@ impl RecordsIter {
 
     fn __next__(slf: &Bound<'_, Self>) -> PyResult<Option<Py<PyAny>>> {
         {
-            let mut state = slf.borrow_mut();
+            let mut state = slf
+                .try_borrow_mut()
+                .map_err(|_| PyValueError::new_err("generator already executing"))?;
             if state.running {
                 return Err(PyValueError::new_err("generator already executing"));
             }
@@ -209,10 +213,7 @@ fn drain_group(slf: &Bound<'_, RecordsIter>, key: bool) -> PyResult<bool> {
                 slf.borrow_mut().pending = Some((line, next_key));
                 return Ok(true);
             }
-            RecordInput::End | RecordInput::KeyStop => {
-                slf.borrow_mut().finish();
-                return Ok(false);
-            }
+            RecordInput::End | RecordInput::KeyStop => return Ok(false),
         }
     }
 }
@@ -242,16 +243,16 @@ fn join_values(py: Python<'_>, values: &[Py<PyAny>]) -> PyResult<Py<PyAny>> {
 
 fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
     let py = slf.py();
+    if slf.borrow().exhausted {
+        return Ok(None);
+    }
     loop {
         let next = slf.borrow_mut().pending.take();
         let (line, key) = match next {
             Some(item) => item,
             None => match next_record_input(slf)? {
                 RecordInput::Item(line, key) => (line, key),
-                RecordInput::End | RecordInput::KeyStop => {
-                    slf.borrow_mut().finish();
-                    return Ok(None);
-                }
+                RecordInput::End | RecordInput::KeyStop => return Ok(None),
             },
         };
 
@@ -272,7 +273,7 @@ fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
                     break;
                 }
                 RecordInput::End | RecordInput::KeyStop => {
-                    slf.borrow_mut().finish();
+                    slf.borrow_mut().exhausted = true;
                     break;
                 }
             }
@@ -295,6 +296,7 @@ fn records_iter(block: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
             raw_line: None,
             line: None,
             pending: None,
+            exhausted: false,
             done: false,
             running: false,
         },

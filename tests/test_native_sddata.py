@@ -111,6 +111,54 @@ def test_native_records_keep_live_deque_errors_and_lazy_parse_failures() -> None
     assert caught.value.__cause__ is caught.value.__context__
 
 
+def test_native_records_retain_block_through_final_yield() -> None:
+    """Keep the source alive until the iterator is resumed to exhaustion."""
+
+    class Block:
+        def __init__(self) -> None:
+            self.metadata = deque(["> <key>", "value"])
+
+    block = Block()
+    block_ref = weakref.ref(block)
+    records = getattr(native, "records_iter")(block)
+    del block
+
+    assert next(records) == ("key", "value")
+    assert block_ref() is not None
+    with pytest.raises(StopIteration):
+        next(records)
+    assert block_ref() is None
+
+
+def test_native_records_cleanup_rejects_reentrant_finalizer_safely() -> None:
+    """Clear references on errors without panicking on finalizer reentry."""
+    records: Any = None
+    reentrant_errors: list[str] = []
+
+    class StopOnStrip:
+        def strip(self) -> str:
+            raise ValueError("strip failed")
+
+    class Block:
+        def __init__(self) -> None:
+            self.metadata = deque([StopOnStrip()])
+
+        def __del__(self) -> None:
+            try:
+                next(records)
+            except ValueError as error:
+                reentrant_errors.append(str(error))
+
+    block = Block()
+    records = getattr(native, "records_iter")(block)
+    del block
+    with pytest.raises(ValueError, match="^strip failed$"):
+        next(records)
+    assert reentrant_errors == ["generator already executing"]
+    with pytest.raises(StopIteration):
+        next(records)
+
+
 def test_native_records_parse_exact_text_with_python_whitespace() -> None:
     """Trim and split normal Unicode metadata with Python-compatible whitespace."""
     block = SDBlock(
