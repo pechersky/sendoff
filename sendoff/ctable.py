@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools as itt
 from collections import defaultdict, deque
 from enum import Enum
-from typing import Iterable, Tuple
+from typing import Iterable, Iterator, Tuple
 
 import sendoff.native as native
 
@@ -146,12 +146,11 @@ class CTable:
         Returns:
             A single-use iterable of the atom lines
         """
-        atomlines = itt.takewhile(
-            lambda x: not str.startswith(x, "M  V30 END ATOM"),
-            # title source comment compat begin counts begin
-            itt.islice(self.lines, 7, None),
-        )
-        return atomlines
+        def iter_lines() -> Iterator[str]:
+            start, stop = native.atom_line_range(list(self.lines))
+            yield from itt.islice(self.lines, start, stop)
+
+        return iter_lines()
 
     def bondlines(self) -> Iterable[str]:
         """Get bond lines in the bond table.

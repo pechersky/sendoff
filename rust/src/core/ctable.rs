@@ -27,3 +27,14 @@ pub fn parse_format(line: &str) -> Option<&str> {
         .filter(|field| !field.is_empty());
     fields.next_back()
 }
+
+pub fn atom_line_range(lines: &[String]) -> (usize, usize) {
+    let start = 7.min(lines.len());
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find_map(|(index, line)| line.starts_with("M  V30 END ATOM").then_some(index))
+        .unwrap_or(lines.len());
+    (start, end)
+}
