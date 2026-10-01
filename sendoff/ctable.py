@@ -267,67 +267,8 @@ class CTable:
         """
         if self.format is not CTableFormat.V3000:
             raise NotImplementedError
-        new_atomlines: deque[str] = deque()
-        new_bondlines: deque[str] = deque()
-        # old_ix: [new_ix, new_ix2, ...]
-        atom_index_mapping: defaultdict[int, list[int]] = defaultdict(list)
-        prefix = "M  V30 "
-        len_prefix = len(prefix)
-        for line_ix, atomline in enumerate(self.atomlines()):
-            sline = atomline.split()
-            atom_ix = int(sline[2])
-            new_ix = line_ix + 1
-            atom_index_mapping[atom_ix].append(new_ix)
-            # can't use str.join because we want to preserve all whitespace properly
-            # but we do assume that `M  V30 ` is correctly done by the spec
-            skip_chars = len_prefix + len(sline[2])
-            nline = f"{prefix}{new_ix}" + atomline[skip_chars:]
-            new_atomlines.append(nline)
-        for line_ix, bondline in enumerate(self.bondlines()):
-            # here, we take less care to retain the whitespace and just
-            # reconstruct the line with single whitespace
-            sline = bondline.split()
-            new_ix = line_ix + 1
-            old_from_ix = int(sline[4])
-            old_to_ix = int(sline[5])
-            if 1 < len(atom_index_mapping[old_from_ix]) or 1 < len(
-                atom_index_mapping[old_to_ix]
-            ):
-                raise IndicesDuplicateError("atom index mapping in bond")
-            new_from_ix = atom_index_mapping[old_from_ix][0]
-            new_to_ix = atom_index_mapping[old_to_ix][0]
-            trailing = "\n" if bondline[-1] == "\n" else ""
-            # not doing anything to the bond order
-            nline = f"{prefix}{new_ix} {sline[3]} {new_from_ix} {new_to_ix}{trailing}"
-            new_bondlines.append(nline)
-        trailing = "\n" if self.counts[-1] == "\n" else ""
-        scounts = self.counts.split()
-        # suffix could be empty, but if not, prepend with space to help with constuction
-        # but for now, assume that count lines are well-formed and aren't missing specs
-        suffix = " " + str.join(" ", scounts[5:])
-        new_counts = f"{prefix}COUNTS {len(new_atomlines)} {len(new_bondlines)}{suffix}"
-        new_lines: deque[str] = deque()
-        appending = True
-        for line in self.lines:
-            if appending:
-                new_lines.append(line)
-            if line.startswith("M  V30 COUNTS"):
-                # unappend, place ours
-                new_lines.pop()
-                new_lines.append(new_counts)
-            if line.startswith("M  V30 BEGIN ATOM"):
-                # stop appending the old atom lines, iterate through them
-                appending = False
-            if line.startswith("M  V30 END ATOM"):
-                appending = True
-                new_lines.extend(new_atomlines)
-                new_lines.append(line)
-            if line.startswith("M  V30 BEGIN BOND"):
-                # stop appending the old bond lines, iterate through them
-                appending = False
-            if line.startswith("M  V30 END BOND"):
-                appending = True
-                new_lines.extend(new_bondlines)
-                new_lines.append(line)
-        self.lines = new_lines
+        new_lines = native.renumber_indices(list(self.lines), self.counts)
+        if new_lines is None:
+            raise IndicesDuplicateError("atom index mapping in bond")
+        self.lines = deque(new_lines)
         return
