@@ -1,11 +1,15 @@
 use super::exact_text;
-use crate::core::{indices::Index, whitespace};
+use crate::core::{
+    ctable,
+    indices::{self, Index},
+    whitespace,
+};
 use pyo3::prelude::*;
 use pyo3::{
     exceptions::{PyIndexError, PyNotImplementedError},
-    types::{PyDict, PyList, PySlice, PyString},
+    types::{PyDict, PyInt, PyList, PySlice, PyString},
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 enum Tokens<'py> {
     Text(Vec<String>),
@@ -39,10 +43,9 @@ impl<'py> Tokens<'py> {
     fn index(&self, py: Python<'py>, position: usize) -> PyResult<Index> {
         if let Self::Text(tokens) = self
             && let Some(token) = tokens.get(position)
-            && token.len() <= 40
-            && let Ok(value) = token.parse::<i128>()
+            && let Some(index) = indices::parse_index(token)
         {
-            return Ok(Index::Small(value));
+            return Ok(index);
         }
         // Python handles decimal Unicode, underscores, digit limits and int protocols.
         let value = py
@@ -67,6 +70,44 @@ fn domain_error(errors: &Bound<'_, PyAny>, name: &str, message: &str) -> PyResul
     Ok(PyErr::from_value(errors.getattr(name)?.call1((message,))?))
 }
 
+fn validation_error(
+    errors: &Bound<'_, PyAny>,
+    failure: indices::ValidationFailure,
+    label: &str,
+    singular: &str,
+) -> PyResult<PyErr> {
+    let (name, message) = match failure {
+        indices::ValidationFailure::OutOfOrder => ("IndicesOutOfOrderError", label.to_owned()),
+        indices::ValidationFailure::Duplicate => ("IndicesDuplicateError", label.to_owned()),
+        indices::ValidationFailure::Fewer => (
+            "IndicesMismatchError",
+            format!("fewer {singular} lines than count line"),
+        ),
+        indices::ValidationFailure::More => (
+            "IndicesMismatchError",
+            format!("more {singular} lines than count line"),
+        ),
+    };
+    domain_error(errors, name, &message)
+}
+
+fn plain_index(line: &Bound<'_, PyAny>, position: usize) -> PyResult<Option<Index>> {
+    if let Some(text) = exact_text(line)?
+        && let Some(token) = ctable::token(text, position)
+        && let Some(index) = indices::parse_index(token)
+    {
+        return Ok(Some(index));
+    }
+    Ok(None)
+}
+
+fn exact_small_int(value: &Bound<'_, PyAny>) -> Option<i128> {
+    value
+        .is_exact_instance_of::<PyInt>()
+        .then(|| value.extract().ok())
+        .flatten()
+}
+
 fn validate(
     py: Python<'_>,
     table: &Bound<'_, PyAny>,
@@ -78,7 +119,7 @@ fn validate(
     if !table.getattr("format")?.is(v3000) {
         return Err(PyNotImplementedError::new_err(()));
     }
-    let mut seen = HashSet::new();
+    let mut validator = indices::Validator::new();
     let (method, count, label, singular) = if atoms {
         ("atomlines", "num_atoms", "atoms", "atom")
     } else {
@@ -86,29 +127,38 @@ fn validate(
     };
     let mut current_line = None;
     let mut current_tokens = None;
-    for (position, line) in table.call_method0(method)?.try_iter()?.enumerate() {
+    for line in table.call_method0(method)?.try_iter()? {
         let line = current_line.insert(line?);
-        let index = current_tokens.insert(Tokens::split(line)?).index(py, 2)?;
-        if strict.is_truthy()? && index != Index::Small((position + 1) as i128) {
-            return Err(domain_error(errors, "IndicesOutOfOrderError", label)?);
-        }
-        if !seen.insert(index) {
-            return Err(domain_error(errors, "IndicesDuplicateError", label)?);
+        let index = match plain_index(line, 2)? {
+            Some(index) => index,
+            None => current_tokens.insert(Tokens::split(line)?).index(py, 2)?,
+        };
+        let strict = strict.is_truthy()?;
+        if let Err(failure) = validator.accept(index, strict) {
+            return Err(validation_error(errors, failure, label, singular)?);
         }
     }
-    if seen.len().into_pyobject(py)?.lt(table.getattr(count)?)? {
-        return Err(domain_error(
-            errors,
-            "IndicesMismatchError",
-            &format!("fewer {singular} lines than count line"),
-        )?);
-    }
-    if seen.len().into_pyobject(py)?.gt(table.getattr(count)?)? {
-        return Err(domain_error(
-            errors,
-            "IndicesMismatchError",
-            &format!("more {singular} lines than count line"),
-        )?);
+    let expected = table.getattr(count)?;
+    if let Some(expected) = exact_small_int(&expected) {
+        if let Err(failure) = validator.finish(expected) {
+            return Err(validation_error(errors, failure, label, singular)?);
+        }
+    } else {
+        let actual = validator.len().into_pyobject(py)?;
+        if actual.lt(&expected)? {
+            return Err(domain_error(
+                errors,
+                "IndicesMismatchError",
+                &format!("fewer {singular} lines than count line"),
+            )?);
+        }
+        if actual.gt(&expected)? {
+            return Err(domain_error(
+                errors,
+                "IndicesMismatchError",
+                &format!("more {singular} lines than count line"),
+            )?);
+        }
     }
     drop(current_line);
     drop(current_tokens);
@@ -144,8 +194,92 @@ fn startswith(line: &Bound<'_, PyAny>, prefix: &str) -> PyResult<bool> {
     }
 }
 
-#[pyfunction]
-fn renumber_ctable(
+fn collect_plain_lines<'py>(iterator: Bound<'py, PyAny>) -> PyResult<Option<Vec<String>>> {
+    let mut lines = Vec::new();
+    for line in iterator.try_iter()? {
+        let line = line?;
+        let Some(text) = exact_text(&line)? else {
+            return Ok(None);
+        };
+        lines.push(text.to_owned());
+    }
+    Ok(Some(lines))
+}
+
+fn plain_table_lines(table: &Bound<'_, PyAny>) -> PyResult<Option<Vec<String>>> {
+    collect_plain_lines(table.getattr("lines")?)
+}
+
+fn section_lines(lines: &[String]) -> (Vec<String>, Vec<String>) {
+    let atoms = lines
+        .iter()
+        .skip(7)
+        .take_while(|line| !line.starts_with("M  V30 END ATOM"))
+        .cloned()
+        .collect();
+    let bonds = lines
+        .iter()
+        .skip_while(|line| !line.starts_with("M  V30 BEGIN BOND"))
+        .skip(1)
+        .take_while(|line| !line.starts_with("M  V30 END BOND"))
+        .cloned()
+        .collect();
+    (atoms, bonds)
+}
+
+fn plain_indices(lines: &[String], positions: &[usize]) -> bool {
+    positions.iter().all(|&position| {
+        lines.iter().all(|line| {
+            ctable::token(line, position).is_some_and(|token| indices::parse_index(token).is_some())
+        })
+    })
+}
+
+fn fast_renumber(
+    py: Python<'_>,
+    table: &Bound<'_, PyAny>,
+    duplicate_error: &Bound<'_, PyAny>,
+) -> PyResult<Option<Vec<String>>> {
+    let Some(all_lines) = plain_table_lines(table)? else {
+        return Ok(None);
+    };
+    let (plain_atoms, plain_bonds) = section_lines(&all_lines);
+    if !plain_indices(&plain_atoms, &[2]) || !plain_indices(&plain_bonds, &[3, 4, 5]) {
+        return Ok(None);
+    }
+    let atom_lines = table.call_method0("atomlines")?;
+    let bond_lines = table.call_method0("bondlines")?;
+    let Some(atom_lines) = collect_plain_lines(atom_lines)? else {
+        return Ok(None);
+    };
+    let Some(bond_lines) = collect_plain_lines(bond_lines)? else {
+        return Ok(None);
+    };
+    let counts = table.getattr("counts")?;
+    let Some(counts) = exact_text(&counts)? else {
+        return Ok(None);
+    };
+    match indices::renumber(&all_lines, &atom_lines, &bond_lines, counts) {
+        Ok(result) => Ok(Some(result.lines)),
+        Err(indices::RenumberFailure::DuplicateMapping) => Err(PyErr::from_value(
+            duplicate_error.call1(("atom index mapping in bond",))?,
+        )),
+        Err(indices::RenumberFailure::MissingEndpoint) => {
+            Err(PyIndexError::new_err("list index out of range"))
+        }
+        Err(indices::RenumberFailure::EmptyCounts) => {
+            Err(PyIndexError::new_err("string index out of range"))
+        }
+        Err(
+            indices::RenumberFailure::InvalidAtomIndex | indices::RenumberFailure::InvalidBondIndex,
+        ) => {
+            let _ = py;
+            Ok(None)
+        }
+    }
+}
+
+fn renumber_compat(
     py: Python<'_>,
     table: &Bound<'_, PyAny>,
     v3000: &Bound<'_, PyAny>,
@@ -308,6 +442,28 @@ fn renumber_ctable(
     drop(count_tokens);
     drop(current_line);
     Ok(())
+}
+
+#[pyfunction]
+fn renumber_ctable(
+    py: Python<'_>,
+    table: &Bound<'_, PyAny>,
+    v3000: &Bound<'_, PyAny>,
+    duplicate_error: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    if !table.getattr("format")?.is(v3000) {
+        return Err(PyNotImplementedError::new_err(()));
+    }
+    if let Some(lines) = fast_renumber(py, table, duplicate_error)? {
+        table.setattr(
+            "lines",
+            py.import("collections")?
+                .getattr("deque")?
+                .call1((PyList::new(py, lines)?,))?,
+        )?;
+        return Ok(());
+    }
+    renumber_compat(py, table, v3000, duplicate_error)
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
