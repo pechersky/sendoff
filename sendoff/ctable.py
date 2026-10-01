@@ -91,9 +91,12 @@ class CTable:
         Returns:
             A CTAB format, based on the end of the counts line
         """
+        if type(line) is str and line.isascii():
+            format_name = _native._parse_format(line)
+            if format_name is not None:
+                return CTableFormat[format_name]
         sline = line.strip().split()
-        ctformat = CTableFormat[sline[-1]]
-        return ctformat
+        return CTableFormat[sline[-1]]
 
     @staticmethod
     def parse_v2000_counts(line: str) -> Tuple[int, int]:
