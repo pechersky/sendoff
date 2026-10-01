@@ -1,6 +1,6 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
-exclude: '.git'
+exclude: '^\.git/'
 default_stages: [pre-commit]
 fail_fast: true
 
@@ -38,3 +38,18 @@ repos:
     -   id: mypy
         args: [--ignore-missing-imports, --strict]
         additional_dependencies: [pytest]
+
+-   repo: local
+    hooks:
+    -   id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        files: '(^Cargo\.(toml|lock)$|^rust/.*\.rs$)'
+        pass_filenames: false
+    -   id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --locked --all-targets -- -D warnings
+        language: system
+        files: '(^Cargo\.(toml|lock)$|^rust/.*\.rs$)'
+        pass_filenames: false
