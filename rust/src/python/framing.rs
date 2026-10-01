@@ -126,14 +126,17 @@ fn framing_step(slf: &Bound<'_, FramingIter>) -> PyResult<Option<Py<PyAny>>> {
     let py = slf.py();
     let current = slf.borrow().current.as_ref().map(|line| line.clone_ref(py));
     if let Some(line) = current {
-        let prefix = slf.borrow().framing.prefix();
-        if slf
-            .borrow()
-            .framing
-            .stop_before_next(has_prefix(py, &line, prefix)?)
-        {
-            slf.borrow_mut().finish();
-            return Ok(None);
+        let (checks_current, prefix) = {
+            let state = slf.borrow();
+            (state.framing.checks_current(), state.framing.prefix())
+        };
+        if checks_current {
+            let matches = has_prefix(py, &line, prefix)?;
+            let stop = slf.borrow().framing.stop_before_next(matches);
+            if stop {
+                slf.borrow_mut().finish();
+                return Ok(None);
+            }
         }
     }
 
@@ -143,13 +146,15 @@ fn framing_step(slf: &Bound<'_, FramingIter>) -> PyResult<Option<Py<PyAny>>> {
         return Ok(None);
     };
 
-    let should_yield = if slf.borrow().framing.checks_current() {
+    let (is_mdl, prefix) = {
+        let state = slf.borrow();
+        (state.framing.checks_current(), state.framing.prefix())
+    };
+    let should_yield = if is_mdl {
         true
     } else {
-        let prefix = slf.borrow().framing.prefix();
-        slf.borrow()
-            .framing
-            .yield_line(has_prefix(py, &line, prefix)?)
+        let matches = has_prefix(py, &line, prefix)?;
+        slf.borrow().framing.yield_line(matches)
     };
     slf.borrow_mut().current = Some(line.clone_ref(py));
     if !should_yield {
@@ -197,6 +202,8 @@ struct BlocksIter {
     lines: Option<Py<PyAny>>,
     iterator: Option<Py<PyAny>>,
     blocks: BlockState<Py<PyAny>>,
+    block: Option<Py<PyAny>>,
+    current: Option<Py<PyAny>>,
     done: bool,
     running: bool,
 }
@@ -207,6 +214,8 @@ impl BlocksIter {
         self.lines = None;
         self.iterator = None;
         self.blocks = BlockState::new();
+        self.block = None;
+        self.current = None;
         self.done = true;
     }
 }
@@ -242,6 +251,8 @@ impl BlocksIter {
         visit.call(&self.cls)?;
         visit.call(&self.lines)?;
         visit.call(&self.iterator)?;
+        visit.call(&self.block)?;
+        visit.call(&self.current)?;
         for line in self.blocks.lines() {
             visit.call(line)?;
         }
@@ -277,12 +288,15 @@ fn blocks_iterator(slf: &Bound<'_, BlocksIter>) -> PyResult<Py<PyAny>> {
 
 fn blocks_step(slf: &Bound<'_, BlocksIter>) -> PyResult<Option<Py<PyAny>>> {
     let py = slf.py();
+    let previous = slf.borrow_mut().block.take();
+    drop(previous);
     let iterator = blocks_iterator(slf)?;
     loop {
         let Some(line) = next_item(py, &iterator)? else {
             slf.borrow_mut().finish();
             return Ok(None);
         };
+        slf.borrow_mut().current = Some(line.clone_ref(py));
         let delimiter = has_prefix(py, &line, "$$$$")?;
         let Some(lines) = slf.borrow_mut().blocks.push(line, delimiter) else {
             continue;
@@ -293,6 +307,7 @@ fn blocks_step(slf: &Bound<'_, BlocksIter>) -> PyResult<Option<Py<PyAny>>> {
         for line in lines {
             block_lines.call_method1("append", (line,))?;
         }
+        slf.borrow_mut().block = Some(block_lines.clone().unbind());
         let cls = slf
             .borrow()
             .cls
@@ -317,6 +332,8 @@ fn blocks_iter(cls: &Bound<'_, PyAny>, lines: &Bound<'_, PyAny>) -> PyResult<Py<
             lines: Some(lines.clone().unbind()),
             iterator: None,
             blocks: BlockState::new(),
+            block: None,
+            current: None,
             done: false,
             running: false,
         },
