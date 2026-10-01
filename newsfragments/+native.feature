@@ -1,0 +1,1 @@
+Move parsing, SDData processing, count parsing, index validation and renumbering to a required Rust/PyO3 backend, preserving the Python API and known defects. Ship CPython 3.11+ abi3 wheels for Linux and macOS on x86_64 and arm64; use maturin for source builds.

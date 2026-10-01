@@ -258,11 +258,11 @@ def single_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
                 mol.SetProp(record, value)
                 outh.write(mol)
     elif request.param == "sendoff":
-        mols = list(parse_sdf(outpath))
+        blocks = list(parse_sdf(outpath))
         with open(outpath, "w") as outh:
-            for mol in mols:
-                mol.append_record(record, value)
-                mol.write(outh)
+            for block in blocks:
+                block.append_record(record, value)
+                block.write(outh)
     return outpath
 
 
@@ -290,11 +290,11 @@ def single_delimiter_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> 
                 mol.SetProp(record, value)
                 outh.write(mol)
     elif request.param == "sendoff":
-        mols = list(parse_sdf(outpath))
+        blocks = list(parse_sdf(outpath))
         with open(outpath, "w") as outh:
-            for mol in mols:
-                mol.append_record(record, value)
-                mol.write(outh)
+            for block in blocks:
+                block.append_record(record, value)
+                block.write(outh)
     return outpath
 
 
@@ -322,11 +322,11 @@ def single_multiline_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> 
                 mol.SetProp(record, value)
                 outh.write(mol)
     elif request.param == "sendoff":
-        mols = list(parse_sdf(outpath))
+        blocks = list(parse_sdf(outpath))
         with open(outpath, "w") as outh:
-            for mol in mols:
-                mol.append_record(record, value)
-                mol.write(outh)
+            for block in blocks:
+                block.append_record(record, value)
+                block.write(outh)
     return outpath
 
 
@@ -354,11 +354,11 @@ def single_empty_string_record_mol_sdf(request: FixtureRequest, tmp_path: Path) 
                 mol.SetProp(record, value)
                 outh.write(mol)
     elif request.param == "sendoff":
-        mols = list(parse_sdf(outpath))
+        blocks = list(parse_sdf(outpath))
         with open(outpath, "w") as outh:
-            for mol in mols:
-                mol.append_record(record, value)
-                mol.write(outh)
+            for block in blocks:
+                block.append_record(record, value)
+                block.write(outh)
     return outpath
 
 
@@ -388,11 +388,11 @@ def single_multiline_record_name_mol_sdf(
                 mol.SetProp(record, value)
                 outh.write(mol)
     elif request.param == "sendoff":
-        mols = list(parse_sdf(outpath))
+        blocks = list(parse_sdf(outpath))
         with open(outpath, "w") as outh:
-            for mol in mols:
-                mol.append_record(record, value)
-                mol.write(outh)
+            for block in blocks:
+                block.append_record(record, value)
+                block.write(outh)
     return outpath
 
 
@@ -422,11 +422,11 @@ def single_right_angle_bracket_record_name_mol_sdf(
                 mol.SetProp(record, value)
                 outh.write(mol)
     elif request.param == "sendoff":
-        mols = list(parse_sdf(outpath))
+        blocks = list(parse_sdf(outpath))
         with open(outpath, "w") as outh:
-            for mol in mols:
-                mol.append_record(record, value)
-                mol.write(outh)
+            for block in blocks:
+                block.append_record(record, value)
+                block.write(outh)
     return outpath
 
 
