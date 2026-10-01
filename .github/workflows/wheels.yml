@@ -3,6 +3,7 @@ name: Build native wheels
 on:
   push:
     branches-ignore: [main]
+    tags-ignore: ["**"]
     paths:
       - Cargo.lock
       - Cargo.toml
@@ -21,6 +22,7 @@ on:
       - tests/ci_wheel_smoke.py
       - .github/workflows/wheels.yml
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -146,13 +148,14 @@ jobs:
           TMPDIR: ${{ github.workspace }}/.cache/wheel-tmp
         run: |
           set -euo pipefail
-          for interpreter in python3.12 python3.13 python; do
-            minor="$("$interpreter" -c 'import sys; print(sys.version_info.minor)')"
-            "$interpreter" -m venv ".cache/python$minor"
-            runner=".cache/python$minor/bin/python"
+          for version in 3.12 3.13 latest; do
+            interpreter=python
+            if [ "$version" != latest ]; then interpreter="python$version"; fi
+            "$interpreter" -m venv ".cache/python-$version"
+            runner=".cache/python-$version/bin/python"
             "$runner" -m pip install --no-index --no-deps wheelhouse/sendoff-*.whl
             "$runner" -m pip install --disable-pip-version-check 'pytest>=7.4.3,<10'
-            EXPECTED_PYTHON_MINOR="$minor" "$runner" -I tests/ci_wheel_smoke.py parity
+            EXPECTED_PYTHON_MINOR="${version#3.}" "$runner" -I tests/ci_wheel_smoke.py parity
           done
       - name: Build source distribution once
         if: matrix.artifact == 'linux-x86_64'

@@ -5,9 +5,8 @@ from __future__ import annotations
 import os
 from collections import deque
 from dataclasses import dataclass
-from io import TextIOWrapper
 from itertools import chain
-from typing import Iterable, Iterator, Tuple, Union
+from typing import Iterable, Iterator, TextIO, Tuple, Union
 
 import sendoff.native as native
 from sendoff.ctable import CTable
@@ -88,7 +87,7 @@ class SDBlock:
         for record in native.records_iter(self):
             yield record
 
-    def write(self, outh: TextIOWrapper, with_newlines: bool = True) -> None:
+    def write(self, outh: TextIO, with_newlines: bool = True) -> None:
         """Write an SDBlock to a file-like handle.
 
         Args:

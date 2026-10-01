@@ -1,89 +1,85 @@
 name: Test and publish
 
 on:
-  - push
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
-        python-version: [3.8, 3.9]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: ${{ matrix.python-version }}
-    - name: Install tox dependencies
+        check-latest: true
+        allow-prereleases: false
+        freethreaded: false
+    - name: Check release tag against Cargo version
+      if: startsWith(github.ref, 'refs/tags/')
+      env:
+        RELEASE_TAG: ${{ github.ref_name }}
       run: |
-        python -m pip install --upgrade pip
-        pip install tox tox-gh-actions
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-        installer-parallel: true
-    - name: Load cached poetry venv
-      id: cached-poetry-dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          .venv
-          .tox
-          ~/.cache/pip
-        key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}
-    - name: Install package dependencies
-      if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-      run: poetry install --no-interaction --no-root
-    - name: Install library
-      run: poetry install --no-interaction
+        python - <<'PY'
+        import os
+        import tomllib
+        from pathlib import Path
+        version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+        assert os.environ["RELEASE_TAG"] == f"v{version}", "tag/Cargo version mismatch"
+        PY
     - name: Test with tox
-      run: tox
+      run: |
+        python -m pip install --disable-pip-version-check 'tox>=4.24,<5'
+        python -m tox -e py
+
+  wheels:
+    needs: test
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/wheels.yml
 
   publish:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: [3.9]
-    needs: test
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
+    runs-on: ubuntu-24.04
+    needs: [test, wheels]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
-    - uses: actions/checkout@v1
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-        installer-parallel: true
-    - name: Load cached poetry venv
-      id: cached-poetry-dependencies
-      uses: actions/cache@v4
+        python-version: "3.11"
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
-        path: |
-          .venv
-          .tox
-          ~/.cache/pip
-        key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}
-    - name: Check pyproject.toml validity
-      run: poetry check --no-interaction
-    - name: Check if tag version matches project version
+        pattern: sendoff-*
+        path: dist
+        merge-multiple: true
+    - name: Check complete native artifact set
       run: |
-        TAG=$(git describe HEAD --tags --abbrev=0)
-        PROJECT_VERSION=$(poetry version --short)
-        echo $TAG
-        echo $PROJECT_VERSION
-        if [[ "$TAG" != "v$PROJECT_VERSION" ]]; then exit 1; fi
-    - name: Build
-      run: poetry build
+        python - <<'PY'
+        import tomllib
+        from pathlib import Path
+        version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+        files = list(Path("dist").iterdir())
+        wheels = list(Path("dist").glob("*.whl"))
+        assert len(files) == 5 and len(wheels) == 4, "expected four wheels and one sdist"
+        assert all(path.name.startswith(f"sendoff-{version}-cp311-abi3-") for path in wheels)
+        assert Path(f"dist/sendoff-{version}.tar.gz").is_file(), "missing versioned sdist"
+        PY
     - name: Publish
-      uses: pypa/gh-action-pypi-publish@release/v1
+      uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
       with:
         user: __token__
         password: ${{ secrets.PYPI_API_TOKEN }}
