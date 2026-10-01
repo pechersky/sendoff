@@ -1,0 +1,302 @@
+name: A2 abi3 feasibility probe
+
+on:
+  push:
+    branches: [feat/native-sendoff]
+    paths: [.github/workflows/abi3-probe.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            machine: x86_64
+            python-arch: x64
+            container: quay.io/pypa/manylinux2014_x86_64:latest
+            build-python: /opt/python/cp311-cp311/bin/python
+            platform-tags: manylinux_2_17_x86_64.manylinux2014_x86_64
+            deployment: ""
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            machine: aarch64
+            python-arch: arm64
+            container: quay.io/pypa/manylinux2014_aarch64:latest
+            build-python: /opt/python/cp311-cp311/bin/python
+            platform-tags: manylinux_2_17_aarch64.manylinux2014_aarch64
+            deployment: ""
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            machine: x86_64
+            python-arch: x64
+            container: off
+            build-python: python3.11
+            platform-tags: macosx_10_15_x86_64
+            deployment: "10.15"
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            machine: arm64
+            python-arch: arm64
+            container: off
+            build-python: python3.11
+            platform-tags: macosx_11_0_arm64
+            deployment: "11.0"
+    env:
+      EXPECTED_MACHINE: ${{ matrix.machine }}
+      EXPECTED_PLATFORM_TAGS: ${{ matrix.platform-tags }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up GIL-enabled CPython floor
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          architecture: ${{ matrix.python-arch }}
+          check-latest: true
+          allow-prereleases: false
+          freethreaded: false
+      # Temporary A2 evidence only: no sendoff sources, dependencies or release jobs.
+      - name: Generate isolated minimal probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .abi3-probe/src .abi3-probe/build-tmp
+          cat > .abi3-probe/Cargo.toml <<'EOF'
+          [package]
+          name = "sendoff-abi3-probe"
+          version = "0.0.0"
+          edition = "2024"
+          publish = false
+
+          [lib]
+          name = "_sendoff_abi3_probe"
+          crate-type = ["cdylib"]
+
+          [dependencies]
+          pyo3 = { version = "=0.29.3", features = ["abi3-py311"] }
+          EOF
+          cat > .abi3-probe/pyproject.toml <<'EOF'
+          [build-system]
+          requires = ["maturin==1.15.0"]
+          build-backend = "maturin"
+
+          [project]
+          name = "sendoff-abi3-probe"
+          version = "0.0.0"
+          requires-python = ">=3.11"
+
+          [tool.maturin]
+          bindings = "pyo3"
+          module-name = "_sendoff_abi3_probe"
+          EOF
+          cat > .abi3-probe/src/lib.rs <<'EOF'
+          use pyo3::prelude::*;
+          use pyo3::types::PyTuple;
+
+          #[pyfunction]
+          fn identity(value: &Bound<'_, PyAny>) -> Py<PyAny> {
+              value.clone().unbind()
+          }
+
+          #[pyfunction]
+          fn next_item(iterator: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+              Ok(iterator.call_method0("__next__")?.unbind())
+          }
+
+          #[pyfunction]
+          fn invoke(callback: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+              Ok(callback.call0()?.unbind())
+          }
+
+          #[pyfunction]
+          fn raise_as(exception_type: &Bound<'_, PyAny>, args: &Bound<'_, PyTuple>) -> PyResult<()> {
+              Err(PyErr::from_value(exception_type.call1(args)?))
+          }
+
+          #[pyfunction]
+          fn strip_text(value: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+              Ok(value.call_method0("strip")?.unbind())
+          }
+
+          #[pyfunction]
+          fn integer(value: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+              Ok(value
+                  .py()
+                  .import("builtins")?
+                  .getattr("int")?
+                  .call1((value,))?
+                  .unbind())
+          }
+
+          #[pymodule]
+          mod _sendoff_abi3_probe {
+              #[pymodule_export]
+              use super::{identity, integer, invoke, next_item, raise_as, strip_text};
+          }
+          EOF
+          cat > .abi3-probe/inspect_wheel.py <<'EOF'
+          import hashlib
+          import os
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          wheels = list(Path(".abi3-probe/wheels").glob("*.whl"))
+          assert len(wheels) == 1, wheels
+          wheel = wheels[0]
+          _, interpreter, abi, platforms = wheel.stem.rsplit("-", 3)
+          assert (interpreter, abi) == ("cp311", "abi3"), wheel.name
+          expected = set(os.environ["EXPECTED_PLATFORM_TAGS"].split("."))
+          assert set(platforms.split(".")) == expected, wheel.name
+          with ZipFile(wheel) as archive:
+              names = archive.namelist()
+              extensions = [name for name in names if name.endswith(".so")]
+              assert extensions == ["_sendoff_abi3_probe/_sendoff_abi3_probe.abi3.so"]
+              metadata = archive.read(next(n for n in names if n.endswith("/WHEEL"))).decode()
+              assert "Root-Is-Purelib: false" in metadata
+              tags = {line[5:] for line in metadata.splitlines() if line.startswith("Tag: ")}
+              assert tags == {f"cp311-abi3-{platform}" for platform in expected}
+              print(metadata)
+          print("SHA256", hashlib.sha256(wheel.read_bytes()).hexdigest(), wheel.name)
+          EOF
+          cat > .abi3-probe/smoke.py <<'EOF'
+          import os
+          import platform
+          import sys
+          import sysconfig
+          from collections import deque
+          from pathlib import Path
+
+          from _sendoff_abi3_probe import _sendoff_abi3_probe as native
+
+          assert sys.implementation.name == "cpython"
+          assert sys.version_info >= (3, 11)
+          assert not sysconfig.get_config_var("Py_GIL_DISABLED")
+          assert platform.machine() == os.environ["EXPECTED_MACHINE"]
+          expected_minor = os.environ.get("EXPECTED_PYTHON_MINOR")
+          if expected_minor:
+              assert sys.version_info[:2] == (3, int(expected_minor))
+          else:
+              assert sys.version_info >= (3, 14)
+          assert Path(native.__file__).name == "_sendoff_abi3_probe.abi3.so"
+          lines = deque(["first", "second"])
+          assert native.identity(lines) is lines
+          iterator = iter(lines)
+          assert native.next_item(iterator) == "first"
+          lines.append("third")
+          try:
+              native.next_item(iterator)
+          except RuntimeError as error:
+              assert error.args == ("deque mutated during iteration",)
+          else:
+              raise AssertionError("live deque mutation was hidden")
+          try:
+              native.next_item(iter(()))
+          except StopIteration as error:
+              assert error.args == ()
+          else:
+              raise AssertionError("StopIteration was hidden")
+
+          class CompatibilityError(Exception):
+              pass
+
+          for exception_type, args in (
+              (CompatibilityError, ("atoms",)),
+              (NotImplementedError, ()),
+              (KeyError, ("V4000",)),
+          ):
+              try:
+                  native.raise_as(exception_type, args)
+              except Exception as error:
+                  assert type(error) is exception_type
+                  assert error.args == args
+              else:
+                  raise AssertionError("exception did not cross the bridge")
+
+          failure = OSError(5, "producer failure")
+
+          def callback():
+              raise failure
+
+          try:
+              native.invoke(callback)
+          except OSError as error:
+              assert error is failure
+          else:
+              raise AssertionError("callback failure was hidden")
+
+          text = " \ud800\U0001f9ea "
+          assert native.identity(text) is text
+          assert native.strip_text(text) == "\ud800\U0001f9ea"
+          assert native.integer("１２３") == 123
+          assert native.integer("9" * 100) == int("9" * 100)
+          try:
+              native.integer("bad")
+          except ValueError as error:
+              assert str(error) == "invalid literal for int() with base 10: 'bad'"
+          else:
+              raise AssertionError("integer failure was hidden")
+
+          print("PASS", sys.version.split()[0], platform.machine(), native.__file__)
+          EOF
+          python -c 'import os, platform; assert platform.machine() == os.environ["EXPECTED_MACHINE"]'
+      - name: Build on matching native architecture
+        uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
+        with:
+          maturin-version: v1.15.0
+          rust-toolchain: "1.98.0"
+          target: ${{ matrix.target }}
+          manylinux: "2014"
+          container: ${{ matrix.container }}
+          working-directory: .abi3-probe
+          docker-options: --env TMPDIR=/io/.abi3-probe/build-tmp --env EXPECTED_MACHINE=${{ matrix.machine }}
+          before-script-linux: |
+            test "$(uname -m)" = "$EXPECTED_MACHINE"
+          args: >-
+            --release --auditwheel check --out wheels
+            --interpreter ${{ matrix.build-python }}
+        env:
+          TMPDIR: ${{ github.workspace }}/.abi3-probe/build-tmp
+      - name: Inspect wheel tags and stable ABI symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TMPDIR="$PWD/.abi3-probe/build-tmp"
+          python .abi3-probe/inspect_wheel.py
+          python -m venv .abi3-probe/audit-env
+          .abi3-probe/audit-env/bin/python -m pip install abi3audit==0.0.26 abi3info==2026.9.25
+          .abi3-probe/audit-env/bin/python -m abi3audit --strict --verbose .abi3-probe/wheels/*.whl
+      - name: Install and import the wheel on CPython 3.11
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TMPDIR="$PWD/.abi3-probe/build-tmp"
+          python -m venv .abi3-probe/py311
+          .abi3-probe/py311/bin/python -m pip install --no-index --no-deps .abi3-probe/wheels/*.whl
+          EXPECTED_PYTHON_MINOR=11 .abi3-probe/py311/bin/python -I .abi3-probe/smoke.py
+      - name: Set up latest stable GIL-enabled CPython
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.x"
+          architecture: ${{ matrix.python-arch }}
+          check-latest: true
+          allow-prereleases: false
+          freethreaded: false
+      - name: Install and import the same wheel on latest stable CPython
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TMPDIR="$PWD/.abi3-probe/build-tmp"
+          python -m venv .abi3-probe/python-latest
+          .abi3-probe/python-latest/bin/python -m pip install --no-index --no-deps .abi3-probe/wheels/*.whl
+          .abi3-probe/python-latest/bin/python -I .abi3-probe/smoke.py
