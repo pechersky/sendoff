@@ -1,0 +1,558 @@
+"""Compare real native index exports with the frozen Python algorithms."""
+
+from __future__ import annotations
+
+import inspect
+import itertools
+import sys
+from collections import deque
+from importlib import import_module
+from typing import Any, Callable, Iterable, SupportsIndex, cast
+
+import pytest
+
+from sendoff.ctable import (
+    CTable,
+    CTableFormat,
+    IndicesDuplicateError,
+    IndicesMismatchError,
+    IndicesOutOfOrderError,
+)
+from tests.compat_literals import V2000, V3000
+from tests.test_native_ctable import NativeTable
+
+native = import_module("sendoff.native")
+valid_atoms: Callable[..., bool] = getattr(native, "valid_atom_indices")
+valid_bonds: Callable[..., bool] = getattr(native, "valid_bond_indices")
+renumber: Callable[..., None] = getattr(native, "renumber_ctable")
+errors = (IndicesMismatchError, IndicesOutOfOrderError, IndicesDuplicateError)
+
+
+class NativeIndices(NativeTable):
+    """Keep public Python objects and use the real A6/A7 exports."""
+
+    def valid_atom_indices(self, strict: bool = False) -> bool:
+        """Validate native atom indices.
+
+        Args:
+            strict: Require ordered one-based indices.
+
+        Returns:
+            True on success.
+        """
+        return valid_atoms(self, strict, CTableFormat.V3000, errors)
+
+    def valid_bond_indices(self, strict: bool = False) -> bool:
+        """Validate native bond indices.
+
+        Args:
+            strict: Require ordered one-based indices.
+
+        Returns:
+            True on success.
+        """
+        return valid_bonds(self, strict, CTableFormat.V3000, errors)
+
+    def renumber_indices(self) -> None:
+        """Renumber through Rust without replacing cached count attributes."""
+        renumber(self, CTableFormat.V3000, IndicesDuplicateError)
+
+
+def outcome(table: CTable, operation: str, strict: object = False) -> object:
+    """Capture the operation result or exact legacy exception.
+
+    Args:
+        table: Original or native-backed Python table.
+        operation: Validation or renumbering method.
+        strict: Uncoerced validation operand.
+
+    Returns:
+        Result or exception type, arguments and message.
+    """
+    try:
+        method = getattr(table, operation)
+        return method() if operation == "renumber_indices" else method(strict)
+    except Exception as error:
+        return type(error), error.args, str(error)
+
+
+def assert_parity(lines: Iterable[str], operation: str, strict: object = False) -> None:
+    """Compare results, raw deque replacement and snapshot state.
+
+    Args:
+        lines: Raw connection table lines.
+        operation: Operation to compare.
+        strict: Uncoerced validation operand.
+    """
+    raw = deque(lines)
+    tables = [CTable(raw), NativeIndices(raw)]
+    originals = [table.lines for table in tables]
+    expected = outcome(tables[0], operation, strict)
+    assert outcome(tables[1], operation, strict) == expected
+    assert vars(tables[0]) == vars(tables[1])
+    for table, original in zip(tables, originals):
+        assert type(table.lines) is deque
+        assert original == raw
+        assert (table.lines is original) == (
+            operation != "renumber_indices" or expected is not None
+        )
+        assert type(table.atomlines()) is itertools.takewhile
+        assert type(table.bondlines()) is itertools.takewhile
+
+
+def test_exports_and_keyword_operands() -> None:
+    """Expose only the requested unprefixed positional-or-keyword operations."""
+    for name, operands in (
+        ("valid_atom_indices", ("table", "strict", "v3000", "errors")),
+        ("valid_bond_indices", ("table", "strict", "v3000", "errors")),
+        ("renumber_ctable", ("table", "v3000", "duplicate_error")),
+    ):
+        function = getattr(native, name)
+        assert inspect.isbuiltin(function)
+        parameters = inspect.signature(function).parameters
+        assert tuple(parameters) == operands
+        assert all(
+            parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+            and parameter.default is inspect.Parameter.empty
+            for parameter in parameters.values()
+        )
+    table = NativeIndices(V3000.splitlines())
+    assert valid_atoms(
+        table=table, strict=True, v3000=CTableFormat.V3000, errors=errors
+    )
+    assert valid_bonds(
+        table=table, strict=False, v3000=CTableFormat.V3000, errors=errors
+    )
+    assert (
+        cast(Callable[..., object], renumber)(
+            table=table,
+            v3000=CTableFormat.V3000,
+            duplicate_error=IndicesDuplicateError,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["valid_atom_indices", "valid_bond_indices", "renumber_indices"],
+)
+@pytest.mark.parametrize("strict", [False, True])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "normal",
+        "v2000",
+        "duplicate_atoms",
+        "duplicate_bonds",
+        "missing_atoms",
+        "missing_bonds",
+        "extra_atoms",
+        "extra_bonds",
+        "missing_endpoint",
+        "duplicate_before_missing_endpoint",
+        "bad_atom",
+        "bad_bond",
+        "short_atom",
+        "short_bond",
+        "continuation",
+        "stale_counts",
+        "empty_suffix",
+        "unterminated_atoms",
+        "unterminated_bonds",
+        "opaque",
+    ],
+)
+def test_literal_parity(change: str, strict: bool, operation: str) -> None:
+    """Freeze results, diagnostics, check order and all legacy output defects.
+
+    Args:
+        change: Focused raw-line mutation.
+        strict: Require one-based ordering.
+        operation: Validation or renumbering.
+    """
+    lines = deque((V2000 if change == "v2000" else V3000).splitlines(keepends=True))
+    replacements = {
+        "duplicate_atoms": (8, lines[7]),
+        "missing_endpoint": (11, "M  V30 1 1 99 2\n"),
+        "bad_atom": (7, "M  V30 nope nope nope nope"),
+        "bad_bond": (11, "M  V30 nope nope nope nope"),
+        "short_atom": (7, "short"),
+        "short_bond": (11, "short"),
+        "stale_counts": (5, "M  V30 COUNTS 5 4 0 0 0\n"),
+        "empty_suffix": (5, "M  V30 COUNTS 2 1\n"),
+    }
+    insertions = {
+        "duplicate_bonds": (12, lines[11] if change != "v2000" else ""),
+        "extra_atoms": (9, "M  V30 3 N 0 0 0 0\n"),
+        "extra_bonds": (12, "M  V30 2 1 1 2 CFG=9\n"),
+        "continuation": (8, "M  V30 CHG=1"),
+        "opaque": (13, "opaque SGROUP\n"),
+    }
+    deletions = {"missing_atoms": 8, "missing_bonds": 11}
+    truncations = {"unterminated_atoms": 9, "unterminated_bonds": 12}
+    if change in replacements:
+        position, replacement = replacements[change]
+        lines[position] = replacement
+    elif change in insertions:
+        position, replacement = insertions[change]
+        lines.insert(position, replacement)
+    elif change in deletions:
+        del lines[deletions[change]]
+    elif change in truncations:
+        lines = deque(list(lines)[: truncations[change]])
+    elif change == "duplicate_before_missing_endpoint":
+        lines[8] = lines[7]
+        lines[11] = "M  V30 1 1 99 1\n"
+    assert_parity(lines, operation, strict)
+
+
+@pytest.mark.parametrize(
+    "token", ["-7", "+0007", "7_0", "٧", "７", str(2**257), "-" + str(2**257)]
+)
+@pytest.mark.parametrize("spacing", [" ", "\t", "\u001c", "\u0085", "\u2003"])
+def test_integer_and_unicode_parity(token: str, spacing: str) -> None:
+    """Use exact integers and Python whitespace, including big mapped endpoints.
+
+    Args:
+        token: Valid arbitrary-precision Python integer spelling.
+        spacing: Python-recognized token separator.
+    """
+    text = V3000.replace("M  V30 1 C", f"M  V30 {token} C").replace(
+        "M  V30 1 1 1 2 CFG=1", f"M  V30 1 1 {token} 2 CFG=1"
+    )
+    lines = text.splitlines(keepends=True)
+    lines[7] = lines[7].replace(" ", spacing)
+    for operation in ("valid_atom_indices", "valid_bond_indices", "renumber_indices"):
+        assert_parity(lines, operation)
+
+
+def test_digit_limit_and_surrogates() -> None:
+    """Keep native int diagnostics and allow lone surrogates in opaque strings."""
+    lines = V3000.splitlines()
+    lines[7] += "\ud800"
+    assert_parity(lines, "renumber_indices")
+    token = "9" * (sys.get_int_max_str_digits() + 1)
+    lines[7] = f"M  V30 {token} C"
+    assert_parity(lines, "valid_atom_indices")
+    assert_parity(lines, "renumber_indices")
+
+
+@pytest.mark.parametrize("counts", ["", "opaque", "\ud800", "M V30 COUNTS 8 9"])
+def test_cached_counts_failures_and_snapshots(counts: str) -> None:
+    """Use cached counts independently from mutable raw counts lines.
+
+    Args:
+        counts: Direct replacement of the parsed count snapshot.
+    """
+    tables = [CTable(V3000.splitlines()), NativeIndices(V3000.splitlines())]
+    originals = [table.lines for table in tables]
+    for table in tables:
+        table.counts = counts
+    expected = outcome(tables[0], "renumber_indices")
+    assert outcome(tables[1], "renumber_indices") == expected
+    assert vars(tables[0]) == vars(tables[1])
+    for table, original in zip(tables, originals):
+        assert (table.lines is original) == (expected is not None)
+        assert table.counts == counts
+        assert (table.num_atoms, table.num_bonds) == (2, 1)
+
+
+def test_empty_tables_do_not_evaluate_strict() -> None:
+    """Defer strict truthiness until an actual index has been parsed."""
+
+    class Strict:
+        def __bool__(self) -> bool:
+            raise AssertionError("strict evaluated")
+
+    lines = V3000.splitlines()
+    del lines[11]
+    del lines[7:9]
+    lines[5] = "M V30 COUNTS 0 0"
+    for operation in ("valid_atom_indices", "valid_bond_indices"):
+        assert_parity(lines, operation, Strict())
+
+
+def test_strict_callback_preserves_live_deque_mutation_error() -> None:
+    """Do not snapshot raw lines or hide iterator errors from callback mutations."""
+    results = []
+    for table_type in (CTable, NativeIndices):
+        table = table_type(V3000.splitlines())
+        original = table.lines
+
+        class Strict:
+            def __bool__(self) -> bool:
+                table.lines.append("external mutation")
+                return False
+
+        results.append((outcome(table, "valid_atom_indices", Strict()), vars(table)))
+        assert table.lines is original
+    assert results[0] == results[1]
+    assert results[0][0] == (
+        RuntimeError,
+        ("deque mutated during iteration",),
+        "deque mutated during iteration",
+    )
+
+
+@pytest.mark.parametrize("operation", ["valid_atom_indices", "renumber_indices"])
+def test_string_subclass_protocol_order(operation: str) -> None:
+    """Dispatch overrides rather than treating str subclasses as normal strings.
+
+    Args:
+        operation: Validation or renumbering.
+    """
+    histories = []
+    results = []
+    for table_type in (CTable, NativeIndices):
+        events: list[object] = []
+
+        class Tokens(list[str]):
+            def __getitem__(self, key: Any) -> Any:
+                events.append(("token", key))
+                return super().__getitem__(key)
+
+            def __del__(self) -> None:
+                events.append("release tokens")
+
+        class Line(str):
+            def split(
+                self, sep: str | None = None, maxsplit: SupportsIndex = -1
+            ) -> list[str]:
+                """Record dynamic splitting.
+
+                Args:
+                    sep: Token separator.
+                    maxsplit: Maximum splits.
+
+                Returns:
+                    Observable token sequence.
+                """
+                events.append(("split", str(self)))
+                return Tokens(super().split(sep, maxsplit))
+
+            def __getitem__(self, key: Any) -> Any:
+                events.append(("line", key))
+                return super().__getitem__(key)
+
+            def startswith(self, prefix: Any, *args: Any) -> bool:
+                """Record dynamic prefix checks.
+
+                Args:
+                    prefix: Prefix to check.
+                    *args: Optional string bounds.
+
+                Returns:
+                    Whether the prefix matches.
+                """
+                events.append(("prefix", prefix))
+                return super().startswith(prefix, *args)
+
+        table = table_type(V3000.splitlines())
+        table.lines = deque(Line(line) for line in table.lines)
+        table.counts = Line(table.counts)
+        events.clear()
+        results.append((outcome(table, operation), vars(table)))
+        histories.append(events)
+    assert results[0] == results[1]
+    assert histories[0] == histories[1]
+
+
+@pytest.mark.parametrize("operation", ["valid_atom_indices", "valid_bond_indices"])
+def test_truthiness_and_count_comparison_protocols(operation: str) -> None:
+    """Check truthiness per line and compare fresh cached attributes in order.
+
+    Args:
+        operation: Atom or bond validation.
+    """
+    histories = []
+    for table_type in (CTable, NativeIndices):
+        events: list[object] = []
+
+        class Strict:
+            def __bool__(self) -> bool:
+                events.append("strict")
+                return False
+
+        class Count:
+            def __gt__(self, size: int) -> bool:
+                events.append(("less", size))
+                return False
+
+            def __lt__(self, size: int) -> bool:
+                events.append(("greater", size))
+                return False
+
+        table = table_type(V3000.splitlines())
+        setattr(
+            table,
+            "num_atoms" if operation == "valid_atom_indices" else "num_bonds",
+            Count(),
+        )
+        assert outcome(table, operation, Strict()) is True
+        histories.append(events)
+    assert histories[0] == histories[1]
+
+
+def test_uncoerced_integer_and_format_protocols() -> None:
+    """Honor custom split sequences, int operands, slices and bond formatting."""
+    histories = []
+    results = []
+    for table_type in (CTable, NativeIndices):
+        events: list[object] = []
+
+        class Token:
+            def __int__(self) -> int:
+                events.append("int")
+                return 2**50000
+
+            def __len__(self) -> int:
+                events.append("len")
+                return 1
+
+        class Order:
+            def __format__(self, spec: str) -> str:
+                events.append(("format", spec))
+                return "opaque"
+
+        class Line(str):
+            def split(
+                self, sep: str | None = None, maxsplit: SupportsIndex = -1
+            ) -> list[Any]:
+                """Supply non-string integer and formatting operands.
+
+                Args:
+                    sep: Token separator.
+                    maxsplit: Maximum splits.
+
+                Returns:
+                    Protocol-bearing tokens.
+                """
+                events.append(("split", str(self)))
+                tokens: list[Any] = super().split(sep, maxsplit)
+                if " C " in self:
+                    tokens[2] = Token()
+                elif "CFG" in self:
+                    tokens[3] = Order()
+                    tokens[4] = Token()
+                return tokens
+
+        table = table_type(V3000.splitlines())
+        table.lines[7] = Line(table.lines[7])
+        table.lines[11] = Line(table.lines[11])
+        results.append((outcome(table, "renumber_indices"), vars(table)))
+        histories.append(events)
+    assert results[0] == results[1]
+    assert histories[0] == histories[1]
+
+
+@pytest.mark.parametrize("stage", ["strict", "split", "producer", "prefix", "setter"])
+def test_original_failure_instance_and_atomicity(stage: str) -> None:
+    """Return original callback errors without replacing the live raw deque.
+
+    Args:
+        stage: Callback failing within validation or renumbering.
+    """
+    failure = OSError(stage)
+
+    class Strict:
+        def __bool__(self) -> bool:
+            raise failure
+
+    class Line(str):
+        def split(
+            self, sep: str | None = None, maxsplit: SupportsIndex = -1
+        ) -> list[str]:
+            """Inject the selected splitting failure.
+
+            Args:
+                sep: Token separator.
+                maxsplit: Maximum splits.
+
+            Returns:
+                Tokens if splitting succeeds.
+
+            Raises:
+                failure: The selected original callback exception.
+            """
+            if stage == "split":
+                raise failure
+            return super().split(sep, maxsplit)
+
+        def startswith(self, prefix: Any, *args: Any) -> bool:
+            """Inject the selected prefix failure.
+
+            Args:
+                prefix: Prefix to check.
+                *args: Optional string bounds.
+
+            Returns:
+                Whether the prefix matches.
+
+            Raises:
+                failure: The selected original callback exception.
+            """
+            if stage == "prefix":
+                raise failure
+            return super().startswith(prefix, *args)
+
+    class Receiver(NativeIndices):
+        def atomlines(self) -> Iterable[str]:
+            """Return a failing external producer when requested.
+
+            Returns:
+                Atom lines.
+
+            Raises:
+                failure: The selected original callback exception.
+            """
+            if stage == "producer":
+                raise failure
+            return super().atomlines()
+
+        def __setattr__(self, name: str, value: object) -> None:
+            if stage == "setter" and name == "lines" and hasattr(self, "lines"):
+                raise failure
+            super().__setattr__(name, value)
+
+    table = Receiver(V3000.splitlines())
+    table.lines[7] = Line(table.lines[7])
+    original = table.lines
+    before = deque(original)
+    with pytest.raises(OSError) as caught:
+        if stage == "strict":
+            valid_atoms(table, Strict(), CTableFormat.V3000, errors)
+        else:
+            table.renumber_indices()
+    assert caught.value is failure
+    assert table.lines is original
+    assert table.lines == before
+
+
+def test_error_class_operands_and_enum_identity() -> None:
+    """Use the passed original error classes and enum member only by identity."""
+
+    class Mismatch(Exception):
+        """A caller-supplied mismatch type."""
+
+    class OutOfOrder(Exception):
+        """A caller-supplied strict-order type."""
+
+    class Duplicate(Exception):
+        """A caller-supplied duplicate type."""
+
+    table = NativeIndices(V3000.splitlines())
+    supplied = (Mismatch, OutOfOrder, Duplicate)
+    table.lines[8] = table.lines[7]
+    with pytest.raises(Duplicate, match="^atoms$"):
+        valid_atoms(table, False, CTableFormat.V3000, supplied)
+    with pytest.raises(OutOfOrder, match="^atoms$"):
+        valid_atoms(table, True, CTableFormat.V3000, supplied)
+    with pytest.raises(Duplicate, match="^atom index mapping in bond$"):
+        renumber(table, CTableFormat.V3000, Duplicate)
+    del table.lines[8]
+    with pytest.raises(Mismatch, match="^fewer atom lines than count line$"):
+        valid_atoms(table, False, CTableFormat.V3000, supplied)
+    with pytest.raises(NotImplementedError) as caught:
+        valid_atoms(table, False, "V3000", supplied)
+    assert caught.value.args == ()

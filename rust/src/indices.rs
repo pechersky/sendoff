@@ -1,5 +1,332 @@
 use pyo3::prelude::*;
+use pyo3::{
+    exceptions::{PyIndexError, PyNotImplementedError},
+    types::{PyDict, PyList, PySlice, PyString},
+};
+use std::collections::{HashMap, HashSet};
 
-pub fn register(_: &Bound<'_, PyModule>) -> PyResult<()> {
+fn exact_text<'a>(value: &'a Bound<'_, PyAny>) -> Option<&'a str> {
+    if value.is_exact_instance_of::<PyString>() {
+        value.cast::<PyString>().ok()?.to_str().ok()
+    } else {
+        None
+    }
+}
+
+enum Tokens<'py> {
+    Text(Vec<String>),
+    Protocol(Bound<'py, PyAny>),
+}
+
+impl<'py> Tokens<'py> {
+    fn split(line: &Bound<'py, PyAny>) -> PyResult<Self> {
+        if let Some(text) = exact_text(line) {
+            Ok(Self::Text(
+                text.split(|c: char| c.is_whitespace() || matches!(c, '\u{1c}'..='\u{1f}'))
+                    .filter(|token| !token.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            ))
+        } else {
+            Ok(Self::Protocol(line.call_method0("split")?))
+        }
+    }
+
+    fn get(&self, py: Python<'py>, position: usize) -> PyResult<Bound<'py, PyAny>> {
+        match self {
+            Self::Text(tokens) => tokens
+                .get(position)
+                .map(|token| PyString::new(py, token).into_any())
+                .ok_or_else(|| PyIndexError::new_err("list index out of range")),
+            Self::Protocol(tokens) => tokens.get_item(position),
+        }
+    }
+
+    fn index(&self, py: Python<'py>, position: usize) -> PyResult<Index> {
+        if let Self::Text(tokens) = self
+            && let Some(token) = tokens.get(position)
+            && token.len() <= 40
+            && let Ok(value) = token.parse::<i128>()
+        {
+            return Ok(Index::Small(value));
+        }
+        // Python handles decimal Unicode, underscores, digit limits and int protocols.
+        let value = py
+            .import("builtins")?
+            .getattr("int")?
+            .call1((self.get(py, position)?,))?;
+        if let Ok(value) = value.extract::<i128>() {
+            return Ok(Index::Small(value));
+        }
+        let size = value.call_method0("bit_length")?.extract::<usize>()? / 8 + 1;
+        let keywords = PyDict::new(py);
+        keywords.set_item("signed", true)?;
+        Ok(Index::Large(
+            value
+                .call_method("to_bytes", (size, "little"), Some(&keywords))?
+                .extract()?,
+        ))
+    }
+}
+
+#[derive(Eq, Hash, PartialEq)]
+enum Index {
+    Small(i128),
+    Large(Vec<u8>),
+}
+
+fn domain_error(errors: &Bound<'_, PyAny>, position: usize, message: &str) -> PyResult<PyErr> {
+    Ok(PyErr::from_value(
+        errors.get_item(position)?.call1((message,))?,
+    ))
+}
+
+fn validate(
+    py: Python<'_>,
+    table: &Bound<'_, PyAny>,
+    strict: &Bound<'_, PyAny>,
+    v3000: &Bound<'_, PyAny>,
+    errors: &Bound<'_, PyAny>,
+    atoms: bool,
+) -> PyResult<bool> {
+    if !table.getattr("format")?.is(v3000) {
+        return Err(PyNotImplementedError::new_err(()));
+    }
+    let mut seen = HashSet::new();
+    let (method, count, label, singular) = if atoms {
+        ("atomlines", "num_atoms", "atoms", "atom")
+    } else {
+        ("bondlines", "num_bonds", "bonds", "bond")
+    };
+    let mut current_line = None;
+    let mut current_tokens = None;
+    for (position, line) in table.call_method0(method)?.try_iter()?.enumerate() {
+        let line = current_line.insert(line?);
+        let index = current_tokens.insert(Tokens::split(line)?).index(py, 2)?;
+        if strict.is_truthy()? && index != Index::Small((position + 1) as i128) {
+            return Err(domain_error(errors, 1, label)?);
+        }
+        if !seen.insert(index) {
+            return Err(domain_error(errors, 2, label)?);
+        }
+    }
+    if seen.len().into_pyobject(py)?.lt(table.getattr(count)?)? {
+        return Err(domain_error(
+            errors,
+            0,
+            &format!("fewer {singular} lines than count line"),
+        )?);
+    }
+    if seen.len().into_pyobject(py)?.gt(table.getattr(count)?)? {
+        return Err(domain_error(
+            errors,
+            0,
+            &format!("more {singular} lines than count line"),
+        )?);
+    }
+    drop(current_line);
+    drop(current_tokens);
+    Ok(true)
+}
+
+#[pyfunction]
+fn valid_atom_indices(
+    py: Python<'_>,
+    table: &Bound<'_, PyAny>,
+    strict: &Bound<'_, PyAny>,
+    v3000: &Bound<'_, PyAny>,
+    errors: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    validate(py, table, strict, v3000, errors, true)
+}
+
+#[pyfunction]
+fn valid_bond_indices(
+    py: Python<'_>,
+    table: &Bound<'_, PyAny>,
+    strict: &Bound<'_, PyAny>,
+    v3000: &Bound<'_, PyAny>,
+    errors: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    validate(py, table, strict, v3000, errors, false)
+}
+
+fn startswith(line: &Bound<'_, PyAny>, prefix: &str) -> PyResult<bool> {
+    match exact_text(line) {
+        Some(text) => Ok(text.starts_with(prefix)),
+        None => line.call_method1("startswith", (prefix,))?.is_truthy(),
+    }
+}
+
+#[pyfunction]
+fn renumber_ctable(
+    py: Python<'_>,
+    table: &Bound<'_, PyAny>,
+    v3000: &Bound<'_, PyAny>,
+    duplicate_error: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    if !table.getattr("format")?.is(v3000) {
+        return Err(PyNotImplementedError::new_err(()));
+    }
+    let mut atoms = Vec::new();
+    let mut bonds = Vec::new();
+    let mut mapping: HashMap<Index, Vec<usize>> = HashMap::new();
+    let mut current_atomline = None;
+    let mut current_tokens = None;
+    let mut current_bondline = None;
+    for (position, line) in table.call_method0("atomlines")?.try_iter()?.enumerate() {
+        let line = current_atomline.insert(line?);
+        let tokens = current_tokens.insert(Tokens::split(line)?);
+        let index = tokens.index(py, 2)?;
+        let new_index = position + 1;
+        mapping.entry(index).or_default().push(new_index);
+        let skip = 7 + match tokens {
+            Tokens::Text(tokens) => tokens[2].chars().count(),
+            Tokens::Protocol(_) => tokens.get(py, 2)?.len()?,
+        };
+        let prefix = format!("M  V30 {new_index}");
+        let replacement = if let Some(text) = exact_text(line) {
+            let offset = text
+                .char_indices()
+                .nth(skip)
+                .map_or(text.len(), |(offset, _)| offset);
+            PyString::new(py, &(prefix + &text[offset..])).into_any()
+        } else {
+            PyString::new(py, &prefix).add(
+                line.get_item(
+                    py.get_type::<PySlice>()
+                        .call1((skip, py.None(), py.None()))?,
+                )?,
+            )?
+        };
+        atoms.push(replacement);
+    }
+    for (position, line) in table.call_method0("bondlines")?.try_iter()?.enumerate() {
+        let line = current_bondline.insert(line?);
+        let tokens = current_tokens.insert(Tokens::split(line)?);
+        let from = tokens.index(py, 4)?;
+        let to = tokens.index(py, 5)?;
+        if mapping.get(&from).is_some_and(|values| values.len() > 1)
+            || mapping.get(&to).is_some_and(|values| values.len() > 1)
+        {
+            return Err(PyErr::from_value(
+                duplicate_error.call1(("atom index mapping in bond",))?,
+            ));
+        }
+        // A missing endpoint is the legacy empty-list subscript error.
+        let new_from = *mapping
+            .get(&from)
+            .and_then(|values| values.first())
+            .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
+        let new_to = *mapping
+            .get(&to)
+            .and_then(|values| values.first())
+            .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
+        let trailing = if let Some(text) = exact_text(line) {
+            text.ends_with('\n')
+        } else {
+            line.get_item(-1)?.eq(PyString::new(py, "\n"))?
+        };
+        let trailing = if trailing { "\n" } else { "" };
+        let replacement = match tokens {
+            Tokens::Text(tokens) => PyString::new(
+                py,
+                &format!(
+                    "M  V30 {} {} {new_from} {new_to}{trailing}",
+                    position + 1,
+                    tokens[3]
+                ),
+            )
+            .into_any(),
+            Tokens::Protocol(_) => PyString::new(py, "M  V30 {} {} {} {}{}").call_method1(
+                "format",
+                (position + 1, tokens.get(py, 3)?, new_from, new_to, trailing),
+            )?,
+        };
+        bonds.push(replacement);
+    }
+    // The unused newline check is still observable on protocol operands.
+    {
+        let counts = table.getattr("counts")?;
+        if let Some(text) = exact_text(&counts) {
+            if text.is_empty() {
+                return Err(PyIndexError::new_err("string index out of range"));
+            }
+        } else {
+            counts.get_item(-1)?.eq(PyString::new(py, "\n"))?;
+        }
+    }
+    let count_tokens = Tokens::split(&table.getattr("counts")?)?;
+    let prefix = format!("M  V30 COUNTS {} {} ", atoms.len(), bonds.len());
+    let counts = match &count_tokens {
+        Tokens::Text(tokens) => PyString::new(
+            py,
+            &(prefix + &tokens.get(5..).unwrap_or_default().join(" ")),
+        )
+        .into_any(),
+        Tokens::Protocol(tokens) => {
+            PyString::new(py, &prefix).add(py.get_type::<PyString>().call_method1(
+                "join",
+                (
+                    " ",
+                    tokens.get_item(py.get_type::<PySlice>().call1((
+                        5,
+                        py.None(),
+                        py.None(),
+                    ))?)?,
+                ),
+            )?)?
+        }
+    };
+    let mut lines = Vec::new();
+    let mut appending = true;
+    let mut current_line = None;
+    for line in table.getattr("lines")?.try_iter()? {
+        let line = current_line.insert(line?);
+        if appending {
+            lines.push(line.clone());
+        }
+        if startswith(line, "M  V30 COUNTS")? {
+            lines
+                .pop()
+                .ok_or_else(|| PyIndexError::new_err("pop from an empty deque"))?;
+            lines.push(counts.clone());
+        }
+        if startswith(line, "M  V30 BEGIN ATOM")? {
+            appending = false;
+        }
+        if startswith(line, "M  V30 END ATOM")? {
+            appending = true;
+            lines.extend(atoms.iter().cloned());
+            lines.push(line.clone());
+        }
+        if startswith(line, "M  V30 BEGIN BOND")? {
+            appending = false;
+        }
+        if startswith(line, "M  V30 END BOND")? {
+            appending = true;
+            lines.extend(bonds.iter().cloned());
+            lines.push(line.clone());
+        }
+    }
+    table.setattr(
+        "lines",
+        py.import("collections")?
+            .getattr("deque")?
+            .call1((PyList::new(py, lines)?,))?,
+    )?;
+    // Preserve observable protocol-object release order after successful replacement.
+    drop(current_atomline);
+    drop(current_tokens);
+    drop(current_bondline);
+    drop(count_tokens);
+    drop(current_line);
+    Ok(())
+}
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(valid_atom_indices, m)?)?;
+    m.add_function(wrap_pyfunction!(valid_bond_indices, m)?)?;
+    m.add_function(wrap_pyfunction!(renumber_ctable, m)?)?;
     Ok(())
 }
