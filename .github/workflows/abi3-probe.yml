@@ -259,7 +259,7 @@ jobs:
           manylinux: "2014"
           container: ${{ matrix.container }}
           working-directory: .abi3-probe
-          docker-options: --env TMPDIR=/io/.abi3-probe/build-tmp --env EXPECTED_MACHINE=${{ matrix.machine }}
+          docker-options: --env TMPDIR=${{ github.workspace }}/.abi3-probe/build-tmp --env EXPECTED_MACHINE=${{ matrix.machine }}
           before-script-linux: |
             test "$(uname -m)" = "$EXPECTED_MACHINE"
           args: >-
