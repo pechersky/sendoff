@@ -5,14 +5,13 @@ from __future__ import annotations
 import gc
 import importlib
 import inspect
-import io
-import os
 import weakref
 from collections import deque
-from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 import pytest
+
+from sendoff.sdblock import SDBlock
 
 native = importlib.import_module("sendoff.native")
 
@@ -22,9 +21,7 @@ def test_native_framing_private_signatures() -> None:
     signatures = {
         "mdl_iter": ("lines",),
         "metadata_iter": ("lines",),
-        "from_block_lines": ("cls", "block_type", "lines"),
         "blocks_iter": ("cls", "lines"),
-        "read_sdf_lines": ("sdfpath",),
     }
     for name, parameters in signatures.items():
         assert tuple(inspect.signature(getattr(native, name)).parameters) == parameters
@@ -76,32 +73,25 @@ def test_native_section_iterators_are_lazy_and_keep_delimiter_timing() -> None:
 def test_native_block_title_uses_python_unicode_whitespace() -> None:
     """Strip exact text titles with Python's complete whitespace definition."""
 
-    class Parser:
+    class Parser(SDBlock):
         @classmethod
-        def parse_mdl(cls, lines: Iterator[str]) -> list[str]:
+        def parse_mdl(cls, lines: Iterable[str]) -> list[str]:
             return []
 
         @classmethod
-        def parse_metadata(cls, lines: Iterator[str]) -> list[str]:
+        def parse_metadata(cls, lines: Iterable[str]) -> list[str]:
             return []
 
-    class Block:
-        def __init__(self, title: str, mdl: deque[str], metadata: deque[str]) -> None:
-            self.title = title
-            self.mdl = mdl
-            self.metadata = metadata
-
-    block = getattr(native, "from_block_lines")(
-        Parser, Block, ["\u001c\u00a0title\u2003\u001f"]
-    )
+    block = Parser.from_block_lines(["\u001c\u00a0title\u2003\u001f"])
+    assert type(block) is SDBlock
     assert block.title == "title"
 
     untouched_title = "".join(["plain", " title"])
-    block = getattr(native, "from_block_lines")(Parser, Block, [untouched_title])
+    block = Parser.from_block_lines([untouched_title])
     assert block.title is untouched_title
 
     surrogate_title = f"{chr(0xD800)} title "
-    block = getattr(native, "from_block_lines")(Parser, Block, [surrogate_title])
+    block = Parser.from_block_lines([surrogate_title])
     assert block.title == "\ud800 title"
 
 
@@ -154,15 +144,9 @@ def test_native_block_factory_uses_hooks_and_one_shared_iterator() -> None:
     """Use one shared source iterator for both dynamic class hooks."""
     events: list[str] = []
 
-    class BaseBlock:
-        def __init__(self, title: str, mdl: deque[str], metadata: deque[str]) -> None:
-            self.title = title
-            self.mdl = mdl
-            self.metadata = metadata
-
-    class Hooks:
+    class Hooks(SDBlock):
         @classmethod
-        def parse_mdl(cls, lines: Iterator[str]) -> Iterator[str]:
+        def parse_mdl(cls, lines: Iterable[str]) -> Iterator[str]:
             for line in lines:
                 events.append(f"mdl:{line}")
                 yield line
@@ -170,7 +154,7 @@ def test_native_block_factory_uses_hooks_and_one_shared_iterator() -> None:
                     return
 
         @classmethod
-        def parse_metadata(cls, lines: Iterator[str]) -> Iterator[str]:
+        def parse_metadata(cls, lines: Iterable[str]) -> Iterator[str]:
             for line in lines:
                 events.append(f"metadata:{line}")
                 if line.startswith("$$$$"):
@@ -178,22 +162,20 @@ def test_native_block_factory_uses_hooks_and_one_shared_iterator() -> None:
                 yield line
 
     lines = iter(["  title  ", "raw", "M  END", "> <key>", "$$$$", "tail"])
-    block = getattr(native, "from_block_lines")(Hooks, BaseBlock, lines)
-    assert type(block) is BaseBlock
+    block = Hooks.from_block_lines(lines)
+    assert type(block) is SDBlock
     assert block.title == "title"
     assert block.mdl == deque(["raw", "M  END"])
     assert block.metadata == deque(["> <key>"])
     assert events == ["mdl:raw", "mdl:M  END", "metadata:> <key>", "metadata:$$$$"]
     assert next(lines) == "tail"
 
-    missing_end = getattr(native, "from_block_lines")(
-        Hooks, BaseBlock, ["t", "raw", "> <key>", "v", "$$$$"]
-    )
+    missing_end = Hooks.from_block_lines(["t", "raw", "> <key>", "v", "$$$$"])
     assert missing_end.mdl == deque(["raw", "> <key>", "v", "$$$$"])
     assert missing_end.metadata == deque()
 
     with pytest.raises(StopIteration) as caught:
-        getattr(native, "from_block_lines")(Hooks, BaseBlock, [])
+        Hooks.from_block_lines([])
     assert caught.value.args == ()
 
 
@@ -282,14 +264,3 @@ def test_native_framing_iterators_trace_retained_python_references(
     del source, iterator
     gc.collect()
     assert source_ref() is None
-
-
-def test_native_read_sdf_lines_uses_default_open_and_rejects_handles() -> None:
-    """Delegate path handling and text decoding to builtins.open."""
-    read_lines = getattr(native, "read_sdf_lines")
-    filename = Path(__file__).resolve().parents[1] / "LICENSE"
-    expected = read_lines(str(filename))
-    assert read_lines(filename) == expected
-    assert read_lines(os.fsencode(filename)) == expected
-    with pytest.raises(TypeError, match="expected str, bytes or os.PathLike object"):
-        read_lines(io.StringIO("contents"))
