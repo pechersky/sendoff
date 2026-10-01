@@ -1,10 +1,12 @@
 use pyo3::{
     class::{PyTraverseError, PyVisit},
-    exceptions::{PyRuntimeError, PyStopIteration, PyValueError},
+    exceptions::{PyIndexError, PyRuntimeError, PyStopIteration, PyValueError},
     ffi,
     prelude::*,
     types::{PyDict, PyIterator, PyList, PyString, PyTuple},
 };
+
+use crate::framing::generator_error;
 
 enum RecordInput {
     Item(Py<PyAny>, bool),
@@ -19,7 +21,6 @@ struct RecordsIter {
     raw_line: Option<Py<PyAny>>,
     line: Option<Py<PyAny>>,
     pending: Option<(Py<PyAny>, bool)>,
-    exhausted: bool,
     done: bool,
     running: bool,
 }
@@ -31,7 +32,6 @@ impl RecordsIter {
         self.raw_line = None;
         self.line = None;
         self.pending = None;
-        self.exhausted = true;
         self.done = true;
     }
 }
@@ -79,20 +79,6 @@ impl RecordsIter {
     }
 }
 
-fn generator_error(py: Python<'_>, error: PyErr) -> PyErr {
-    if !error.is_instance_of::<PyStopIteration>(py) {
-        return error;
-    }
-
-    let runtime = PyRuntimeError::new_err("generator raised StopIteration");
-    runtime.set_cause(py, Some(error.clone_ref(py)));
-    runtime.set_context(py, Some(error));
-    if let Err(error) = runtime.value(py).setattr("__suppress_context__", true) {
-        return error;
-    }
-    runtime
-}
-
 fn source_iterator(slf: &Bound<'_, RecordsIter>) -> PyResult<Py<PyAny>> {
     let py = slf.py();
     if let Some(iterator) = slf.borrow().iterator.as_ref() {
@@ -134,13 +120,27 @@ fn next_record_input(slf: &Bound<'_, RecordsIter>) -> PyResult<RecordInput> {
         return Ok(RecordInput::End);
     };
     slf.borrow_mut().raw_line = Some(raw_line.clone_ref(py));
-    let line = raw_line
-        .bind(py)
-        .call_method0("strip")
-        .map_err(|error| generator_error(py, error))?
-        .unbind();
+    let raw_line_bound = raw_line.bind(py);
+    let line = if let Some(text) = crate::exact_text(raw_line_bound)? {
+        let stripped = text.trim_matches(crate::whitespace);
+        if stripped == text {
+            raw_line.clone_ref(py)
+        } else {
+            PyString::new(py, stripped).into_any().unbind()
+        }
+    } else {
+        raw_line_bound
+            .call_method0("strip")
+            .map_err(|error| generator_error(py, error))?
+            .unbind()
+    };
     slf.borrow_mut().line = Some(line.clone_ref(py));
-    match line.bind(py).is_truthy() {
+    let key = if let Some(text) = crate::exact_text(line.bind(py))? {
+        Ok(!text.is_empty())
+    } else {
+        line.bind(py).is_truthy()
+    };
+    match key {
         Ok(key) => Ok(RecordInput::Item(line, key)),
         Err(error) if error.is_instance_of::<PyStopIteration>(py) => Ok(RecordInput::KeyStop),
         Err(error) => Err(error),
@@ -149,6 +149,21 @@ fn next_record_input(slf: &Bound<'_, RecordsIter>) -> PyResult<RecordInput> {
 
 fn record_name(py: Python<'_>, line: &Py<PyAny>) -> PyResult<Py<PyAny>> {
     let line = line.bind(py);
+    if let Some(text) = crate::exact_text(line)? {
+        let remainder = text
+            .split_once("> ")
+            .map(|(_, remainder)| remainder)
+            .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
+        let remainder = remainder.trim_matches(crate::whitespace);
+        let first = remainder
+            .rsplit_once('>')
+            .map_or(remainder, |(first, _)| first);
+        let name = first
+            .split_once('<')
+            .map(|(_, name)| name)
+            .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
+        return Ok(PyString::new(py, name).into_any().unbind());
+    }
     let split = line
         .call_method1("split", ("> ", 1))
         .map_err(|error| generator_error(py, error))?;
@@ -174,8 +189,11 @@ fn record_name(py: Python<'_>, line: &Py<PyAny>) -> PyResult<Py<PyAny>> {
 }
 
 fn is_header(py: Python<'_>, line: &Py<PyAny>) -> PyResult<bool> {
+    let line = line.bind(py);
+    if let Some(text) = crate::exact_text(line)? {
+        return Ok(text.starts_with("> "));
+    }
     let result = line
-        .bind(py)
         .call_method1("startswith", ("> ",))
         .map_err(|error| generator_error(py, error))?;
     result
@@ -199,19 +217,31 @@ fn drain_group(slf: &Bound<'_, RecordsIter>, key: bool) -> PyResult<bool> {
     }
 }
 
-fn join_values(py: Python<'_>, values: &Bound<'_, PyList>) -> PyResult<Py<PyAny>> {
-    PyString::new(py, "\n")
-        .call_method1("join", (values,))
-        .map(Bound::unbind)
+fn join_values(py: Python<'_>, values: &[Py<PyAny>]) -> PyResult<Py<PyAny>> {
+    if values.len() == 1 && crate::exact_text(values[0].bind(py))?.is_some() {
+        return Ok(values[0].clone_ref(py));
+    }
+    let mut joined = String::new();
+    for (index, value) in values.iter().enumerate() {
+        let Some(text) = crate::exact_text(value.bind(py))? else {
+            let python_values = PyList::empty(py);
+            for value in values {
+                python_values.append(value.bind(py))?;
+            }
+            return PyString::new(py, "\n")
+                .call_method1("join", (python_values,))
+                .map(Bound::unbind);
+        };
+        if index > 0 {
+            joined.push('\n');
+        }
+        joined.push_str(text);
+    }
+    Ok(PyString::new(py, &joined).into_any().unbind())
 }
 
 fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
     let py = slf.py();
-    if slf.borrow().exhausted {
-        slf.borrow_mut().finish();
-        return Ok(None);
-    }
-
     loop {
         let next = slf.borrow_mut().pending.take();
         let (line, key) = match next {
@@ -233,16 +263,16 @@ fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
         }
 
         let name = record_name(py, &line)?;
-        let values = PyList::empty(py);
+        let mut values = Vec::new();
         loop {
             match next_record_input(slf)? {
-                RecordInput::Item(value, next_key) if next_key == key => values.append(value)?,
+                RecordInput::Item(value, next_key) if next_key == key => values.push(value),
                 RecordInput::Item(line, next_key) => {
                     slf.borrow_mut().pending = Some((line, next_key));
                     break;
                 }
                 RecordInput::End | RecordInput::KeyStop => {
-                    slf.borrow_mut().exhausted = true;
+                    slf.borrow_mut().finish();
                     break;
                 }
             }
@@ -265,7 +295,6 @@ fn records_iter(block: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
             raw_line: None,
             line: None,
             pending: None,
-            exhausted: false,
             done: false,
             running: false,
         },
@@ -289,7 +318,10 @@ fn write_lines(
         let line = item?;
         outh.call_method1("write", (&line,))?;
         if with_newlines.is_truthy()? {
-            let ends_with_newline = line.call_method1("endswith", ("\n",))?.is_truthy()?;
+            let ends_with_newline = match crate::exact_text(&line)? {
+                Some(text) => text.ends_with('\n'),
+                None => line.call_method1("endswith", ("\n",))?.is_truthy()?,
+            };
             if !ends_with_newline {
                 outh.call_method1("write", ("\n",))?;
             }
@@ -320,15 +352,17 @@ fn write(
     Ok(())
 }
 
-fn append_value(metadata: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-    metadata.getattr("append")?.call1((value,))?;
-    Ok(())
-}
-
 fn formatted_header<'py>(
     py: Python<'py>,
     record_name: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    if let Some(record_name) = crate::exact_text(record_name)? {
+        let mut header = String::with_capacity(record_name.len() + 6);
+        header.push_str("> <");
+        header.push_str(record_name);
+        header.push_str(">\n");
+        return Ok(PyString::new(py, &header).into_any());
+    }
     let spec = PyString::new(py, "");
     // Both operands are live Python objects under the GIL.
     let formatted = unsafe {
@@ -369,11 +403,21 @@ fn append_record(
 
     let metadata = block.getattr("metadata")?;
     let append = metadata.getattr("append")?;
-    let value = python_add(py, value, PyString::new(py, "\n").as_any())?;
+    let value = if let Some(value) = crate::exact_text(value)? {
+        let mut line = String::with_capacity(value.len() + 1);
+        line.push_str(value);
+        line.push('\n');
+        PyString::new(py, &line).into_any()
+    } else {
+        python_add(py, value, PyString::new(py, "\n").as_any())?
+    };
     append.call1((value,))?;
 
     let metadata = block.getattr("metadata")?;
-    append_value(&metadata, PyString::new(py, "\n").as_any())
+    metadata
+        .getattr("append")?
+        .call1((PyString::new(py, "\n"),))?;
+    Ok(())
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

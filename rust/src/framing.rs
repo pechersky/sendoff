@@ -2,7 +2,7 @@ use pyo3::{
     class::{PyTraverseError, PyVisit},
     exceptions::{PyRuntimeError, PyStopIteration, PyValueError},
     prelude::*,
-    types::PyIterator,
+    types::{PyIterator, PyString},
 };
 
 enum FramingMode {
@@ -67,7 +67,7 @@ impl FramingIter {
     }
 }
 
-fn generator_error(py: Python<'_>, error: PyErr) -> PyErr {
+pub(crate) fn generator_error(py: Python<'_>, error: PyErr) -> PyErr {
     if !error.is_instance_of::<PyStopIteration>(py) {
         return error;
     }
@@ -82,8 +82,11 @@ fn generator_error(py: Python<'_>, error: PyErr) -> PyErr {
 }
 
 fn has_prefix(py: Python<'_>, line: &Py<PyAny>, prefix: &str) -> PyResult<bool> {
+    let line = line.bind(py);
+    if let Some(text) = crate::exact_text(line)? {
+        return Ok(text.starts_with(prefix));
+    }
     let matched = line
-        .bind(py)
         .call_method1("startswith", (prefix,))
         .map_err(|error| generator_error(py, error))?;
     matched
@@ -337,7 +340,17 @@ fn from_block_lines(
     let title = builtins
         .getattr("next")?
         .call1((iterator.as_any(),))?
-        .call_method0("strip")?;
+        .into_any();
+    let title = if let Some(text) = crate::exact_text(&title)? {
+        let stripped = text.trim_matches(crate::whitespace);
+        if stripped == text {
+            title.clone()
+        } else {
+            PyString::new(py, stripped).into_any()
+        }
+    } else {
+        title.call_method0("strip")?
+    };
     let deque = py.import("collections")?.getattr("deque")?;
     let mdl = deque.call1((cls.call_method1("parse_mdl", (iterator.as_any(),))?,))?;
     let metadata = deque.call1((cls.call_method1("parse_metadata", (iterator.as_any(),))?,))?;

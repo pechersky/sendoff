@@ -111,6 +111,47 @@ def test_native_records_keep_live_deque_errors_and_lazy_parse_failures() -> None
     assert caught.value.__cause__ is caught.value.__context__
 
 
+def test_native_records_parse_exact_text_with_python_whitespace() -> None:
+    """Trim and split normal Unicode metadata with Python-compatible whitespace."""
+    block = SDBlock(
+        "title",
+        deque(),
+        deque(
+            [
+                "\u001c",
+                "\u00a0> prefix < name\u00a0> suffix\u2003",
+                "\u2003first\u001c",
+                "\u00a0second\u00a0",
+                "\u001f",
+            ]
+        ),
+    )
+    assert list(getattr(native, "records_iter")(block)) == [
+        (" name\u00a0", "first\nsecond")
+    ]
+
+    untouched_value = "".join(["plain", " value"])
+    record = next(
+        getattr(native, "records_iter")(
+            SDBlock("title", deque(), deque(["> <key>", untouched_value]))
+        )
+    )
+    assert record == ("key", untouched_value)
+    assert record[1] is untouched_value
+
+
+def test_native_records_keep_lone_surrogate_text() -> None:
+    """Retain Python's handling for strings Rust cannot encode as UTF-8."""
+    surrogate = chr(0xD800)
+    record = next(
+        getattr(native, "records_iter")(
+            SDBlock("title", deque(), deque([f"> <{surrogate}>", surrogate]))
+        )
+    )
+    assert record == ("\ud800", "\ud800")
+    assert record[1] is surrogate
+
+
 def test_native_records_preserve_falsey_string_groups() -> None:
     """Match Python grouping for falsey headers and both key transitions."""
 
@@ -263,6 +304,33 @@ def test_native_write_propagates_partial_writer_failures() -> None:
     assert events == ["title", "\n", "mdl", "metadata", "raw"]
 
 
+def test_native_write_handles_plain_string_newlines() -> None:
+    """Use native text checks while retaining print and per-line writes."""
+    writes: list[str] = []
+
+    class Writer:
+        def write(self, text: str) -> int:
+            writes.append(text)
+            return len(text)
+
+    block = SDBlock(
+        "title",
+        deque(["raw", "already\n"]),
+        deque(["metadata"]),
+    )
+    getattr(native, "write")(block, Writer(), True)
+    assert writes == [
+        "title",
+        "\n",
+        "raw",
+        "\n",
+        "already\n",
+        "metadata",
+        "\n",
+        "$$$$\n",
+    ]
+
+
 def test_native_append_keeps_formatting_and_three_append_side_effects() -> None:
     """Preserve Python formatting and the three separate append calls."""
     events: list[tuple[int, Any]] = []
@@ -304,3 +372,12 @@ def test_native_append_keeps_formatting_and_three_append_side_effects() -> None:
     with pytest.raises(TypeError):
         getattr(native, "append_record")(stored, "name", object())
     assert metadata == deque(["> <name>\n"])
+
+    stored.metadata = deque()
+    getattr(native, "append_record")(stored, "naïve", "first\nsecond")
+    assert stored.metadata == deque(["> <naïve>\n", "first\nsecond\n", "\n"])
+
+    surrogate = chr(0xD800)
+    stored.metadata = deque()
+    getattr(native, "append_record")(stored, surrogate, surrogate)
+    assert stored.metadata == deque(["> <\ud800>\n", "\ud800\n", "\n"])

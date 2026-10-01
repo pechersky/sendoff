@@ -73,6 +73,38 @@ def test_native_section_iterators_are_lazy_and_keep_delimiter_timing() -> None:
     ) == [" $$$$ leading"]
 
 
+def test_native_block_title_uses_python_unicode_whitespace() -> None:
+    """Strip exact text titles with Python's complete whitespace definition."""
+
+    class Parser:
+        @classmethod
+        def parse_mdl(cls, lines: Iterator[str]) -> list[str]:
+            return []
+
+        @classmethod
+        def parse_metadata(cls, lines: Iterator[str]) -> list[str]:
+            return []
+
+    class Block:
+        def __init__(self, title: str, mdl: deque[str], metadata: deque[str]) -> None:
+            self.title = title
+            self.mdl = mdl
+            self.metadata = metadata
+
+    block = getattr(native, "from_block_lines")(
+        Parser, Block, ["\u001c\u00a0title\u2003\u001f"]
+    )
+    assert block.title == "title"
+
+    untouched_title = "".join(["plain", " title"])
+    block = getattr(native, "from_block_lines")(Parser, Block, [untouched_title])
+    assert block.title is untouched_title
+
+    surrogate_title = f"{chr(0xD800)} title "
+    block = getattr(native, "from_block_lines")(Parser, Block, [surrogate_title])
+    assert block.title == "\ud800 title"
+
+
 def test_native_mdl_yields_before_marker_callback_and_preserves_pep479() -> None:
     """Match generator StopIteration errors and delimiter-check timing."""
 
