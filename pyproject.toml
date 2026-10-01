@@ -50,7 +50,7 @@ dev = [
 
 [tool.maturin]
 python-source = "."
-module-name = "sendoff._native"
+module-name = "sendoff.native"
 include = [
     {path = "LICENSE", format = "sdist"},
     {path = "tests/**/*.py", format = "sdist"},

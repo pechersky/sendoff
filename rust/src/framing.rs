@@ -10,7 +10,7 @@ enum FramingMode {
     Metadata,
 }
 
-#[pyclass(name = "_FramingIter", module = "sendoff._native")]
+#[pyclass(name = "FramingIter", module = "sendoff.native")]
 struct FramingIter {
     mode: FramingMode,
     lines: Option<Py<PyAny>>,
@@ -151,7 +151,7 @@ fn framing_step(slf: &Bound<'_, FramingIter>) -> PyResult<Option<Py<PyAny>>> {
 }
 
 #[pyfunction]
-fn _mdl_iter(lines: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+fn mdl_iter(lines: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     Py::new(
         lines.py(),
         FramingIter {
@@ -167,7 +167,7 @@ fn _mdl_iter(lines: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
 }
 
 #[pyfunction]
-fn _metadata_iter(lines: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+fn metadata_iter(lines: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     Py::new(
         lines.py(),
         FramingIter {
@@ -182,7 +182,7 @@ fn _metadata_iter(lines: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     .map(Py::into_any)
 }
 
-#[pyclass(name = "_BlocksIter", module = "sendoff._native")]
+#[pyclass(name = "BlocksIter", module = "sendoff.native")]
 struct BlocksIter {
     cls: Option<Py<PyAny>>,
     lines: Option<Py<PyAny>>,
@@ -326,7 +326,7 @@ fn blocks_step(slf: &Bound<'_, BlocksIter>) -> PyResult<Option<Py<PyAny>>> {
 }
 
 #[pyfunction]
-fn _from_block_lines(
+fn from_block_lines(
     cls: &Bound<'_, PyAny>,
     block_type: &Bound<'_, PyAny>,
     lines: &Bound<'_, PyAny>,
@@ -345,7 +345,7 @@ fn _from_block_lines(
 }
 
 #[pyfunction]
-fn _blocks_iter(cls: &Bound<'_, PyAny>, lines: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+fn blocks_iter(cls: &Bound<'_, PyAny>, lines: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     Py::new(
         lines.py(),
         BlocksIter {
@@ -363,7 +363,7 @@ fn _blocks_iter(cls: &Bound<'_, PyAny>, lines: &Bound<'_, PyAny>) -> PyResult<Py
 }
 
 #[pyfunction]
-fn _read_sdf_lines(sdfpath: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+fn read_sdf_lines(sdfpath: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let builtins = sdfpath.py().import("builtins")?;
     let file = builtins.getattr("open")?.call1((sdfpath,))?;
     file.call_method0("readlines").map(Bound::unbind)
@@ -372,10 +372,10 @@ fn _read_sdf_lines(sdfpath: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<FramingIter>()?;
     m.add_class::<BlocksIter>()?;
-    m.add_function(wrap_pyfunction!(_mdl_iter, m)?)?;
-    m.add_function(wrap_pyfunction!(_metadata_iter, m)?)?;
-    m.add_function(wrap_pyfunction!(_from_block_lines, m)?)?;
-    m.add_function(wrap_pyfunction!(_blocks_iter, m)?)?;
-    m.add_function(wrap_pyfunction!(_read_sdf_lines, m)?)?;
+    m.add_function(wrap_pyfunction!(mdl_iter, m)?)?;
+    m.add_function(wrap_pyfunction!(metadata_iter, m)?)?;
+    m.add_function(wrap_pyfunction!(from_block_lines, m)?)?;
+    m.add_function(wrap_pyfunction!(blocks_iter, m)?)?;
+    m.add_function(wrap_pyfunction!(read_sdf_lines, m)?)?;
     Ok(())
 }

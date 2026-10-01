@@ -12,7 +12,7 @@ enum RecordInput {
     KeyStop,
 }
 
-#[pyclass(name = "_RecordsIter", module = "sendoff._native")]
+#[pyclass(name = "RecordsIter", module = "sendoff.native")]
 struct RecordsIter {
     block: Option<Py<PyAny>>,
     iterator: Option<Py<PyAny>>,
@@ -256,7 +256,7 @@ fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
 }
 
 #[pyfunction]
-fn _records_iter(block: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+fn records_iter(block: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     Py::new(
         block.py(),
         RecordsIter {
@@ -299,7 +299,7 @@ fn write_lines(
 }
 
 #[pyfunction]
-fn _write(
+fn write(
     block: &Bound<'_, PyAny>,
     outh: &Bound<'_, PyAny>,
     with_newlines: &Bound<'_, PyAny>,
@@ -355,7 +355,7 @@ fn python_add<'py>(
 }
 
 #[pyfunction]
-fn _append_record(
+fn append_record(
     block: &Bound<'_, PyAny>,
     record_name: &Bound<'_, PyAny>,
     value: &Bound<'_, PyAny>,
@@ -378,8 +378,8 @@ fn _append_record(
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RecordsIter>()?;
-    m.add_function(wrap_pyfunction!(_records_iter, m)?)?;
-    m.add_function(wrap_pyfunction!(_write, m)?)?;
-    m.add_function(wrap_pyfunction!(_append_record, m)?)?;
+    m.add_function(wrap_pyfunction!(records_iter, m)?)?;
+    m.add_function(wrap_pyfunction!(write, m)?)?;
+    m.add_function(wrap_pyfunction!(append_record, m)?)?;
     Ok(())
 }

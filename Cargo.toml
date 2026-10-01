@@ -19,7 +19,7 @@ include = [
 ]
 
 [lib]
-name = "_native"
+name = "native"
 path = "rust/src/lib.rs"
 crate-type = ["cdylib"]
 

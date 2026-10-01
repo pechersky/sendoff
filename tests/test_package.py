@@ -12,17 +12,17 @@ from pathlib import Path
 import pytest
 
 import sendoff
-import sendoff._native as _native
+import sendoff.native as native
 
 
 def test_mandatory_binary_and_distribution_version() -> None:
     """Load an actual extension and coordinate Python, Cargo and package versions."""
-    assert isinstance(_native.__loader__, ExtensionFileLoader)
-    assert _native.__name__ == "sendoff._native"
-    assert _native.__file__ is not None
-    assert Path(_native.__file__).name == "_native.abi3.so"
-    assert sendoff.__version__ == _native.__version__ == version("sendoff")
-    assert (Path(sendoff.__file__).parent / "_native.pyi").is_file()
+    assert isinstance(native.__loader__, ExtensionFileLoader)
+    assert native.__name__ == "sendoff.native"
+    assert native.__file__ is not None
+    assert Path(native.__file__).name == "native.abi3.so"
+    assert sendoff.__version__ == native.__version__ == version("sendoff")
+    assert (Path(sendoff.__file__).parent / "native.pyi").is_file()
 
 
 @pytest.mark.parametrize(
@@ -48,4 +48,4 @@ def test_missing_native_module_fails_import(module_name: str, tmp_path: Path) ->
         check=False,
     )
     assert result.returncode != 0
-    assert "ModuleNotFoundError: No module named 'sendoff._native'" in result.stderr
+    assert "ModuleNotFoundError: No module named 'sendoff.native'" in result.stderr

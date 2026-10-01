@@ -15,16 +15,16 @@ import pytest
 from sendoff.ctable import CTable, CTableFormat, IndicesMismatchError
 from tests.compat_literals import V2000, V3000
 
-native = import_module("sendoff._native")
-init: Callable[..., None] = getattr(native, "_ctable_init")
-parse_format: Callable[..., CTableFormat] = getattr(native, "_parse_format")
-v2000_counts: Callable[..., Tuple[int, int]] = getattr(native, "_parse_v2000_counts")
-v3000_counts: Callable[..., Tuple[int, int]] = getattr(native, "_parse_v3000_counts")
-atomlines: Callable[..., Iterator[str]] = getattr(native, "_atomlines")
-bondlines: Callable[..., Iterator[str]] = getattr(native, "_bondlines")
+native = import_module("sendoff.native")
+init: Callable[..., None] = getattr(native, "ctable_init")
+parse_format: Callable[..., CTableFormat] = getattr(native, "parse_format")
+v2000_counts: Callable[..., Tuple[int, int]] = getattr(native, "parse_v2000_counts")
+v3000_counts: Callable[..., Tuple[int, int]] = getattr(native, "parse_v3000_counts")
+atomlines: Callable[..., Iterator[str]] = getattr(native, "atomlines")
+bondlines: Callable[..., Iterator[str]] = getattr(native, "bondlines")
 
 
-class _NativeTable(CTable):
+class NativeTable(CTable):
     """Provide test-only thin adapters without editing the public facade."""
 
     def __init__(self, lines: Iterable[str]) -> None:
@@ -32,32 +32,66 @@ class _NativeTable(CTable):
 
     @staticmethod
     def parse_format(line: str) -> CTableFormat:
+        """Delegate format parsing to Rust.
+
+        Args:
+            line: counts line
+
+        Returns:
+            Parsed format.
+        """
         return parse_format(line, CTableFormat)
 
     @staticmethod
     def parse_v2000_counts(line: str) -> Tuple[int, int]:
+        """Delegate V2000 counts to Rust.
+
+        Args:
+            line: counts line
+
+        Returns:
+            Atom and bond counts.
+        """
         return v2000_counts(line)
 
     @staticmethod
     def parse_v3000_counts(line: str) -> Tuple[int, int]:
+        """Delegate V3000 counts to Rust.
+
+        Args:
+            line: counts line
+
+        Returns:
+            Atom and bond counts.
+        """
         return v3000_counts(line)
 
     def atomlines(self) -> Iterable[str]:
+        """Return the native atom-line iterator.
+
+        Returns:
+            Atom lines.
+        """
         return atomlines(self)
 
     def bondlines(self) -> Iterable[str]:
+        """Return the native bond-line iterator.
+
+        Returns:
+            Bond lines.
+        """
         return bondlines(self)
 
 
 def test_exports_and_keyword_arguments() -> None:
     """Expose required positional-or-keyword operands, not coercing signatures."""
     expected = {
-        "_ctable_init": ("table", "lines", "v3000"),
-        "_parse_format": ("line", "formats"),
-        "_parse_v2000_counts": ("line",),
-        "_parse_v3000_counts": ("line",),
-        "_atomlines": ("table",),
-        "_bondlines": ("table",),
+        "ctable_init": ("table", "lines", "v3000"),
+        "parse_format": ("line", "formats"),
+        "parse_v2000_counts": ("line",),
+        "parse_v3000_counts": ("line",),
+        "atomlines": ("table",),
+        "bondlines": ("table",),
     }
     for name, operands in expected.items():
         function = getattr(native, name)
@@ -71,7 +105,7 @@ def test_exports_and_keyword_arguments() -> None:
         )
     table = CTable.__new__(CTable)
     assert (
-        getattr(native, "_ctable_init")(
+        getattr(native, "ctable_init")(
             table=table, lines=V3000.splitlines(), v3000=CTableFormat.V3000
         )
         is None
@@ -108,7 +142,7 @@ def test_eager_copy_headers_snapshots_and_public_pickle(text: str) -> None:
     assert {key: value for key, value in vars(table).items() if key != "lines"} == (
         old_fields
     )
-    reparsed = _NativeTable(table.lines)
+    reparsed = NativeTable(table.lines)
     assert (reparsed.title, reparsed.num_atoms, reparsed.num_bonds) == (
         "new title",
         9,
@@ -150,7 +184,7 @@ def test_malformed_constructor_partial_state(
     errors = []
     initializers: tuple[Callable[..., None], ...] = (
         CTable.__init__,
-        _NativeTable.__init__,
+        NativeTable.__init__,
     )
     for table, initializer in zip(tables, initializers):
         producer = iter(lines)
@@ -203,7 +237,7 @@ def test_receiver_assignment_failure_and_attribute_order(field: str) -> None:
 
     initializers: tuple[Callable[..., None], ...] = (
         CTable.__init__,
-        _NativeTable.__init__,
+        NativeTable.__init__,
     )
     states, lookups = [], []
     for initializer in initializers:
@@ -359,7 +393,7 @@ def test_count_hook_unpack_diagnostics(
     errors = []
     initializers: tuple[Callable[..., None], ...] = (
         CTable.__init__,
-        _NativeTable.__init__,
+        NativeTable.__init__,
     )
     for table, initializer in zip(tables, initializers):
         with pytest.raises(error_type) as caught:
@@ -404,7 +438,7 @@ def test_count_hook_iteration_errors(step: int, error_type: type[Exception]) -> 
 
     initializers: tuple[Callable[..., None], ...] = (
         CTable.__init__,
-        _NativeTable.__init__,
+        NativeTable.__init__,
     )
     for initializer in initializers:
         events.clear()
@@ -571,7 +605,7 @@ def test_real_single_use_raw_iterators_and_preserved_v2000_defect(
         method: The raw section to traverse.
         text: The existing V2000 or V3000 fixture.
     """
-    table = _NativeTable(text.splitlines(keepends=True))
+    table = NativeTable(text.splitlines(keepends=True))
     reference = CTable(table.lines)
     expected = list(getattr(reference, method)())
     table.num_atoms = table.num_bonds = -999
@@ -597,7 +631,7 @@ def test_call_time_capture_mutation_and_reassignment(
         method: The section iterator factory.
         started: Whether to consume a value before structural mutation.
     """
-    table = _NativeTable(V3000.splitlines())
+    table = NativeTable(V3000.splitlines())
     raw = iter(getattr(table, method)())
     if started:
         next(raw)
@@ -605,7 +639,7 @@ def test_call_time_capture_mutation_and_reassignment(
     with pytest.raises(RuntimeError) as caught:
         next(raw)
     assert caught.value.args == ("deque mutated during iteration",)
-    table = _NativeTable(V3000.splitlines())
+    table = NativeTable(V3000.splitlines())
     old = iter(getattr(table, method)())
     expected = list(getattr(CTable(table.lines), method)())
     table.lines = deque(V2000.splitlines())

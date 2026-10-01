@@ -26,7 +26,7 @@ def inspect_wheel() -> None:
         names = archive.namelist()
         extensions = [name for name in names if name.endswith(".so")]
         metadata_files = [name for name in names if name.endswith(".dist-info/WHEEL")]
-        assert extensions == ["sendoff/_native.abi3.so"], extensions
+        assert extensions == ["sendoff/native.abi3.so"], extensions
         assert len(metadata_files) == 1, metadata_files
         metadata = archive.read(metadata_files[0]).decode()
         assert "Root-Is-Purelib: false" in metadata.splitlines()
@@ -53,8 +53,8 @@ def smoke_installed_wheel() -> None:
     from importlib.metadata import version
 
     import sendoff
-    import sendoff._native as native
     import sendoff.ctable as ctable_module
+    import sendoff.native as native
     import sendoff.sdblock as sdblock_module
     from sendoff.ctable import CTable
     from sendoff.sdblock import SDBlock

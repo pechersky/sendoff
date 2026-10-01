@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
 
-pub fn register(_m: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn register(_: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }

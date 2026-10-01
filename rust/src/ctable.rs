@@ -6,7 +6,7 @@ use pyo3::{
 };
 
 #[pyfunction]
-fn _ctable_init(
+fn ctable_init(
     py: Python<'_>,
     table: &Bound<'_, PyAny>,
     lines: &Bound<'_, PyAny>,
@@ -110,7 +110,7 @@ fn _ctable_init(
 }
 
 #[pyfunction]
-fn _parse_format<'py>(
+fn parse_format<'py>(
     line: &Bound<'py, PyAny>,
     formats: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
@@ -122,7 +122,7 @@ fn _parse_format<'py>(
 }
 
 #[pyfunction]
-fn _parse_v2000_counts<'py>(
+fn parse_v2000_counts<'py>(
     py: Python<'py>,
     line: &Bound<'py, PyAny>,
 ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
@@ -137,7 +137,7 @@ fn _parse_v2000_counts<'py>(
 }
 
 #[pyfunction]
-fn _parse_v3000_counts<'py>(
+fn parse_v3000_counts<'py>(
     py: Python<'py>,
     line: &Bound<'py, PyAny>,
 ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
@@ -149,7 +149,7 @@ fn _parse_v3000_counts<'py>(
 }
 
 #[pyfunction]
-fn _ctable_not_end_atom(py: Python<'_>, line: &Bound<'_, PyAny>) -> PyResult<bool> {
+fn ctable_not_end_atom(py: Python<'_>, line: &Bound<'_, PyAny>) -> PyResult<bool> {
     Ok(!py
         .get_type::<PyString>()
         .getattr("startswith")?
@@ -158,7 +158,7 @@ fn _ctable_not_end_atom(py: Python<'_>, line: &Bound<'_, PyAny>) -> PyResult<boo
 }
 
 #[pyfunction]
-fn _ctable_not_begin_bond(py: Python<'_>, line: &Bound<'_, PyAny>) -> PyResult<bool> {
+fn ctable_not_begin_bond(py: Python<'_>, line: &Bound<'_, PyAny>) -> PyResult<bool> {
     Ok(!py
         .get_type::<PyString>()
         .getattr("startswith")?
@@ -167,7 +167,7 @@ fn _ctable_not_begin_bond(py: Python<'_>, line: &Bound<'_, PyAny>) -> PyResult<b
 }
 
 #[pyfunction]
-fn _ctable_not_end_bond(py: Python<'_>, line: &Bound<'_, PyAny>) -> PyResult<bool> {
+fn ctable_not_end_bond(py: Python<'_>, line: &Bound<'_, PyAny>) -> PyResult<bool> {
     Ok(!py
         .get_type::<PyString>()
         .getattr("startswith")?
@@ -176,23 +176,23 @@ fn _ctable_not_end_bond(py: Python<'_>, line: &Bound<'_, PyAny>) -> PyResult<boo
 }
 
 #[pyfunction]
-fn _atomlines<'py>(py: Python<'py>, table: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+fn atomlines<'py>(py: Python<'py>, table: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     let itt = py.import("itertools")?;
     itt.getattr("takewhile")?.call1((
-        wrap_pyfunction!(_ctable_not_end_atom, py)?,
+        wrap_pyfunction!(ctable_not_end_atom, py)?,
         itt.getattr("islice")?
             .call1((table.getattr("lines")?, 7, py.None()))?,
     ))
 }
 
 #[pyfunction]
-fn _bondlines<'py>(py: Python<'py>, table: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+fn bondlines<'py>(py: Python<'py>, table: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     let itt = py.import("itertools")?;
     itt.getattr("takewhile")?.call1((
-        wrap_pyfunction!(_ctable_not_end_bond, py)?,
+        wrap_pyfunction!(ctable_not_end_bond, py)?,
         itt.getattr("islice")?.call1((
             itt.getattr("dropwhile")?.call1((
-                wrap_pyfunction!(_ctable_not_begin_bond, py)?,
+                wrap_pyfunction!(ctable_not_begin_bond, py)?,
                 table.getattr("lines")?,
             ))?,
             1,
@@ -202,14 +202,14 @@ fn _bondlines<'py>(py: Python<'py>, table: &Bound<'py, PyAny>) -> PyResult<Bound
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(_ctable_init, m)?)?;
-    m.add_function(wrap_pyfunction!(_parse_format, m)?)?;
-    m.add_function(wrap_pyfunction!(_parse_v2000_counts, m)?)?;
-    m.add_function(wrap_pyfunction!(_parse_v3000_counts, m)?)?;
-    m.add_function(wrap_pyfunction!(_ctable_not_end_atom, m)?)?;
-    m.add_function(wrap_pyfunction!(_ctable_not_begin_bond, m)?)?;
-    m.add_function(wrap_pyfunction!(_ctable_not_end_bond, m)?)?;
-    m.add_function(wrap_pyfunction!(_atomlines, m)?)?;
-    m.add_function(wrap_pyfunction!(_bondlines, m)?)?;
+    m.add_function(wrap_pyfunction!(ctable_init, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_format, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_v2000_counts, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_v3000_counts, m)?)?;
+    m.add_function(wrap_pyfunction!(ctable_not_end_atom, m)?)?;
+    m.add_function(wrap_pyfunction!(ctable_not_begin_bond, m)?)?;
+    m.add_function(wrap_pyfunction!(ctable_not_end_bond, m)?)?;
+    m.add_function(wrap_pyfunction!(atomlines, m)?)?;
+    m.add_function(wrap_pyfunction!(bondlines, m)?)?;
     Ok(())
 }
