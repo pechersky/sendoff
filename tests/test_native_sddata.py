@@ -3,29 +3,14 @@
 from __future__ import annotations
 
 import gc
-import importlib
-import inspect
 import weakref
 from collections import deque
-from typing import Any, Iterator, SupportsIndex
+from typing import Any, Iterator, SupportsIndex, TextIO, cast
 from unittest.mock import MagicMock
 
 import pytest
 
 from sendoff.sdblock import SDBlock
-
-native = importlib.import_module("sendoff.native")
-
-
-def test_native_sddata_private_signatures() -> None:
-    """Expose the approved parameter names on the real native callables."""
-    signatures = {
-        "records_iter": ("block",),
-        "write": ("block", "outh", "with_newlines"),
-        "append_record": ("block", "record_name", "value"),
-    }
-    for name, parameters in signatures.items():
-        assert tuple(inspect.signature(getattr(native, name)).parameters) == parameters
 
 
 def test_native_records_are_lazy_and_preserve_grouping_and_header_rules() -> None:
@@ -45,7 +30,7 @@ def test_native_records_are_lazy_and_preserve_grouping_and_header_rules() -> Non
             self.current = value
 
     block = Block()
-    iterator = getattr(native, "records_iter")(block)
+    iterator = iter(SDBlock.records(cast(SDBlock, block)))
     block.metadata = deque(
         [
             "ignored\n",
@@ -82,8 +67,8 @@ def test_native_records_keep_live_deque_errors_and_lazy_parse_failures() -> None
         def __init__(self, metadata: deque[Any]) -> None:
             self.metadata = metadata
 
-    malformed = getattr(native, "records_iter")(
-        Block(deque(["> missing brackets", "value"]))
+    malformed = iter(
+        SDBlock.records(cast(SDBlock, Block(deque(["> missing brackets", "value"]))))
     )
     with pytest.raises(IndexError, match="^list index out of range$"):
         next(malformed)
@@ -91,7 +76,7 @@ def test_native_records_keep_live_deque_errors_and_lazy_parse_failures() -> None
         next(malformed)
 
     metadata = deque(["> <one>", "value", "", "> <two>", "value", ""])
-    records = getattr(native, "records_iter")(Block(metadata))
+    records = iter(SDBlock.records(cast(SDBlock, Block(metadata))))
     assert next(records) == ("one", "value")
     metadata.append("changed")
     with pytest.raises(RuntimeError, match="^deque mutated during iteration$"):
@@ -101,7 +86,7 @@ def test_native_records_keep_live_deque_errors_and_lazy_parse_failures() -> None
         def strip(self) -> str:
             raise StopIteration("strip failed")
 
-    records = getattr(native, "records_iter")(Block(deque([StopOnStrip()])))
+    records = iter(SDBlock.records(cast(SDBlock, Block(deque([StopOnStrip()])))))
     with pytest.raises(
         RuntimeError, match="^generator raised StopIteration$"
     ) as caught:
@@ -120,7 +105,7 @@ def test_native_records_retain_block_through_final_yield() -> None:
 
     block = Block()
     block_ref = weakref.ref(block)
-    records = getattr(native, "records_iter")(block)
+    records = iter(SDBlock.records(cast(SDBlock, block)))
     del block
 
     assert next(records) == ("key", "value")
@@ -130,8 +115,8 @@ def test_native_records_retain_block_through_final_yield() -> None:
     assert block_ref() is None
 
 
-def test_native_records_cleanup_rejects_reentrant_finalizer_safely() -> None:
-    """Clear references on errors without panicking on finalizer reentry."""
+def test_native_records_cleanup_finishes_public_generator_on_error() -> None:
+    """Clear references on errors without panicking during public finalization."""
     records: Any = None
     reentrant_errors: list[str] = []
 
@@ -146,15 +131,15 @@ def test_native_records_cleanup_rejects_reentrant_finalizer_safely() -> None:
         def __del__(self) -> None:
             try:
                 next(records)
-            except ValueError as error:
-                reentrant_errors.append(str(error))
+            except StopIteration:
+                reentrant_errors.append("stopped")
 
     block = Block()
-    records = getattr(native, "records_iter")(block)
+    records = iter(SDBlock.records(cast(SDBlock, block)))
     del block
     with pytest.raises(ValueError, match="^strip failed$"):
         next(records)
-    assert reentrant_errors == ["generator already executing"]
+    assert reentrant_errors == ["stopped"]
     with pytest.raises(StopIteration):
         next(records)
 
@@ -196,9 +181,7 @@ def test_native_records_resume_after_inner_key_stop(
         "same-key": ["> <one>", "v", StopBool("stop"), "> <two>", "w"],
         "initial-key-stop": [StopBool("stop"), "> <one>", "w"],
     }
-    records = getattr(native, "records_iter")(
-        SDBlock("title", deque(), deque(metadata_by_case[case]))
-    )
+    records = SDBlock("title", deque(), deque(metadata_by_case[case])).records()
     assert list(records) == expected
 
 
@@ -217,15 +200,11 @@ def test_native_records_parse_exact_text_with_python_whitespace() -> None:
             ]
         ),
     )
-    assert list(getattr(native, "records_iter")(block)) == [
-        (" name\u00a0", "first\nsecond")
-    ]
+    assert list(block.records()) == [(" name\u00a0", "first\nsecond")]
 
     untouched_value = "".join(["plain", " value"])
     record = next(
-        getattr(native, "records_iter")(
-            SDBlock("title", deque(), deque(["> <key>", untouched_value]))
-        )
+        iter(SDBlock("title", deque(), deque(["> <key>", untouched_value])).records())
     )
     assert record == ("key", untouched_value)
     assert record[1] is untouched_value
@@ -265,8 +244,8 @@ def test_native_records_keep_lone_surrogate_text() -> None:
     """Retain Python's handling for strings Rust cannot encode as UTF-8."""
     surrogate = chr(0xD800)
     record = next(
-        getattr(native, "records_iter")(
-            SDBlock("title", deque(), deque([f"> <{surrogate}>", surrogate]))
+        iter(
+            SDBlock("title", deque(), deque([f"> <{surrogate}>", surrogate])).records()
         )
     )
     assert record == ("\ud800", "\ud800")
@@ -300,7 +279,6 @@ def test_native_records_preserve_falsey_string_groups() -> None:
     )
     expected = [("first", "one\ntwo"), ("normal", "value"), ("last", "tail")]
     assert list(block.records()) == expected
-    assert list(getattr(native, "records_iter")(block)) == expected
 
 
 def test_native_records_trace_the_block_and_live_metadata_iterator() -> None:
@@ -325,7 +303,7 @@ def test_native_records_trace_the_block_and_live_metadata_iterator() -> None:
     block = Block()
     metadata = Metadata(block)
     block.metadata = metadata
-    records = getattr(native, "records_iter")(block)
+    records = iter(SDBlock.records(cast(SDBlock, block)))
     block.records = records
     block_ref = weakref.ref(block)
     assert next(records) == ("key", "")
@@ -373,7 +351,7 @@ def test_native_write_preserves_call_order_granularity_and_live_truthiness() -> 
     writer.write.side_effect = write
     with_newlines = MagicMock()
     with_newlines.__bool__.side_effect = [True, False, True, False]
-    getattr(native, "write")(block, writer, with_newlines)
+    SDBlock.write(cast(SDBlock, block), cast(TextIO, writer), with_newlines)
     assert [call.args[0] for call in writer.write.call_args_list] == [
         "title",
         "\n",
@@ -421,7 +399,7 @@ def test_native_write_propagates_partial_writer_failures() -> None:
             return ["metadata"]
 
     with pytest.raises(OSError, match="^sink failed$"):
-        getattr(native, "write")(Block(), Writer(), True)
+        SDBlock.write(cast(SDBlock, Block()), cast(TextIO, Writer()), True)
     assert events == ["title", "\n", "mdl", "metadata", "raw"]
 
 
@@ -439,7 +417,7 @@ def test_native_write_handles_plain_string_newlines() -> None:
         deque(["raw", "already\n"]),
         deque(["metadata"]),
     )
-    getattr(native, "write")(block, Writer(), True)
+    block.write(cast(TextIO, Writer()), True)
     assert writes == [
         "title",
         "\n",
@@ -476,7 +454,7 @@ def test_native_append_keeps_formatting_and_three_append_side_effects() -> None:
             assert spec == ""
             return "formatted"
 
-    getattr(native, "append_record")(Block(), Name(), "value\ninner")
+    SDBlock.append_record(cast(SDBlock, Block()), cast(str, Name()), "value\ninner")
     assert events == [
         (1, "> <formatted>\n"),
         (2, "value\ninner\n"),
@@ -491,14 +469,14 @@ def test_native_append_keeps_formatting_and_three_append_side_effects() -> None:
     stored = StoredBlock()
     stored.metadata = metadata
     with pytest.raises(TypeError):
-        getattr(native, "append_record")(stored, "name", object())
+        SDBlock.append_record(cast(SDBlock, stored), "name", cast(str, object()))
     assert metadata == deque(["> <name>\n"])
 
     stored.metadata = deque()
-    getattr(native, "append_record")(stored, "naïve", "first\nsecond")
+    SDBlock.append_record(cast(SDBlock, stored), "naïve", "first\nsecond")
     assert stored.metadata == deque(["> <naïve>\n", "first\nsecond\n", "\n"])
 
     surrogate = chr(0xD800)
     stored.metadata = deque()
-    getattr(native, "append_record")(stored, surrogate, surrogate)
+    SDBlock.append_record(cast(SDBlock, stored), surrogate, surrogate)
     assert stored.metadata == deque(["> <\ud800>\n", "\ud800\n", "\n"])
