@@ -47,10 +47,7 @@ class SDBlock:
         Yields:
             str lines comprising the metadata, excluding the $$$$ delimiter
         """
-        for line in lines:
-            if line.startswith("$$$$"):
-                return
-            yield line
+        return native.parse_metadata(lines)
 
     @classmethod
     def from_block_lines(cls, lines: Iterable[str]) -> SDBlock:

@@ -16,3 +16,19 @@ where
     }
     Ok(mdl_lines)
 }
+
+/// Collect metadata lines before the first `$$$$` delimiter.
+pub fn parse_metadata<I, E>(lines: &mut I) -> Result<Vec<String>, E>
+where
+    I: Iterator<Item = Result<String, E>>,
+{
+    let mut metadata_lines = Vec::new();
+    for line in lines {
+        let line = line?;
+        if line.starts_with("$$$$") {
+            break;
+        }
+        metadata_lines.push(line);
+    }
+    Ok(metadata_lines)
+}
