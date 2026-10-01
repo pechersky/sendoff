@@ -12,6 +12,9 @@ mod native {
     use crate::python::ctable::PyCTable as CTable;
 
     #[pymodule_export]
+    use crate::python::sdblock::parse_mdl;
+
+    #[pymodule_export]
     use crate::python::sddata::{append_record, records};
 
     #[pymodule_export]

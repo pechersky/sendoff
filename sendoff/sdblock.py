@@ -34,10 +34,7 @@ class SDBlock:
         Yields:
             str lines comprising the MDL block
         """
-        for line in lines:
-            yield line
-            if line.startswith("M  END"):
-                return
+        return native.parse_mdl(lines)
 
     @classmethod
     def parse_metadata(cls, lines: Iterable[str]) -> Iterable[str]:
