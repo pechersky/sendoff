@@ -7,17 +7,12 @@ import itertools
 import sys
 from collections import deque
 from importlib import import_module
+from types import SimpleNamespace
 from typing import Any, Callable, Iterable, SupportsIndex, cast
 
 import pytest
 
-from sendoff.ctable import (
-    CTable,
-    CTableFormat,
-    IndicesDuplicateError,
-    IndicesMismatchError,
-    IndicesOutOfOrderError,
-)
+from sendoff.ctable import CTable, CTableFormat, IndicesDuplicateError
 from tests.compat_literals import V2000, V3000
 from tests.test_native_ctable import NativeTable
 
@@ -25,7 +20,7 @@ native = import_module("sendoff.native")
 valid_atoms: Callable[..., bool] = getattr(native, "valid_atom_indices")
 valid_bonds: Callable[..., bool] = getattr(native, "valid_bond_indices")
 renumber: Callable[..., None] = getattr(native, "renumber_ctable")
-errors = (IndicesMismatchError, IndicesOutOfOrderError, IndicesDuplicateError)
+errors = import_module("sendoff.ctable")
 
 
 class NativeIndices(NativeTable):
@@ -55,7 +50,7 @@ class NativeIndices(NativeTable):
 
     def renumber_indices(self) -> None:
         """Renumber through Rust without replacing cached count attributes."""
-        renumber(self, CTableFormat.V3000, IndicesDuplicateError)
+        renumber(self, CTableFormat.V3000, errors.IndicesDuplicateError)
 
 
 def outcome(table: CTable, operation: str, strict: object = False) -> object:
@@ -531,6 +526,12 @@ def test_original_failure_instance_and_atomicity(stage: str) -> None:
 
 def test_error_class_operands_and_enum_identity() -> None:
     """Use the passed original error classes and enum member only by identity."""
+    lookups: list[str] = []
+
+    class Namespace(SimpleNamespace):
+        def __getattribute__(self, name: str) -> Any:
+            lookups.append(name)
+            return super().__getattribute__(name)
 
     class Mismatch(Exception):
         """A caller-supplied mismatch type."""
@@ -542,17 +543,94 @@ def test_error_class_operands_and_enum_identity() -> None:
         """A caller-supplied duplicate type."""
 
     table = NativeIndices(V3000.splitlines())
-    supplied = (Mismatch, OutOfOrder, Duplicate)
+    supplied = Namespace(
+        IndicesMismatchError=Mismatch,
+        IndicesOutOfOrderError=OutOfOrder,
+        IndicesDuplicateError=Duplicate,
+    )
+    assert valid_atoms(table, False, CTableFormat.V3000, supplied)
+    assert valid_bonds(table, False, CTableFormat.V3000, supplied)
+    assert lookups == []
     table.lines[8] = table.lines[7]
     with pytest.raises(Duplicate, match="^atoms$"):
         valid_atoms(table, False, CTableFormat.V3000, supplied)
+    assert lookups == ["IndicesDuplicateError"]
+    lookups.clear()
     with pytest.raises(OutOfOrder, match="^atoms$"):
         valid_atoms(table, True, CTableFormat.V3000, supplied)
+    assert lookups == ["IndicesOutOfOrderError"]
+    lookups.clear()
     with pytest.raises(Duplicate, match="^atom index mapping in bond$"):
         renumber(table, CTableFormat.V3000, Duplicate)
+    assert lookups == []
     del table.lines[8]
     with pytest.raises(Mismatch, match="^fewer atom lines than count line$"):
         valid_atoms(table, False, CTableFormat.V3000, supplied)
+    assert lookups == ["IndicesMismatchError"]
+    lookups.clear()
     with pytest.raises(NotImplementedError) as caught:
         valid_atoms(table, False, "V3000", supplied)
     assert caught.value.args == ()
+    assert lookups == []
+
+
+@pytest.mark.parametrize("name", ["valid_atom_indices", "valid_bond_indices"])
+@pytest.mark.parametrize(
+    "error_name",
+    ["IndicesMismatchError", "IndicesOutOfOrderError", "IndicesDuplicateError"],
+)
+def test_live_module_class_lookup(
+    name: str, error_name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolve the current module class after index-processing callbacks.
+
+    Args:
+        name: Native validator to exercise.
+        error_name: Class replaced during the algorithm.
+        monkeypatch: Restore the existing public exception classes afterward.
+    """
+
+    class Changed(Exception):
+        """A dynamically replaced error class."""
+
+    class Strict:
+        def __bool__(self) -> bool:
+            monkeypatch.setattr(errors, error_name, Changed)
+            return error_name == "IndicesOutOfOrderError"
+
+    table = NativeIndices(V3000.splitlines())
+    atoms = name == "valid_atom_indices"
+    position = 7 if atoms else 11
+    if error_name == "IndicesMismatchError":
+        setattr(table, "num_atoms" if atoms else "num_bonds", 99)
+    elif error_name == "IndicesOutOfOrderError":
+        table.lines[position] = "M V30 9"
+    else:
+        table.lines.insert(position + 1, table.lines[position])
+    with pytest.raises(Changed):
+        getattr(native, name)(table, Strict(), CTableFormat.V3000, errors)
+
+
+@pytest.mark.parametrize("name", ["valid_atom_indices", "valid_bond_indices"])
+def test_error_namespace_getter_failure(name: str) -> None:
+    """Propagate an error lookup failure without wrapping or replacing lines.
+
+    Args:
+        name: Native validator to exercise.
+    """
+    failure = OSError("namespace lookup failed")
+    lookups: list[str] = []
+
+    class Namespace:
+        def __getattribute__(self, attribute: str) -> Any:
+            lookups.append(attribute)
+            raise failure
+
+    table = NativeIndices(V3000.splitlines())
+    original = table.lines
+    setattr(table, "num_atoms" if name == "valid_atom_indices" else "num_bonds", 99)
+    with pytest.raises(OSError) as caught:
+        getattr(native, name)(table, False, CTableFormat.V3000, Namespace())
+    assert caught.value is failure
+    assert lookups == ["IndicesMismatchError"]
+    assert table.lines is original

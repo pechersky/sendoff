@@ -75,10 +75,8 @@ enum Index {
     Large(Vec<u8>),
 }
 
-fn domain_error(errors: &Bound<'_, PyAny>, position: usize, message: &str) -> PyResult<PyErr> {
-    Ok(PyErr::from_value(
-        errors.get_item(position)?.call1((message,))?,
-    ))
+fn domain_error(errors: &Bound<'_, PyAny>, name: &str, message: &str) -> PyResult<PyErr> {
+    Ok(PyErr::from_value(errors.getattr(name)?.call1((message,))?))
 }
 
 fn validate(
@@ -104,23 +102,23 @@ fn validate(
         let line = current_line.insert(line?);
         let index = current_tokens.insert(Tokens::split(line)?).index(py, 2)?;
         if strict.is_truthy()? && index != Index::Small((position + 1) as i128) {
-            return Err(domain_error(errors, 1, label)?);
+            return Err(domain_error(errors, "IndicesOutOfOrderError", label)?);
         }
         if !seen.insert(index) {
-            return Err(domain_error(errors, 2, label)?);
+            return Err(domain_error(errors, "IndicesDuplicateError", label)?);
         }
     }
     if seen.len().into_pyobject(py)?.lt(table.getattr(count)?)? {
         return Err(domain_error(
             errors,
-            0,
+            "IndicesMismatchError",
             &format!("fewer {singular} lines than count line"),
         )?);
     }
     if seen.len().into_pyobject(py)?.gt(table.getattr(count)?)? {
         return Err(domain_error(
             errors,
-            0,
+            "IndicesMismatchError",
             &format!("more {singular} lines than count line"),
         )?);
     }
