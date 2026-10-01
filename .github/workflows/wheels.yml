@@ -127,24 +127,33 @@ jobs:
           set -euo pipefail
           python -m venv .cache/python311
           .cache/python311/bin/python -m pip install --no-index --no-deps wheelhouse/sendoff-*.whl
-          EXPECTED_PYTHON_MINOR=11 .cache/python311/bin/python -I tests/ci_wheel_smoke.py smoke
-      - name: Set up latest stable GIL-enabled CPython
+          .cache/python311/bin/python -m pip install --disable-pip-version-check 'pytest>=7.4.3,<10'
+          EXPECTED_PYTHON_MINOR=11 .cache/python311/bin/python -I tests/ci_wheel_smoke.py parity
+      - name: Set up CPython 3.12, 3.13 and latest stable
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.x"
+          python-version: |
+            3.12
+            3.13
+            3.x
           architecture: ${{ matrix.python-arch }}
           check-latest: true
           allow-prereleases: false
           freethreaded: false
-      - name: Install and smoke-test the same wheel on latest CPython
+      - name: Check the same wheel on newer supported interpreters
         shell: bash
         env:
           TMPDIR: ${{ github.workspace }}/.cache/wheel-tmp
         run: |
           set -euo pipefail
-          python -m venv .cache/python-latest
-          .cache/python-latest/bin/python -m pip install --no-index --no-deps wheelhouse/sendoff-*.whl
-          EXPECTED_PYTHON_MINOR=latest .cache/python-latest/bin/python -I tests/ci_wheel_smoke.py smoke
+          for interpreter in python3.12 python3.13 python; do
+            minor="$("$interpreter" -c 'import sys; print(sys.version_info.minor)')"
+            "$interpreter" -m venv ".cache/python$minor"
+            runner=".cache/python$minor/bin/python"
+            "$runner" -m pip install --no-index --no-deps wheelhouse/sendoff-*.whl
+            "$runner" -m pip install --disable-pip-version-check 'pytest>=7.4.3,<10'
+            EXPECTED_PYTHON_MINOR="$minor" "$runner" -I tests/ci_wheel_smoke.py parity
+          done
       - name: Build source distribution once
         if: matrix.artifact == 'linux-x86_64'
         shell: bash

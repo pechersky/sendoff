@@ -287,8 +287,9 @@ def test_native_framing_iterators_trace_retained_python_references(
 def test_native_read_sdf_lines_uses_default_open_and_rejects_handles() -> None:
     """Delegate path handling and text decoding to builtins.open."""
     read_lines = getattr(native, "read_sdf_lines")
-    expected = read_lines("LICENSE")
-    assert read_lines(Path("LICENSE")) == expected
-    assert read_lines(os.fsencode("LICENSE")) == expected
+    filename = Path(__file__).resolve().parents[1] / "LICENSE"
+    expected = read_lines(str(filename))
+    assert read_lines(filename) == expected
+    assert read_lines(os.fsencode(filename)) == expected
     with pytest.raises(TypeError, match="expected str, bytes or os.PathLike object"):
         read_lines(io.StringIO("contents"))
