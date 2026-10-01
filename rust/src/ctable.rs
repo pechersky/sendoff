@@ -1,9 +1,27 @@
+use crate::{exact_text, unicode_text, whitespace};
 use pyo3::prelude::*;
 use pyo3::{
-    exceptions::{PyTypeError, PyValueError},
+    exceptions::{PyIndexError, PyTypeError, PyValueError},
     ffi,
     types::{PyDict, PyList, PySlice, PyString, PyTuple},
 };
+
+fn strip<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    match exact_text(value)? {
+        Some(text) => Ok(PyString::new(value.py(), text.trim_matches(whitespace)).into_any()),
+        None => value.call_method0("strip"),
+    }
+}
+
+fn integer<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyAny>> {
+    if text.len() <= 40
+        && let Ok(value) = text.trim().parse::<i128>()
+    {
+        return Ok(value.into_pyobject(py)?.into_any());
+    }
+    // Unicode digits, underscores, overflow and diagnostics retain Python's int rules.
+    py.import("builtins")?.call_method1("int", (text,))
+}
 
 #[pyfunction]
 fn ctable_init(
@@ -22,9 +40,7 @@ fn ctable_init(
     let iterlines = builtins.call_method1("iter", (table.getattr("lines")?,))?;
     table.setattr(
         "title",
-        builtins
-            .call_method1("next", (&iterlines,))?
-            .call_method0("strip")?,
+        strip(&builtins.call_method1("next", (&iterlines,))?)?,
     )?;
     for name in ["source", "comment", "counts"] {
         table.setattr(name, builtins.call_method1("next", (&iterlines,))?)?;
@@ -39,15 +55,28 @@ fn ctable_init(
         builtins.call_method1("next", (&iterlines,))?;
         table.setattr(
             "counts",
-            builtins
-                .call_method1("next", (&iterlines,))?
-                .call_method0("strip")?,
+            strip(&builtins.call_method1("next", (&iterlines,))?)?,
         )?;
         "parse_v3000_counts"
     } else {
         "parse_v2000_counts"
     };
     let counts = table.getattr(parser)?.call1((table.getattr("counts")?,))?;
+    let (atoms, bonds) = unpack_counts(py, &counts)?;
+    drop(counts);
+    table.setattr("num_atoms", &atoms)?;
+    drop(atoms);
+    table.setattr("num_bonds", &bonds)?;
+    Ok(())
+}
+
+fn unpack_counts<'py>(
+    py: Python<'py>,
+    counts: &Bound<'py, PyAny>,
+) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+    if counts.is_exact_instance_of::<PyTuple>() && counts.len()? == 2 {
+        return Ok((counts.get_item(0)?, counts.get_item(1)?));
+    }
     let mut items = counts.try_iter().map_err(|error| {
         // CPython unpacking only replaces TypeError when no iteration protocol exists.
         let non_iterable = unsafe {
@@ -102,11 +131,7 @@ fn ctable_init(
         ));
     }
     drop(items);
-    drop(counts);
-    table.setattr("num_atoms", &atoms)?;
-    drop(atoms);
-    table.setattr("num_bonds", &bonds)?;
-    Ok(())
+    Ok((atoms, bonds))
 }
 
 #[pyfunction]
@@ -114,6 +139,13 @@ fn parse_format<'py>(
     line: &Bound<'py, PyAny>,
     formats: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
+    if let Some(text) = exact_text(line)? {
+        let format = text
+            .split(whitespace)
+            .rfind(|token| !token.is_empty())
+            .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
+        return formats.get_item(format);
+    }
     formats.get_item(
         line.call_method0("strip")?
             .call_method0("split")?
@@ -126,6 +158,20 @@ fn parse_v2000_counts<'py>(
     py: Python<'py>,
     line: &Bound<'py, PyAny>,
 ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+    if let Some(text) = exact_text(line)? {
+        let middle = text
+            .char_indices()
+            .nth(3)
+            .map_or(text.len(), |(offset, _)| offset);
+        let end = text
+            .char_indices()
+            .nth(6)
+            .map_or(text.len(), |(offset, _)| offset);
+        return Ok((
+            integer(py, &text[..middle])?,
+            integer(py, &text[middle..end])?,
+        ));
+    }
     let builtins = py.import("builtins")?;
     let atoms = builtins
         .getattr("int")?
@@ -141,6 +187,22 @@ fn parse_v3000_counts<'py>(
     py: Python<'py>,
     line: &Bound<'py, PyAny>,
 ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
+    if let Some(text) = exact_text(line)? {
+        let mut tokens = text.split(whitespace).filter(|token| !token.is_empty());
+        let atoms = integer(
+            py,
+            tokens
+                .nth(3)
+                .ok_or_else(|| PyIndexError::new_err("list index out of range"))?,
+        )?;
+        let bonds = integer(
+            py,
+            tokens
+                .next()
+                .ok_or_else(|| PyIndexError::new_err("list index out of range"))?,
+        )?;
+        return Ok((atoms, bonds));
+    }
     let tokens = line.call_method0("split")?;
     let builtins = py.import("builtins")?;
     let atoms = builtins.getattr("int")?.call1((tokens.get_item(3)?,))?;
@@ -150,28 +212,29 @@ fn parse_v3000_counts<'py>(
 
 #[pyfunction]
 fn ctable_not_end_atom(py: Python<'_>, line: &Bound<'_, PyAny>) -> PyResult<bool> {
-    Ok(!py
-        .get_type::<PyString>()
-        .getattr("startswith")?
-        .call1((line, "M  V30 END ATOM"))?
-        .is_truthy()?)
+    not_prefix(py, line, "M  V30 END ATOM")
 }
 
 #[pyfunction]
 fn ctable_not_begin_bond(py: Python<'_>, line: &Bound<'_, PyAny>) -> PyResult<bool> {
-    Ok(!py
-        .get_type::<PyString>()
-        .getattr("startswith")?
-        .call1((line, "M  V30 BEGIN BOND"))?
-        .is_truthy()?)
+    not_prefix(py, line, "M  V30 BEGIN BOND")
 }
 
 #[pyfunction]
 fn ctable_not_end_bond(py: Python<'_>, line: &Bound<'_, PyAny>) -> PyResult<bool> {
+    not_prefix(py, line, "M  V30 END BOND")
+}
+
+fn not_prefix(py: Python<'_>, line: &Bound<'_, PyAny>, prefix: &str) -> PyResult<bool> {
+    if line.is_instance_of::<PyString>()
+        && let Some(text) = unicode_text(line.cast::<PyString>()?)?
+    {
+        return Ok(!text.starts_with(prefix));
+    }
     Ok(!py
         .get_type::<PyString>()
         .getattr("startswith")?
-        .call1((line, "M  V30 END BOND"))?
+        .call1((line, prefix))?
         .is_truthy()?)
 }
 

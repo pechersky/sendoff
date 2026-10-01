@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import inspect
 import itertools
 import pickle
@@ -81,6 +82,83 @@ class NativeTable(CTable):
             Bond lines.
         """
         return bondlines(self)
+
+
+def test_plain_counts_and_indices_do_not_call_python_int(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Require ordinary counts and index processing to remain in Rust.
+
+    Args:
+        monkeypatch: temporary Python integer-constructor guard
+    """
+    table = CTable(V3000.splitlines())
+    table.num_atoms = len(list(table.atomlines()))
+    table.num_bonds = len(list(table.bondlines()))
+
+    def fail(value: object) -> int:
+        raise AssertionError("Python int called on normal input")
+
+    with monkeypatch.context() as boundary:
+        boundary.setattr(builtins, "int", fail)
+        counts = (
+            CTable.parse_v2000_counts("002001 V2000"),
+            CTable.parse_v3000_counts("M V30 COUNTS 2 1 0 0 0"),
+        )
+        table.valid_atom_indices()
+        table.valid_bond_indices()
+        table.renumber_indices()
+    assert counts == ((2, 1), (2, 1))
+    assert type(table.num_atoms) is type(table.num_bonds) is int
+
+
+@pytest.mark.parametrize(
+    "line,v3000",
+    [
+        ("002001 V2000", False),
+        ("1_22_3", False),
+        (" \u0661  \uff12 ", False),
+        ("\x1c1  2 ", False),
+        ("\ud80001 02", False),
+        ("", False),
+        ("001", False),
+        ("M V30 COUNTS 2 1", True),
+        ("M\x1cV30\x1dCOUNTS\x1e2\x1f1", True),
+        ("M V30 COUNTS 1_2 \u0663", True),
+        (f"M V30 COUNTS {2**140} {-2**160}", True),
+        ("M V30 COUNTS + 1", True),
+        ("M V30 COUNTS invalid", True),
+        ("M V30 COUNTS", True),
+        ("M V30 COUNTS 1", True),
+        ("M V30 COUNTS \ud800 1", True),
+    ],
+)
+def test_rust_counts_keep_python_integer_and_slice_semantics(
+    line: str, v3000: bool
+) -> None:
+    """Compare against independent Python expressions, including failures.
+
+    Args:
+        line: valid, malformed or Unicode counts line
+        v3000: whitespace-delimited rather than fixed-width counts
+    """
+    reference: Callable[[], Tuple[int, int]] = (
+        (lambda: (int(line.split()[3]), int(line.split()[4])))
+        if v3000
+        else (lambda: (int(line[:3]), int(line[3:6])))
+    )
+    parser = v3000_counts if v3000 else v2000_counts
+    implementations: tuple[Callable[[], Tuple[int, int]], ...] = (
+        reference,
+        lambda: parser(line),
+    )
+    outcomes: list[object] = []
+    for implementation in implementations:
+        try:
+            outcomes.append(implementation())
+        except (ValueError, IndexError) as error:
+            outcomes.append((type(error), error.args))
+    assert outcomes[0] == outcomes[1]
 
 
 def test_exports_and_keyword_arguments() -> None:
