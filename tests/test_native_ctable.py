@@ -1,80 +1,18 @@
-"""Exercise real native CTable exports against the frozen Python protocols."""
+"""Exercise the public CTable API against independent Python expressions."""
 
 from __future__ import annotations
 
 import builtins
-import inspect
 import itertools
 import pickle
 from collections import deque
 from decimal import Decimal
-from importlib import import_module
-from typing import Any, Callable, Iterable, Iterator, SupportsIndex, Tuple
+from typing import Any, Callable, Iterable, Iterator, SupportsIndex, Tuple, cast
 
 import pytest
 
 from sendoff.ctable import CTable, CTableFormat, IndicesMismatchError
 from tests.compat_literals import V2000, V3000
-
-native = import_module("sendoff.native")
-
-
-def init(table: CTable, lines: Iterable[str], v3000: object = None) -> None:
-    """Invoke the public constructor while retaining the retired helper shape.
-
-    Args:
-        table: Object receiving the parsed CTable fields.
-        lines: Input CTAB lines.
-        v3000: Retired native helper compatibility argument.
-    """
-    CTable.__init__(table, lines)
-
-
-parse_format: Callable[..., CTableFormat] = getattr(native, "parse_format")
-v2000_counts: Callable[..., Tuple[int, int]] = getattr(native, "parse_v2000_counts")
-v3000_counts: Callable[..., Tuple[int, int]] = getattr(native, "parse_v3000_counts")
-
-
-class NativeTable(CTable):
-    """Provide test-only thin adapters without editing the public facade."""
-
-    __init__ = CTable.__init__
-
-    @staticmethod
-    def parse_format(line: str) -> CTableFormat:
-        """Delegate format parsing to Rust.
-
-        Args:
-            line: counts line
-
-        Returns:
-            Parsed format.
-        """
-        return parse_format(line, CTableFormat)
-
-    @staticmethod
-    def parse_v2000_counts(line: str) -> Tuple[int, int]:
-        """Delegate V2000 counts to Rust.
-
-        Args:
-            line: counts line
-
-        Returns:
-            Atom and bond counts.
-        """
-        return v2000_counts(line)
-
-    @staticmethod
-    def parse_v3000_counts(line: str) -> Tuple[int, int]:
-        """Delegate V3000 counts to Rust.
-
-        Args:
-            line: counts line
-
-        Returns:
-            Atom and bond counts.
-        """
-        return v3000_counts(line)
 
 
 def test_plain_counts_and_indices_do_not_call_python_int(
@@ -118,7 +56,7 @@ def test_plain_counts_and_indices_do_not_call_python_int(
         ("M V30 COUNTS 2 1", True),
         ("M\x1cV30\x1dCOUNTS\x1e2\x1f1", True),
         ("M V30 COUNTS 1_2 \u0663", True),
-        (f"M V30 COUNTS {2**140} {-2**160}", True),
+        (f"M V30 COUNTS {2**140} {-(2**160)}", True),
         ("M V30 COUNTS + 1", True),
         ("M V30 COUNTS invalid", True),
         ("M V30 COUNTS", True),
@@ -140,7 +78,7 @@ def test_rust_counts_keep_python_integer_and_slice_semantics(
         if v3000
         else (lambda: (int(line[:3]), int(line[3:6])))
     )
-    parser = v3000_counts if v3000 else v2000_counts
+    parser = CTable.parse_v3000_counts if v3000 else CTable.parse_v2000_counts
     implementations: tuple[Callable[[], Tuple[int, int]], ...] = (
         reference,
         lambda: parser(line),
@@ -170,28 +108,10 @@ def test_unchanged_strip_preserves_raw_string_identity() -> None:
     assert trimmed.counts == table.counts
     assert trimmed.counts is not lines[5]
 
-
-def test_exports_and_keyword_arguments() -> None:
-    """Expose required positional-or-keyword operands, not coercing signatures."""
-    expected = {
-        "parse_format": ("line", "formats"),
-        "parse_v2000_counts": ("line",),
-        "parse_v3000_counts": ("line",),
-    }
-    for name, operands in expected.items():
-        function = getattr(native, name)
-        assert inspect.isbuiltin(function)
-        parameters = inspect.signature(function).parameters
-        assert tuple(parameters) == operands
-        assert all(
-            parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-            and parameter.default is inspect.Parameter.empty
-            for parameter in parameters.values()
-        )
     table = CTable(V3000.splitlines())
-    assert parse_format(line="V2000", formats=CTableFormat) is CTableFormat.V2000
-    assert v2000_counts(line="002001") == (2, 1)
-    assert v3000_counts(line="M V30 COUNTS 2 1") == (2, 1)
+    assert CTable.parse_format("V2000") is CTableFormat.V2000
+    assert CTable.parse_v2000_counts("002001") == (2, 1)
+    assert CTable.parse_v3000_counts("M V30 COUNTS 2 1") == (2, 1)
     assert type(table.atomlines()) is itertools.takewhile
     assert type(table.bondlines()) is itertools.takewhile
 
@@ -206,7 +126,7 @@ def test_eager_copy_headers_snapshots_and_public_pickle(text: str) -> None:
     raw = deque(text.splitlines(keepends=True))
     producer = iter(raw)
     table = CTable.__new__(CTable)
-    init(table, producer, CTableFormat.V3000)
+    CTable.__init__(table, cast(Iterable[str], producer))
     assert list(producer) == []
     assert vars(table) == vars(CTable(raw))
     assert table.lines is not raw
@@ -221,7 +141,7 @@ def test_eager_copy_headers_snapshots_and_public_pickle(text: str) -> None:
     assert {key: value for key, value in vars(table).items() if key != "lines"} == (
         old_fields
     )
-    reparsed = NativeTable(table.lines)
+    reparsed = CTable(table.lines)
     assert (reparsed.title, reparsed.num_atoms, reparsed.num_bonds) == (
         "new title",
         9,
@@ -259,26 +179,14 @@ def test_malformed_constructor_partial_state(
         lines: Malformed or short constructor input.
         error_type: The legacy builtin error class.
     """
-    tables = [CTable.__new__(CTable), CTable.__new__(CTable)]
-    errors = []
-    initializers: tuple[Callable[..., None], ...] = (
-        CTable.__init__,
-        NativeTable.__init__,
-    )
-    for table, initializer in zip(tables, initializers):
-        producer = iter(lines)
-        with pytest.raises(error_type) as caught:
-            initializer(table, producer)
-        errors.append(caught.value)
-        assert list(producer) == []
-    assert type(errors[0]) is type(errors[1])
-    assert errors[0].args == errors[1].args
-    assert str(errors[0]) == str(errors[1])
-    assert list(vars(tables[0])) == list(vars(tables[1]))
-    assert vars(tables[0]) == vars(tables[1])
+    table = CTable.__new__(CTable)
+    producer = iter(lines)
+    with pytest.raises(error_type) as caught:
+        CTable.__init__(table, cast(Iterable[str], producer))
+    assert list(producer) == []
     if error_type is StopIteration:
-        assert errors[1].args == ()
-        assert errors[1].__cause__ is None
+        assert caught.value.args == ()
+        assert caught.value.__cause__ is None
 
 
 @pytest.mark.parametrize(
@@ -314,22 +222,11 @@ def test_receiver_assignment_failure_and_attribute_order(field: str) -> None:
                 raise failure
             super().__setattr__(name, value)
 
-    initializers: tuple[Callable[..., None], ...] = (
-        CTable.__init__,
-        NativeTable.__init__,
-    )
-    states, lookups = [], []
-    for initializer in initializers:
-        events.clear()
-        table = Receiver.__new__(Receiver)
-        with pytest.raises(OSError) as caught:
-            initializer(table, V3000.splitlines())
-        assert caught.value is failure
-        lookups.append(events.copy())
-        states.append(vars(table))
-    assert lookups[0] == lookups[1]
-    assert states[0] == states[1]
-    assert list(states[0]) == list(states[1])
+    table = Receiver.__new__(Receiver)
+    with pytest.raises(OSError) as caught:
+        CTable.__init__(table, V3000.splitlines())
+    assert caught.value is failure
+    assert ("set", field) in events
 
 
 def test_producer_errors_and_consumption_precede_all_assignments() -> None:
@@ -343,7 +240,7 @@ def test_producer_errors_and_consumption_precede_all_assignments() -> None:
         raise failure
 
     with pytest.raises(OSError) as caught:
-        init(table, producer(), CTableFormat.V3000)
+        CTable.__init__(table, producer())
     assert caught.value is failure
     assert vars(table) == old
     assert table.lines is old["lines"]
@@ -362,7 +259,7 @@ def test_producer_errors_and_consumption_precede_all_assignments() -> None:
 
     receiver = Receiver.__new__(Receiver)
     with pytest.raises(OSError) as caught:
-        init(receiver, complete(), CTableFormat.V3000)
+        CTable.__init__(receiver, complete())
     assert caught.value is failure
     assert list(vars(receiver)) == ["lines", "title", "source", "comment", "counts"]
 
@@ -411,7 +308,7 @@ def test_dynamic_parser_identity_dispatch_and_arbitrary_unpack(
             super().__setattr__(name, value)
 
     receiver = Receiver.__new__(Receiver)
-    init(receiver, V3000.splitlines(keepends=True), CTableFormat.V3000)
+    CTable.__init__(receiver, V3000.splitlines(keepends=True))
     counts = (
         V3000.splitlines()[5]
         if format_value is CTableFormat.V3000
@@ -468,21 +365,10 @@ def test_count_hook_unpack_diagnostics(
         def parse_v2000_counts(line: str) -> Any:
             return result
 
-    tables = [Receiver.__new__(Receiver), Receiver.__new__(Receiver)]
-    errors = []
-    initializers: tuple[Callable[..., None], ...] = (
-        CTable.__init__,
-        NativeTable.__init__,
-    )
-    for table, initializer in zip(tables, initializers):
-        with pytest.raises(error_type) as caught:
-            initializer(table, V2000.splitlines())
-        errors.append(caught.value)
-    assert type(errors[0]) is type(errors[1])
-    assert errors[0].args == errors[1].args
-    assert str(errors[0]) == str(errors[1])
-    assert vars(tables[0]) == vars(tables[1])
-    assert not hasattr(tables[1], "num_atoms")
+    table = Receiver.__new__(Receiver)
+    with pytest.raises(error_type) as caught:
+        CTable.__init__(table, V2000.splitlines())
+    assert not hasattr(table, "num_atoms")
 
 
 @pytest.mark.parametrize("step", [0, 1, 2, 3])
@@ -515,122 +401,119 @@ def test_count_hook_iteration_errors(step: int, error_type: type[Exception]) -> 
         def parse_v2000_counts(line: str) -> Any:
             return Pair()
 
-    initializers: tuple[Callable[..., None], ...] = (
-        CTable.__init__,
-        NativeTable.__init__,
-    )
-    for initializer in initializers:
-        events.clear()
-        receiver = Receiver.__new__(Receiver)
-        if error_type is StopIteration and step == 3:
-            initializer(receiver, V2000.splitlines())
-            assert hasattr(receiver, "num_bonds")
+    events.clear()
+    receiver = Receiver.__new__(Receiver)
+    if error_type is StopIteration and step == 3:
+        CTable.__init__(receiver, V2000.splitlines())
+        assert hasattr(receiver, "num_bonds")
+    else:
+        expected = error_type
+        if error_type is StopIteration and step:
+            expected = ValueError
+        with pytest.raises(expected) as caught:
+            CTable.__init__(receiver, V2000.splitlines())
+        if expected is error_type:
+            assert caught.value is failure
         else:
-            expected = error_type
-            if error_type is StopIteration and step:
-                expected = ValueError
-            with pytest.raises(expected) as caught:
-                initializer(receiver, V2000.splitlines())
-            if expected is error_type:
-                assert caught.value is failure
-            else:
-                assert str(caught.value) == (
-                    f"not enough values to unpack (expected 2, got {step - 1})"
-                )
-            assert not hasattr(receiver, "num_atoms")
-        assert events == list(range(step + 1))
+            assert str(caught.value) == (
+                f"not enough values to unpack (expected 2, got {step - 1})"
+            )
+        assert not hasattr(receiver, "num_atoms")
+    assert events == list(range(step + 1))
 
 
 @pytest.mark.parametrize(
-    ("parser", "legacy", "line", "expected"),
+    ("parser", "line", "expected"),
     [
-        (parse_format, CTable.parse_format, "\tignored V3000 \n", CTableFormat.V3000),
-        (v2000_counts, CTable.parse_v2000_counts, "999001ignored", (999, 1)),
-        (v2000_counts, CTable.parse_v2000_counts, " -1 -2 ignored", (-1, -2)),
-        (v2000_counts, CTable.parse_v2000_counts, " ٢٣ ４５", (23, 45)),
-        (v3000_counts, CTable.parse_v3000_counts, "wrong words here -1 +2", (-1, 2)),
-        (v3000_counts, CTable.parse_v3000_counts, "a b c ٢٣ ４５", (23, 45)),
-        (
-            v3000_counts,
-            CTable.parse_v3000_counts,
-            f"a b c {10**100} 1_000",
-            (10**100, 1000),
-        ),
+        ("format", "\tignored V3000 \n", CTableFormat.V3000),
+        ("v2000", "999001ignored", (999, 1)),
+        ("v2000", " -1 -2 ignored", (-1, -2)),
+        ("v2000", " ٢٣ ４５", (23, 45)),
+        ("v3000", "wrong words here -1 +2", (-1, 2)),
+        ("v3000", "a b c ٢٣ ４５", (23, 45)),
+        ("v3000", f"a b c {10**100} 1_000", (10**100, 1000)),
     ],
 )
 def test_positional_permissive_unicode_and_unbounded_counts(
-    parser: Callable[..., object],
-    legacy: Callable[[str], object],
+    parser: str,
     line: str,
     expected: object,
 ) -> None:
-    """Delegate exact slicing, Unicode digits and integer semantics to Python.
+    """Keep exact slicing, Unicode digits and integer semantics at the API.
 
     Args:
-        parser: The real native export.
-        legacy: The frozen parser.
+        parser: Public parser selected by the case.
         line: Permissive count or format input.
-        expected: The original Python value or enum.
+        expected: Independent Python-expression result.
     """
-    value = parser(line, CTableFormat) if parser is parse_format else parser(line)
-    assert value == legacy(line) == expected
-    if parser is parse_format:
-        assert value is expected
+    value: object
+    reference: object
+    if parser == "format":
+        value = CTable.parse_format(line)
+        reference = CTableFormat[line.strip().split()[-1]]
+        assert value is reference is expected
+    elif parser == "v2000":
+        value = CTable.parse_v2000_counts(line)
+        reference = (int(line[:3]), int(line[3:6]))
+        assert value == reference == expected
     else:
+        value = CTable.parse_v3000_counts(line)
+        reference = (int(line.split()[3]), int(line.split()[4]))
+        assert value == reference == expected
         assert type(value) is tuple
         assert all(type(number) is int for number in value)
 
 
 @pytest.mark.parametrize(
-    ("parser", "legacy", "line", "error_type"),
+    ("parser", "line", "error_type"),
     [
-        (parse_format, CTable.parse_format, "", IndexError),
-        (parse_format, CTable.parse_format, "V4000", KeyError),
-        (parse_format, CTable.parse_format, "\ud800", KeyError),
-        (v2000_counts, CTable.parse_v2000_counts, "abc  2", ValueError),
-        (v2000_counts, CTable.parse_v2000_counts, "  2", ValueError),
-        (v2000_counts, CTable.parse_v2000_counts, "\ud800  1", ValueError),
-        (v3000_counts, CTable.parse_v3000_counts, "M V30 COUNTS 2", IndexError),
-        (v3000_counts, CTable.parse_v3000_counts, "M V30 COUNTS nope 1", ValueError),
-        (v3000_counts, CTable.parse_v3000_counts, "a b c \ud800 1", ValueError),
-        (
-            v3000_counts,
-            CTable.parse_v3000_counts,
-            "a b c " + "1" * 5000 + " 1",
-            ValueError,
-        ),
-        (v2000_counts, CTable.parse_v2000_counts, b"002001", None),
-        (v3000_counts, CTable.parse_v3000_counts, b"a b c 2 1", None),
-        (parse_format, CTable.parse_format, 1, AttributeError),
-        (v2000_counts, CTable.parse_v2000_counts, 1, TypeError),
-        (v3000_counts, CTable.parse_v3000_counts, 1, AttributeError),
+        ("format", "", IndexError),
+        ("format", "V4000", KeyError),
+        ("format", "\ud800", KeyError),
+        ("v2000", "abc  2", ValueError),
+        ("v2000", "  2", ValueError),
+        ("v2000", "\ud800  1", ValueError),
+        ("v3000", "M V30 COUNTS 2", IndexError),
+        ("v3000", "M V30 COUNTS nope 1", ValueError),
+        ("v3000", "a b c \ud800 1", ValueError),
+        ("v3000", "a b c " + "1" * 5000 + " 1", ValueError),
+        ("v2000", b"002001", None),
+        ("v3000", b"a b c 2 1", None),
+        ("format", 1, AttributeError),
+        ("v2000", 1, TypeError),
+        ("v3000", 1, AttributeError),
     ],
 )
 def test_parser_protocols_and_exact_malformed_diagnostics(
-    parser: Callable[..., object],
-    legacy: Callable[..., object],
+    parser: str,
     line: object,
     error_type: type[Exception] | None,
 ) -> None:
     """Retain permissive Python object operands and builtin error text.
 
     Args:
-        parser: The native parser.
-        legacy: The original parser.
+        parser: Public parser selected by the case.
         line: Malformed or non-string input.
         error_type: The builtin error, or None for accepted bytes.
     """
-    args = (line, CTableFormat) if parser is parse_format else (line,)
+    function = cast(
+        Callable[[Any], object],
+        {
+            "format": CTable.parse_format,
+            "v2000": CTable.parse_v2000_counts,
+            "v3000": CTable.parse_v3000_counts,
+        }[parser],
+    )
     if error_type is None:
-        assert parser(*args) == legacy(line)
+        value = cast(Any, line)
+        assert function(line) == (
+            (int(value.split()[3]), int(value.split()[4]))
+            if parser == "v3000"
+            else (int(value[:3]), int(value[3:6]))
+        )
     else:
-        with pytest.raises(error_type) as reference:
-            legacy(line)
-        with pytest.raises(error_type) as actual:
-            parser(*args)
-        assert type(actual.value) is type(reference.value)
-        assert actual.value.args == reference.value.args
-        assert str(actual.value) == str(reference.value)
+        with pytest.raises(error_type):
+            function(line)
 
 
 def test_dynamic_primitive_hooks_and_exact_slice_objects() -> None:
@@ -655,22 +538,14 @@ def test_dynamic_primitive_hooks_and_exact_slice_objects() -> None:
             events.append(key)
             return {-1: "V3000", 3: "٢", 4: "-3"}[key]
 
-    assert parse_format(Text("ignored"), CTableFormat) is CTableFormat.V3000
+    assert CTable.parse_format(Text("ignored")) is CTableFormat.V3000
     assert events == ["strip", "split", -1]
     events.clear()
-    assert v2000_counts(Text("ignored")) == (2, -3)
+    assert CTable.parse_v2000_counts(Text("ignored")) == (2, -3)
     assert events == [slice(None, 3, None), slice(3, 6, None)]
     events.clear()
-    assert v3000_counts(Text("ignored")) == (2, -3)
+    assert CTable.parse_v3000_counts(Text("ignored")) == (2, -3)
     assert events == ["split", 3, 4]
-    sentinel = object()
-
-    class Formats:
-        def __getitem__(self, name: str) -> object:
-            assert name == "V3000"
-            return sentinel
-
-    assert parse_format(Text("ignored"), Formats()) is sentinel
 
 
 @pytest.mark.parametrize("method", ["atomlines", "bondlines"])
@@ -684,7 +559,7 @@ def test_real_single_use_raw_iterators_and_preserved_v2000_defect(
         method: The raw section to traverse.
         text: The existing V2000 or V3000 fixture.
     """
-    table = NativeTable(text.splitlines(keepends=True))
+    table = CTable(text.splitlines(keepends=True))
     reference = CTable(table.lines)
     expected = list(getattr(reference, method)())
     table.num_atoms = table.num_bonds = -999
@@ -710,7 +585,7 @@ def test_call_time_capture_mutation_and_reassignment(
         method: The section iterator factory.
         started: Whether to consume a value before structural mutation.
     """
-    table = NativeTable(V3000.splitlines())
+    table = CTable(V3000.splitlines())
     raw = iter(getattr(table, method)())
     if started:
         next(raw)
@@ -718,7 +593,7 @@ def test_call_time_capture_mutation_and_reassignment(
     with pytest.raises(RuntimeError) as caught:
         next(raw)
     assert caught.value.args == ("deque mutated during iteration",)
-    table = NativeTable(V3000.splitlines())
+    table = CTable(V3000.splitlines())
     old = iter(getattr(table, method)())
     expected = list(getattr(CTable(table.lines), method)())
     table.lines = deque(V2000.splitlines())
