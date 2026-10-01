@@ -106,6 +106,72 @@ class CTable:
             If all the checks pass, return True.
         """
 
+@final
+class SDBlock:
+    """
+    Handle a single molecule block from an SD file.
+    """
+
+    def append_record(self, /, record_name: str, value: str) -> None:
+        """
+        Append a field and value to the SD data record.
+
+        Args:
+            record_name: field name
+            value: field value, with no terminating newline
+        """
+    def ctable(self, /) -> CTable:
+        """
+        Parse out the underlying CTable object from the SDBlock.
+        """
+    @staticmethod
+    def from_lines(lines: Any) -> Any:
+        """
+        Parse in SDBlocks from a sequence of lines.
+
+        Args:
+            lines: an Iterable of str that optionally have whitespace that is stripped,
+                likely separated by the $$$$ SD delimiter
+
+        Returns:
+            An iterator of SDBlocks parsed in from the lines
+        """
+    def num_atoms(self, /) -> int:
+        """
+        Get the number of atoms indicated in the MDL block.
+        """
+    def num_bonds(self, /) -> int:
+        """
+        Get the number of bonds indicated in the MDL block.
+        """
+    def records(self, /) -> list[tuple[str, str]]:
+        """
+        Generate SD metadata records one by one.
+
+        Returns:
+            Tuples of record name and value. Multiline values include newlines.
+        """
+    def renumber_indices(self, /) -> None:
+        """
+        Renumber atom and bond indices to be 1-indexed and in order.
+
+        Utilizes the underlying CTable's renumbering and replaces this object's MDL lines.
+        """
+    @property
+    def title(self, /) -> str:
+        """
+        Return the parsed molecule title.
+        """
+    def write(self, /, outh: Any, with_newlines: bool = True) -> None:
+        """
+        Write an SDBlock to a file-like handle.
+
+        Args:
+            outh: file-like handle, such as what is returned by open(..., "w")
+            with_newlines: each line is written with a trailing "\\n".
+                The newline character is appended only if it was not in the line.
+        """
+
 def append_record(record_name: str, value: str) -> tuple[str, str, str]: ...
 def parse_mdl(lines: Any) -> list[str]: ...
 def parse_metadata(lines: Any) -> list[str]: ...

@@ -30,18 +30,7 @@ impl PyCTable {
             .try_iter()?
             .map(|line| line?.extract::<String>())
             .collect::<PyResult<Vec<_>>>()?;
-        let inner = ctable::CTable::parse(lines).map_err(|error| match error {
-            ctable::CTableParseError::UnknownFormat(token) => {
-                pyo3::exceptions::PyKeyError::new_err(token)
-            }
-            ctable::CTableParseError::InvalidV2000Counts(error) => {
-                pyo3::exceptions::PyValueError::new_err(error.to_string())
-            }
-            ctable::CTableParseError::InvalidV3000Counts => {
-                pyo3::exceptions::PyValueError::new_err("invalid V3000 counts")
-            }
-        })?;
-        Ok(Self { inner })
+        Self::from_lines(lines)
     }
 
     /// Return a copy of the original connection-table lines.
@@ -177,6 +166,39 @@ impl PyCTable {
                 "unknown renumbering result: {error}"
             ))),
         }
+    }
+}
+
+impl PyCTable {
+    pub(crate) fn from_lines(lines: Vec<String>) -> PyResult<Self> {
+        let inner = ctable::CTable::parse(lines).map_err(|error| match error {
+            ctable::CTableParseError::UnknownFormat(token) => {
+                pyo3::exceptions::PyKeyError::new_err(token)
+            }
+            ctable::CTableParseError::InvalidV2000Counts(error) => {
+                pyo3::exceptions::PyValueError::new_err(error.to_string())
+            }
+            ctable::CTableParseError::InvalidV3000Counts => {
+                pyo3::exceptions::PyValueError::new_err("invalid V3000 counts")
+            }
+        })?;
+        Ok(Self { inner })
+    }
+
+    pub(crate) fn num_atoms_value(&self) -> i64 {
+        self.inner.num_atoms
+    }
+
+    pub(crate) fn num_bonds_value(&self) -> i64 {
+        self.inner.num_bonds
+    }
+
+    pub(crate) fn lines_after_title(&self) -> Vec<String> {
+        self.inner.lines[1..].to_vec()
+    }
+
+    pub(crate) fn renumber_indices_for_block(&mut self, py: Python<'_>) -> PyResult<()> {
+        self.renumber_indices(py)
     }
 }
 
