@@ -7,7 +7,7 @@ use pyo3::{
 };
 
 use super::framing::generator_error;
-use crate::core::sddata::{self, Input, JoinedValue, Line, Name, RecordsState, Value};
+use crate::core::sddata::{self, Head, Input, JoinedValue, Line, Name, RecordsState, Value};
 
 #[pyclass(name = "RecordsIter", module = "sendoff.native")]
 struct RecordsIter {
@@ -15,8 +15,7 @@ struct RecordsIter {
     iterator: Option<Py<PyAny>>,
     raw_line: Option<Py<PyAny>>,
     line: Option<Py<PyAny>>,
-    core: RecordsState,
-    objects: Vec<Option<Py<PyAny>>>,
+    core: RecordsState<Py<PyAny>>,
     done: bool,
     running: bool,
 }
@@ -28,31 +27,7 @@ impl RecordsIter {
         self.raw_line = None;
         self.line = None;
         self.core = RecordsState::new();
-        self.objects.clear();
         self.done = true;
-    }
-
-    fn store(&mut self, value: Py<PyAny>) -> usize {
-        let source = self.objects.len();
-        self.objects.push(Some(value));
-        source
-    }
-
-    fn source(&self, py: Python<'_>, source: usize) -> PyResult<Py<PyAny>> {
-        self.objects
-            .get(source)
-            .and_then(Option::as_ref)
-            .map(|value| value.clone_ref(py))
-            .ok_or_else(|| PyRuntimeError::new_err("native record source was cleared"))
-    }
-
-    fn retain_pending(&mut self) {
-        let pending = self.core.pending_sources();
-        for (source, value) in self.objects.iter_mut().enumerate() {
-            if Some(source) != pending.0 && Some(source) != pending.1 {
-                *value = None;
-            }
-        }
     }
 }
 
@@ -90,8 +65,8 @@ impl RecordsIter {
         visit.call(&self.iterator)?;
         visit.call(&self.raw_line)?;
         visit.call(&self.line)?;
-        for value in &self.objects {
-            visit.call(value)?;
+        if let Some(line) = self.core.pending() {
+            visit.call(&line.value.payload)?;
         }
         Ok(())
     }
@@ -135,7 +110,7 @@ fn next_item(py: Python<'_>, iterator: &Py<PyAny>) -> PyResult<Option<Py<PyAny>>
     }
 }
 
-fn next_record_input(slf: &Bound<'_, RecordsIter>) -> PyResult<Input> {
+fn next_record_input(slf: &Bound<'_, RecordsIter>) -> PyResult<Input<Py<PyAny>>> {
     let py = slf.py();
     let iterator = source_iterator(slf)?;
     let Some(raw_line) = next_item(py, &iterator)? else {
@@ -154,13 +129,12 @@ fn next_record_input(slf: &Bound<'_, RecordsIter>) -> PyResult<Input> {
             )
         }
     } else {
-        (
-            raw_bound
-                .call_method0("strip")
-                .map_err(|error| generator_error(py, error))?
-                .unbind(),
-            None,
-        )
+        let line = raw_bound
+            .call_method0("strip")
+            .map_err(|error| generator_error(py, error))?
+            .unbind();
+        let text = super::exact_text(line.bind(py))?.map(str::to_owned);
+        (line, text)
     };
     slf.borrow_mut().line = Some(line.clone_ref(py));
     let key = match text.as_deref() {
@@ -173,48 +147,43 @@ fn next_record_input(slf: &Bound<'_, RecordsIter>) -> PyResult<Input> {
             Err(error) => return Err(error),
         },
     };
-    let header = match text.as_deref() {
-        Some(text) => sddata::is_header(text),
-        None => {
-            let result = line
-                .bind(py)
-                .call_method1("startswith", ("> ",))
-                .map_err(|error| generator_error(py, error))?;
-            result
-                .is_truthy()
-                .map_err(|error| generator_error(py, error))?
-        }
-    };
-    let source = {
-        let mut state = slf.borrow_mut();
-        state.store(line)
-    };
-    let name = if header {
-        if let Some(text) = text.as_deref() {
-            let name = sddata::record_name(text)
-                .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
-            Some(Name::Text(name.to_owned()))
-        } else {
-            let name = python_record_name(
-                py,
-                &slf.borrow()
-                    .line
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("native iterator state was cleared"))?
-                    .clone_ref(py),
-            )?;
-            let source = slf.borrow_mut().store(name);
-            Some(Name::Source(source))
-        }
-    } else {
-        None
-    };
     Ok(Input::Item(Line {
         key,
-        header,
-        name,
-        value: Value { source, text },
+        value: Value {
+            payload: line,
+            text,
+        },
     }))
+}
+
+fn header_for_line(
+    slf: &Bound<'_, RecordsIter>,
+    line: &Line<Py<PyAny>>,
+) -> PyResult<Head<Py<PyAny>>> {
+    let py = slf.py();
+    let Some(text) = line.value.text.as_deref() else {
+        let result = line
+            .value
+            .payload
+            .bind(py)
+            .call_method1("startswith", ("> ",))
+            .map_err(|error| generator_error(py, error))?;
+        if !result
+            .is_truthy()
+            .map_err(|error| generator_error(py, error))?
+        {
+            return Ok(Head::No);
+        }
+        return python_record_name(py, &line.value.payload)
+            .map(Name::Source)
+            .map(Head::Yes);
+    };
+    if !sddata::is_header(text) {
+        return Ok(Head::No);
+    }
+    let name = sddata::record_name(text)
+        .ok_or_else(|| PyIndexError::new_err("list index out of range"))?;
+    Ok(Head::Yes(Name::Text(name.to_owned())))
 }
 
 fn python_record_name(py: Python<'_>, line: &Py<PyAny>) -> PyResult<Py<PyAny>> {
@@ -249,7 +218,7 @@ fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
         let mut state = slf.borrow_mut();
         std::mem::take(&mut state.core)
     };
-    let result = core.next_record(|| next_record_input(slf));
+    let result = core.next_record(|| next_record_input(slf), |line| header_for_line(slf, line));
     {
         let mut state = slf.borrow_mut();
         state.core = core;
@@ -260,18 +229,17 @@ fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
         Err(error) => return Err(error),
     };
     let (name, value) = {
-        let state = slf.borrow();
         let name = match record.name {
             Name::Text(name) => PyString::new(py, &name).into_any().unbind(),
-            Name::Source(source) => state.source(py, source)?,
+            Name::Source(source) => source,
         };
         let value = match record.value {
-            JoinedValue::Source(source) => state.source(py, source)?,
+            JoinedValue::Source(source) => source,
             JoinedValue::Text(value) => PyString::new(py, &value).into_any().unbind(),
             JoinedValue::Fallback(sources) => {
                 let values = PyList::empty(py);
                 for source in sources {
-                    values.append(state.source(py, source)?.bind(py))?;
+                    values.append(source.bind(py))?;
                 }
                 PyString::new(py, "\n")
                     .call_method1("join", (values,))
@@ -280,10 +248,6 @@ fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
         };
         (name, value)
     };
-    {
-        let mut state = slf.borrow_mut();
-        state.retain_pending();
-    }
     PyTuple::new(py, [name, value])
         .map(Bound::into_any)
         .map(Bound::unbind)
@@ -300,7 +264,6 @@ fn records_iter(block: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
             raw_line: None,
             line: None,
             core: RecordsState::new(),
-            objects: Vec::new(),
             done: false,
             running: false,
         },

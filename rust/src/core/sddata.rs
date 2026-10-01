@@ -29,47 +29,50 @@ pub fn needs_newline(text: &str) -> bool {
     !text.ends_with('\n')
 }
 
-pub struct Line {
-    pub key: bool,
-    pub header: bool,
-    pub name: Option<Name>,
-    pub value: Value,
-}
-
-pub struct Value {
-    pub source: usize,
+pub struct Value<T> {
+    pub payload: T,
     pub text: Option<String>,
 }
 
-pub enum Name {
-    Source(usize),
+pub struct Line<T> {
+    pub key: bool,
+    pub value: Value<T>,
+}
+
+pub enum Name<T> {
+    Source(T),
     Text(String),
 }
 
-pub enum Input {
-    Item(Line),
+pub enum Input<T> {
+    Item(Line<T>),
     End,
     KeyStop,
 }
 
-pub enum JoinedValue {
-    Source(usize),
+pub enum Head<T> {
+    No,
+    Yes(Name<T>),
+}
+
+pub enum JoinedValue<T> {
+    Source(T),
     Text(String),
-    Fallback(Vec<usize>),
+    Fallback(Vec<T>),
 }
 
-pub struct Record {
-    pub name: Name,
-    pub value: JoinedValue,
+pub struct Record<T> {
+    pub name: Name<T>,
+    pub value: JoinedValue<T>,
 }
 
-pub struct RecordsState {
-    pending: Option<Line>,
+pub struct RecordsState<T> {
+    pending: Option<Line<T>>,
     drain_key: Option<bool>,
     exhausted: bool,
 }
 
-impl RecordsState {
+impl<T> RecordsState<T> {
     pub const fn new() -> Self {
         Self {
             pending: None,
@@ -78,19 +81,14 @@ impl RecordsState {
         }
     }
 
-    pub fn pending_sources(&self) -> (Option<usize>, Option<usize>) {
-        self.pending.as_ref().map_or((None, None), |line| {
-            let name = match &line.name {
-                Some(Name::Source(source)) => Some(*source),
-                _ => None,
-            };
-            (Some(line.value.source), name)
-        })
+    pub fn pending(&self) -> Option<&Line<T>> {
+        self.pending.as_ref()
     }
 
-    pub fn next_record<E, F>(&mut self, mut next: F) -> Result<Option<Record>, E>
+    pub fn next_record<E, F, H>(&mut self, mut next: F, mut head: H) -> Result<Option<Record<T>>, E>
     where
-        F: FnMut() -> Result<Input, E>,
+        F: FnMut() -> Result<Input<T>, E>,
+        H: FnMut(&Line<T>) -> Result<Head<T>, E>,
     {
         if self.exhausted {
             return Ok(None);
@@ -116,17 +114,17 @@ impl RecordsState {
                 }
             };
 
-            if !line.header {
-                if !self.drain_group(line.key, true, &mut next)? {
-                    self.exhausted = true;
-                    return Ok(None);
+            let name = match head(&line)? {
+                Head::No => {
+                    if !self.drain_group(line.key, true, &mut next)? {
+                        self.exhausted = true;
+                        return Ok(None);
+                    }
+                    continue;
                 }
-                continue;
-            }
+                Head::Yes(name) => name,
+            };
 
-            let name = line
-                .name
-                .expect("header names are prepared at the boundary");
             let key = line.key;
             let mut values = Vec::new();
             loop {
@@ -150,14 +148,14 @@ impl RecordsState {
             }
             return Ok(Some(Record {
                 name,
-                value: join_values(&values),
+                value: join_values(values),
             }));
         }
     }
 
     fn drain_group<E, F>(&mut self, key: bool, key_stop_ends: bool, next: &mut F) -> Result<bool, E>
     where
-        F: FnMut() -> Result<Input, E>,
+        F: FnMut() -> Result<Input<T>, E>,
     {
         loop {
             match next()? {
@@ -174,26 +172,36 @@ impl RecordsState {
     }
 }
 
-impl Default for RecordsState {
+impl<T> Default for RecordsState<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-fn join_values(values: &[Value]) -> JoinedValue {
+fn join_values<T>(values: Vec<Value<T>>) -> JoinedValue<T> {
     if values.len() == 1 && values[0].text.is_some() {
-        return JoinedValue::Source(values[0].source);
+        let mut values = values.into_iter();
+        let value = match values.next() {
+            Some(value) => value,
+            None => unreachable!("one value was checked above"),
+        };
+        return JoinedValue::Source(value.payload);
     }
 
     let mut joined = String::new();
-    for (index, value) in values.iter().enumerate() {
-        let Some(text) = value.text.as_deref() else {
-            return JoinedValue::Fallback(values.iter().map(|value| value.source).collect());
+    let mut first = true;
+    let mut values = values.into_iter();
+    while let Some(value) = values.next() {
+        let Some(text) = value.text else {
+            let mut fallback = vec![value.payload];
+            fallback.extend(values.map(|value| value.payload));
+            return JoinedValue::Fallback(fallback);
         };
-        if index > 0 {
+        if !first {
             joined.push('\n');
         }
-        joined.push_str(text);
+        first = false;
+        joined.push_str(&text);
     }
     JoinedValue::Text(joined)
 }

@@ -7,7 +7,7 @@ import importlib
 import inspect
 import weakref
 from collections import deque
-from typing import Any, Iterator
+from typing import Any, Iterator, SupportsIndex
 from unittest.mock import MagicMock
 
 import pytest
@@ -229,6 +229,36 @@ def test_native_records_parse_exact_text_with_python_whitespace() -> None:
     )
     assert record == ("key", untouched_value)
     assert record[1] is untouched_value
+
+
+def test_native_records_only_parse_headers_at_group_heads() -> None:
+    """Treat header-looking values as values without calling their protocols."""
+
+    class Value(str):
+        def strip(self, chars: str | None = None) -> str:
+            return self
+
+        def startswith(
+            self,
+            prefix: str | tuple[str, ...],
+            start: SupportsIndex | None = None,
+            end: SupportsIndex | None = None,
+        ) -> bool:
+            raise AssertionError("value startswith was called")
+
+    block = SDBlock(
+        "",
+        deque(),
+        deque(["> <key>\n", Value("> malformed value\n"), "\n"]),
+    )
+    assert list(block.records()) == [("key", "> malformed value\n")]
+
+    block = SDBlock(
+        "",
+        deque(),
+        deque(["> <key>", Value("value"), ""]),
+    )
+    assert list(block.records()) == [("key", "value")]
 
 
 def test_native_records_keep_lone_surrogate_text() -> None:
