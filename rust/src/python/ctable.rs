@@ -31,11 +31,19 @@ fn bond_line_range(lines: Vec<String>) -> (usize, usize) {
     ctable::bond_line_range(&lines)
 }
 
+#[pyfunction]
+fn validate_atom_indices(lines: Vec<String>, num_atoms: usize, strict: bool) -> Option<String> {
+    ctable::validate_atom_indices(&lines, num_atoms, strict)
+        .err()
+        .map(str::to_owned)
+}
+
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(parse_v2000_counts, module)?)?;
     module.add_function(wrap_pyfunction!(parse_v3000_counts, module)?)?;
     module.add_function(wrap_pyfunction!(parse_format, module)?)?;
     module.add_function(wrap_pyfunction!(atom_line_range, module)?)?;
     module.add_function(wrap_pyfunction!(bond_line_range, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_atom_indices, module)?)?;
     Ok(())
 }

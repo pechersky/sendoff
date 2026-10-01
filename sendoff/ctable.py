@@ -189,19 +189,20 @@ class CTable:
         """
         if self.format is not CTableFormat.V3000:
             raise NotImplementedError
-        seen_indices: set[int] = set()
-        for line_ix, line in enumerate(self.atomlines()):
-            sline = line.split()
-            atom_ix = int(sline[2])
-            if strict and line_ix + 1 != atom_ix:
+        error = native.validate_atom_indices(list(self.lines), self.num_atoms, strict)
+        match error:
+            case None:
+                return True
+            case "out_of_order":
                 raise IndicesOutOfOrderError("atoms")
-            if atom_ix in seen_indices:
+            case "duplicate":
                 raise IndicesDuplicateError("atoms")
-            seen_indices.add(atom_ix)
-        if len(seen_indices) < self.num_atoms:
-            raise IndicesMismatchError("fewer atom lines than count line")
-        if len(seen_indices) > self.num_atoms:
-            raise IndicesMismatchError("more atom lines than count line")
+            case "fewer":
+                raise IndicesMismatchError("fewer atom lines than count line")
+            case "more":
+                raise IndicesMismatchError("more atom lines than count line")
+            case _:
+                raise RuntimeError(f"unknown atom index validation result: {error}")
         return True
 
     def valid_bond_indices(self, strict: bool = False) -> bool:

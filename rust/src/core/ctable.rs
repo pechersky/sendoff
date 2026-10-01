@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::num::ParseIntError;
 
 pub fn parse_v2000_counts(line: &str) -> Result<(i64, i64), ParseIntError> {
@@ -54,4 +55,34 @@ pub fn bond_line_range(lines: &[String]) -> (usize, usize) {
         .find_map(|(index, line)| line.starts_with("M  V30 END BOND").then_some(index))
         .unwrap_or(lines.len());
     (start, end)
+}
+
+pub fn validate_atom_indices(
+    lines: &[String],
+    num_atoms: usize,
+    strict: bool,
+) -> Result<(), &'static str> {
+    let (start, end) = atom_line_range(lines);
+    let mut seen_indices = HashSet::new();
+    for (line_index, line) in lines[start..end].iter().enumerate() {
+        let atom_index = line
+            .split_whitespace()
+            .nth(2)
+            .expect("atom line has no index")
+            .parse::<i64>()
+            .expect("atom index is not an integer");
+        if strict && (line_index + 1) as i64 != atom_index {
+            return Err("out_of_order");
+        }
+        if !seen_indices.insert(atom_index) {
+            return Err("duplicate");
+        }
+    }
+    if seen_indices.len() < num_atoms {
+        return Err("fewer");
+    }
+    if seen_indices.len() > num_atoms {
+        return Err("more");
+    }
+    Ok(())
 }
