@@ -8,6 +8,13 @@ interfaces remain compatible. There is no supported pure-Python fallback.
 Existing documented parser defects remain unchanged; no measured speedup is
 claimed by this compatibility stage.
 
+Implementation boundary
+-----------------------
+
+``rust/src/core/`` contains Rust-only algorithms and types, with no PyO3
+dependency. ``rust/src/python/`` imports that core and adapts Python objects,
+protocols and exceptions. Both modules belong to the same Cargo crate.
+
 Supported binaries
 ------------------
 
