@@ -7,7 +7,7 @@ pub fn integer(text: &str) -> Option<i128> {
 }
 
 pub fn format(text: &str) -> Option<&str> {
-    text.split(whitespace).rfind(|token| !token.is_empty())
+    tokens(text).last().copied()
 }
 
 pub fn v2000_fields(text: &str) -> (&str, &str) {
@@ -33,9 +33,21 @@ pub fn parse_v3000_counts(text: &str) -> Option<(i128, i128)> {
 }
 
 pub fn token(text: &str, position: usize) -> Option<&str> {
+    tokens(text).get(position).copied()
+}
+
+pub fn tokens(text: &str) -> Vec<&str> {
     text.split(whitespace)
         .filter(|token| !token.is_empty())
-        .nth(position)
+        .collect()
+}
+
+pub fn token_suffix(text: &str, position: usize) -> String {
+    tokens(text)
+        .into_iter()
+        .skip(position)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn after_characters(text: &str, count: usize) -> &str {

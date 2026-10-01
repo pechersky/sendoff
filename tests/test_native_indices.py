@@ -8,7 +8,7 @@ import sys
 from collections import deque
 from importlib import import_module
 from types import SimpleNamespace
-from typing import Any, Callable, Iterable, SupportsIndex, cast
+from typing import Any, Callable, Iterable, Iterator, SupportsIndex, cast
 
 import pytest
 
@@ -251,6 +251,34 @@ def test_cached_counts_failures_and_snapshots(counts: str) -> None:
         assert (table.lines is original) == (expected is not None)
         assert table.counts == counts
         assert (table.num_atoms, table.num_bonds) == (2, 1)
+
+
+def test_renumber_preserves_line_identity_and_call_order() -> None:
+    """Keep untouched Python lines and consume each source section once."""
+    events: list[str] = []
+
+    class Lines(deque[str]):
+        def __iter__(self) -> Iterator[str]:
+            events.append("lines")
+            return super().__iter__()
+
+    class Receiver(NativeIndices):
+        def atomlines(self) -> Iterable[str]:
+            events.append("atoms")
+            return super().atomlines()
+
+        def bondlines(self) -> Iterable[str]:
+            events.append("bonds")
+            return super().bondlines()
+
+    table = Receiver(V3000.splitlines())
+    table.lines = Lines(table.lines)
+    title, source, comment = table.lines[0], table.lines[1], table.lines[2]
+    table.renumber_indices()
+    assert table.lines[0] is title
+    assert table.lines[1] is source
+    assert table.lines[2] is comment
+    assert events == ["atoms", "lines", "bonds", "lines", "lines"]
 
 
 def test_empty_tables_do_not_evaluate_strict() -> None:

@@ -1,5 +1,4 @@
 use super::ctable;
-use super::whitespace;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Eq, Hash, PartialEq)]
@@ -59,106 +58,124 @@ impl Validator {
     }
 }
 
-pub enum RenumberFailure {
-    InvalidAtomIndex,
-    InvalidBondIndex,
-    DuplicateMapping,
-    MissingEndpoint,
-    EmptyCounts,
+pub enum MappingFailure {
+    Duplicate,
+    Missing,
 }
 
-pub struct Renumbered {
-    pub lines: Vec<String>,
+pub struct Mapping {
+    values: HashMap<Index, Vec<usize>>,
+    next_index: usize,
 }
 
-pub fn renumber(
-    all_lines: &[String],
-    atom_lines: &[String],
-    bond_lines: &[String],
-    counts: &str,
-) -> Result<Renumbered, RenumberFailure> {
-    let mut atoms = Vec::with_capacity(atom_lines.len());
-    let mut mapping: HashMap<Index, Vec<usize>> = HashMap::new();
-    for (position, line) in atom_lines.iter().enumerate() {
-        let token = ctable::token(line, 2).ok_or(RenumberFailure::InvalidAtomIndex)?;
-        let index = parse_index(token).ok_or(RenumberFailure::InvalidAtomIndex)?;
-        let new_index = position + 1;
-        mapping.entry(index).or_default().push(new_index);
-        let suffix = ctable::after_characters(line, 7 + token.chars().count());
-        atoms.push(format!("M  V30 {new_index}{suffix}"));
+impl Mapping {
+    pub fn new() -> Self {
+        Self {
+            values: HashMap::new(),
+            next_index: 1,
+        }
     }
 
-    let mut bonds = Vec::with_capacity(bond_lines.len());
-    for (position, line) in bond_lines.iter().enumerate() {
-        let order = ctable::token(line, 3).ok_or(RenumberFailure::InvalidBondIndex)?;
-        let from = ctable::token(line, 4)
-            .and_then(parse_index)
-            .ok_or(RenumberFailure::InvalidBondIndex)?;
-        let to = ctable::token(line, 5)
-            .and_then(parse_index)
-            .ok_or(RenumberFailure::InvalidBondIndex)?;
-        if mapping.get(&from).is_some_and(|values| values.len() > 1)
-            || mapping.get(&to).is_some_and(|values| values.len() > 1)
+    pub fn add_atom(&mut self, index: Index) -> usize {
+        let new_index = self.next_index;
+        self.next_index += 1;
+        self.values.entry(index).or_default().push(new_index);
+        new_index
+    }
+
+    pub fn remap_bond(&self, from: Index, to: Index) -> Result<(usize, usize), MappingFailure> {
+        if self
+            .values
+            .get(&from)
+            .is_some_and(|values| values.len() > 1)
+            || self.values.get(&to).is_some_and(|values| values.len() > 1)
         {
-            return Err(RenumberFailure::DuplicateMapping);
+            return Err(MappingFailure::Duplicate);
         }
-        let new_from = mapping
+        let new_from = self
+            .values
             .get(&from)
             .and_then(|values| values.first())
-            .ok_or(RenumberFailure::MissingEndpoint)?;
-        let new_to = mapping
+            .ok_or(MappingFailure::Missing)?;
+        let new_to = self
+            .values
             .get(&to)
             .and_then(|values| values.first())
-            .ok_or(RenumberFailure::MissingEndpoint)?;
-        let newline = if line.ends_with('\n') { "\n" } else { "" };
-        bonds.push(format!(
-            "M  V30 {} {order} {new_from} {new_to}{newline}",
-            position + 1
-        ));
+            .ok_or(MappingFailure::Missing)?;
+        Ok((*new_from, *new_to))
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct LineFlags {
+    pub counts: bool,
+    pub begin_atom: bool,
+    pub end_atom: bool,
+    pub begin_bond: bool,
+    pub end_bond: bool,
+}
+
+pub struct Assembler<T> {
+    lines: Vec<T>,
+    atoms: Vec<T>,
+    bonds: Vec<T>,
+    counts: T,
+    appending: bool,
+}
+
+impl<T: Clone> Assembler<T> {
+    pub fn new(atoms: Vec<T>, bonds: Vec<T>, counts: T) -> Self {
+        Self {
+            lines: Vec::new(),
+            atoms,
+            bonds,
+            counts,
+            appending: true,
+        }
     }
 
-    if counts.is_empty() {
-        return Err(RenumberFailure::EmptyCounts);
-    }
-    let suffix = ctable::token(counts, 5)
-        .map(|_| {
-            counts
-                .split(whitespace)
-                .filter(|token| !token.is_empty())
-                .skip(5)
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .unwrap_or_default();
-    let new_counts = format!("M  V30 COUNTS {} {} {suffix}", atoms.len(), bonds.len());
-    let mut lines = Vec::with_capacity(
-        all_lines.len() + atoms.len().saturating_sub(1) + bonds.len().saturating_sub(1),
-    );
-    let mut appending = true;
-    for line in all_lines {
-        if appending {
-            lines.push(line.clone());
+    pub fn push(&mut self, line: T, flags: LineFlags) {
+        if self.appending {
+            self.lines.push(line.clone());
         }
-        if line.starts_with("M  V30 COUNTS") {
-            lines.pop();
-            lines.push(new_counts.clone());
+        if flags.counts {
+            self.lines.pop();
+            self.lines.push(self.counts.clone());
         }
-        if line.starts_with("M  V30 BEGIN ATOM") {
-            appending = false;
+        if flags.begin_atom {
+            self.appending = false;
         }
-        if line.starts_with("M  V30 END ATOM") {
-            appending = true;
-            lines.extend(atoms.iter().cloned());
-            lines.push(line.clone());
+        if flags.end_atom {
+            self.appending = true;
+            self.lines.extend(self.atoms.iter().cloned());
+            self.lines.push(line.clone());
         }
-        if line.starts_with("M  V30 BEGIN BOND") {
-            appending = false;
+        if flags.begin_bond {
+            self.appending = false;
         }
-        if line.starts_with("M  V30 END BOND") {
-            appending = true;
-            lines.extend(bonds.iter().cloned());
-            lines.push(line.clone());
+        if flags.end_bond {
+            self.appending = true;
+            self.lines.extend(self.bonds.iter().cloned());
+            self.lines.push(line);
         }
     }
-    Ok(Renumbered { lines })
+
+    pub fn finish(self) -> Vec<T> {
+        self.lines
+    }
+}
+
+pub fn atom_line(text: &str, new_index: usize) -> String {
+    let token = ctable::token(text, 2).unwrap_or_default();
+    let suffix = ctable::after_characters(text, 7 + token.chars().count());
+    format!("M  V30 {new_index}{suffix}")
+}
+
+pub fn bond_line(new_index: usize, order: &str, from: usize, to: usize, newline: bool) -> String {
+    let newline = if newline { "\n" } else { "" };
+    format!("M  V30 {new_index} {order} {from} {to}{newline}")
+}
+
+pub fn counts_line(atom_count: usize, bond_count: usize, suffix: &str) -> String {
+    format!("M  V30 COUNTS {atom_count} {bond_count} {suffix}")
 }
