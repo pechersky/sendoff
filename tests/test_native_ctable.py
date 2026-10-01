@@ -161,6 +161,23 @@ def test_rust_counts_keep_python_integer_and_slice_semantics(
     assert outcomes[0] == outcomes[1]
 
 
+def test_unchanged_strip_preserves_raw_string_identity() -> None:
+    """Keep Python str.strip identity while still trimming changed fields."""
+    lines = V3000.splitlines()
+    lines[0] = "".join(["unchanged ", "title"])
+    table = CTable(lines)
+    assert table.title is table.lines[0] is lines[0]
+    assert table.counts is lines[5]
+
+    lines[0] = "\x1c" + lines[0] + "\x1d"
+    lines[5] = "\x1e" + lines[5] + "\x1f\n"
+    trimmed = CTable(lines)
+    assert trimmed.title == table.title
+    assert trimmed.title is not lines[0]
+    assert trimmed.counts == table.counts
+    assert trimmed.counts is not lines[5]
+
+
 def test_exports_and_keyword_arguments() -> None:
     """Expose required positional-or-keyword operands, not coercing signatures."""
     expected = {

@@ -8,7 +8,14 @@ use pyo3::{
 
 fn strip<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
     match exact_text(value)? {
-        Some(text) => Ok(PyString::new(value.py(), text.trim_matches(whitespace)).into_any()),
+        Some(text) => {
+            let stripped = text.trim_matches(whitespace);
+            if stripped == text {
+                Ok(value.clone())
+            } else {
+                Ok(PyString::new(value.py(), stripped).into_any())
+            }
+        }
         None => value.call_method0("strip"),
     }
 }
