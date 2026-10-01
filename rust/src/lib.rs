@@ -18,6 +18,9 @@ mod native {
     use crate::python::sdblock::parse_metadata;
 
     #[pymodule_export]
+    use crate::python::sdblock::serialize_sdfblock;
+
+    #[pymodule_export]
     use crate::python::sddata::{append_record, records};
 
     #[pymodule_export]

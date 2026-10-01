@@ -32,3 +32,23 @@ where
     }
     Ok(metadata_lines)
 }
+
+/// Serialize an SDF block, preserving existing line endings when requested.
+pub fn serialize(
+    title: &str,
+    mdl_lines: &[String],
+    metadata_lines: &[String],
+    with_newlines: bool,
+) -> String {
+    let mut output = String::new();
+    output.push_str(title);
+    output.push('\n');
+    for line in mdl_lines.iter().chain(metadata_lines) {
+        output.push_str(line);
+        if with_newlines && !line.ends_with('\n') {
+            output.push('\n');
+        }
+    }
+    output.push_str("$$$$\n");
+    output
+}

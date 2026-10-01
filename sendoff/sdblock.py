@@ -103,12 +103,11 @@ class SDBlock:
                 The newline character is appended only if it wasn't in the line
 
         """
-        print(self.title, file=outh)
-        for line in chain(self.mdl, self.metadata):
-            outh.write(line)
-            if with_newlines and not line.endswith("\n"):
-                outh.write("\n")
-        outh.write("$$$$\n")
+        outh.write(
+            native.serialize_sdfblock(
+                self.title, list(self.mdl), list(self.metadata), with_newlines
+            )
+        )
 
     def append_record(self, record_name: str, value: str) -> None:
         """Append a field and value to the SD data record.
