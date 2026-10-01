@@ -1,0 +1,28 @@
+[package]
+name = "sendoff"
+version = "0.1.6"
+edition = "2024"
+description = "The minimal SDF metadata parser"
+license = "MIT"
+readme = "README.rst"
+repository = "https://github.com/pechersky/sendoff"
+include = [
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/rust/**/*.rs",
+    "/sendoff/**/*.py",
+    "/sendoff/*.pyi",
+    "/sendoff/py.typed",
+    "/pyproject.toml",
+    "/README.rst",
+    "/LICENSE",
+    "/scripts/sdf-unique-record",
+]
+
+[lib]
+name = "_native"
+path = "rust/src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "=0.29.3", features = ["abi3-py311"] }

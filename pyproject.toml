@@ -1,39 +1,66 @@
-[tool.poetry]
+[project]
 name = "sendoff"
-version = "0.1.6"
+dynamic = ["version"]
 description = "The minimal SDF metadata parser"
-authors = ["Yakov Pechersky <ypechersky@treeline.bio>"]
-license = "MIT"
+authors = [{name = "Yakov Pechersky", email = "ypechersky@treeline.bio"}]
+license = {text = "MIT"}
 readme = "README.rst"
-repository = "https://github.com/pechersky/sendoff"
-include = [
-    "README.rst",
-    "pyproject.toml",
-    "LICENSE"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "License :: OSI Approved :: MIT License",
 ]
 
-[tool.poetry.dependencies]
-python = "^3.8.1"
+[project.urls]
+Repository = "https://github.com/pechersky/sendoff"
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^7.4.3"
-tox = "^3.24.3"
-tox-poetry-installer = "^0.10.3"
-flake8 = "^6.1.0"
-xdoctest = "^1.1.2"
-flake8-docstrings = "^1.7.0"
-pydocstyle = "^6.3.0"
-black = "^23.11.0"
-pytest-cov = "^4.1.0"
-pytest-mock = "^3.12.0"
-coverage = "^7.3.2"
-towncrier = "^23.10.0"
-pre-commit = "^3.5.0"
-darglint = "^1.8.1"
-tbump = "^6.11.0"
-mypy = "^1.7.0"
-isort = "^5.12.0"
-rdkit = "^2022.9.2"
+[project.optional-dependencies]
+test = [
+    "pytest>=7.4.3,<10",
+    "xdoctest>=1.1.2,<2",
+    "pytest-cov>=4.1.0,<8",
+    "pytest-mock>=3.12.0,<4",
+    "coverage>=7.3.2,<8",
+    "rdkit==2022.9.5; python_version == '3.11'",
+    "numpy==1.23.5; python_version == '3.11'",
+    "rdkit==2026.3.6; python_version >= '3.12'",
+    "numpy>=1.26.4,<3; python_version >= '3.12'",
+]
+dev = [
+    "sendoff[test]",
+    "maturin==1.15.0",
+    "tox>=4.24,<5",
+    "flake8>=6.1.0,<8",
+    "flake8-docstrings>=1.7.0,<2",
+    "pydocstyle>=6.3.0,<7",
+    "black>=23.11.0,<27",
+    "towncrier>=23.10.0,<27",
+    "pre-commit>=3.5.0,<5",
+    "darglint>=1.8.1,<2",
+    "tbump>=6.11.0,<7",
+    "mypy==1.7.0; python_version == '3.11'",
+    "mypy>=1.19,<2; python_version >= '3.12'",
+    "isort>=5.12.0,<8",
+]
+
+[tool.maturin]
+python-source = "."
+module-name = "sendoff._native"
+include = [
+    {path = "LICENSE", format = "sdist"},
+    {path = "tests/**/*.py", format = "sdist"},
+    {path = "setup.cfg", format = "sdist"},
+    {path = "tox.ini", format = "sdist"},
+    {path = ".pre-commit-config.yaml", format = "sdist"},
+    {path = ".isort.cfg", format = "sdist"},
+    {path = ".flake8", format = "sdist"},
+]
+exclude = ["sendoff/*.so", "sendoff/__pycache__/**"]
 
 [tool.black]
 line-length = 88
@@ -67,24 +94,23 @@ message_template = "Bump to {new_version}"
 tag_template = "v{new_version}"
 
 [[tool.tbump.file]]
-src = "pyproject.toml"
+src = "Cargo.toml"
+search = 'version = "{current_version}"'
 
-[[tool.tbump.file]]
-src = "sendoff/__init__.py"
+[[tool.tbump.before_commit]]
+name = "Synchronize the package version in Cargo.lock"
+cmd = "cargo check && git add -- Cargo.lock"
 
 [tool.towncrier]
 # Usage: (Source: https://github.com/python-trio/trio/blob/master/pyproject.toml)
 # - PRs should drop a file like "issuenumber.feature" in newsfragments
 #   (or "bugfix", "doc", "removal", "misc")
 # - At release time after bumping version number, run:
-#   poetry run towncrier --draft, then poetry towncrier
+#   .venv/bin/towncrier --draft, then .venv/bin/towncrier
 package = "sendoff"
 filename = "doc/changelog.rst"
 directory = "newsfragments"
 
-[tool.poetry.extras]
-test = ["pytest"]
-
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["maturin==1.15.0"]
+build-backend = "maturin"
