@@ -12,6 +12,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from sendoff.sdblock import SDBlock
+
 native = importlib.import_module("sendoff.native")
 
 
@@ -107,6 +109,36 @@ def test_native_records_keep_live_deque_errors_and_lazy_parse_failures() -> None
     assert isinstance(caught.value.__cause__, StopIteration)
     assert caught.value.__cause__.args == ("strip failed",)
     assert caught.value.__cause__ is caught.value.__context__
+
+
+def test_native_records_preserve_falsey_string_groups() -> None:
+    """Match Python grouping for falsey headers and both key transitions."""
+
+    class FalseText(str):
+        def strip(self, chars: str | None = None) -> str:
+            return self
+
+        def __bool__(self) -> bool:
+            return False
+
+    block = SDBlock(
+        "title",
+        deque(),
+        deque(
+            [
+                FalseText("> <first>"),
+                FalseText("one"),
+                FalseText("two"),
+                "> <normal>",
+                "value",
+                FalseText("> <last>"),
+                FalseText("tail"),
+            ]
+        ),
+    )
+    expected = [("first", "one\ntwo"), ("normal", "value"), ("last", "tail")]
+    assert list(block.records()) == expected
+    assert list(getattr(native, "records_iter")(block)) == expected
 
 
 def test_native_records_trace_the_block_and_live_metadata_iterator() -> None:

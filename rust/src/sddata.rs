@@ -236,9 +236,9 @@ fn records_step(slf: &Bound<'_, RecordsIter>) -> PyResult<Option<Py<PyAny>>> {
         let values = PyList::empty(py);
         loop {
             match next_record_input(slf)? {
-                RecordInput::Item(value, true) => values.append(value)?,
-                RecordInput::Item(line, false) => {
-                    slf.borrow_mut().pending = Some((line, false));
+                RecordInput::Item(value, next_key) if next_key == key => values.append(value)?,
+                RecordInput::Item(line, next_key) => {
+                    slf.borrow_mut().pending = Some((line, next_key));
                     break;
                 }
                 RecordInput::End | RecordInput::KeyStop => {
