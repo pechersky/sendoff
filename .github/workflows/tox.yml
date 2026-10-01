@@ -40,6 +40,8 @@ jobs:
         version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
         assert os.environ["RELEASE_TAG"] == f"v{version}", "tag/Cargo version mismatch"
         PY
+    - name: Set up Rust coverage tools
+      run: rustup component add llvm-tools-preview
     - name: Test with tox
       run: |
         python -m pip install --disable-pip-version-check 'tox>=4.24,<5'

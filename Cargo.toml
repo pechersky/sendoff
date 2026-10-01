@@ -23,5 +23,8 @@ name = "native"
 path = "rust/src/lib.rs"
 crate-type = ["cdylib"]
 
+[features]
+coverage = []
+
 [dependencies]
 pyo3 = { version = "=0.29.3", features = ["abi3-py311"] }
