@@ -162,18 +162,11 @@ class CTable:
         Returns:
             A single-use iterable of the bond lines
         """
-        bondlines = itt.takewhile(
-            lambda x: not str.startswith(x, "M  V30 END BOND"),
-            # islice(..., 1, None) means to drop one
-            itt.islice(
-                itt.dropwhile(
-                    lambda x: not str.startswith(x, "M  V30 BEGIN BOND"), self.lines
-                ),
-                1,
-                None,
-            ),
-        )
-        return bondlines
+        def iter_lines() -> Iterator[str]:
+            start, stop = native.bond_line_range(list(self.lines))
+            yield from itt.islice(self.lines, start, stop)
+
+        return iter_lines()
 
     def valid_atom_indices(self, strict: bool = False) -> bool:
         """Validate that the atom lines match the counts line.

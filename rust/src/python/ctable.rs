@@ -26,10 +26,16 @@ fn atom_line_range(lines: Vec<String>) -> (usize, usize) {
     ctable::atom_line_range(&lines)
 }
 
+#[pyfunction]
+fn bond_line_range(lines: Vec<String>) -> (usize, usize) {
+    ctable::bond_line_range(&lines)
+}
+
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(parse_v2000_counts, module)?)?;
     module.add_function(wrap_pyfunction!(parse_v3000_counts, module)?)?;
     module.add_function(wrap_pyfunction!(parse_format, module)?)?;
     module.add_function(wrap_pyfunction!(atom_line_range, module)?)?;
+    module.add_function(wrap_pyfunction!(bond_line_range, module)?)?;
     Ok(())
 }

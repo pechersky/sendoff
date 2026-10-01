@@ -38,3 +38,20 @@ pub fn atom_line_range(lines: &[String]) -> (usize, usize) {
         .unwrap_or(lines.len());
     (start, end)
 }
+
+pub fn bond_line_range(lines: &[String]) -> (usize, usize) {
+    let Some(start) = lines
+        .iter()
+        .position(|line| line.starts_with("M  V30 BEGIN BOND"))
+        .map(|index| index + 1)
+    else {
+        return (lines.len(), lines.len());
+    };
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .find_map(|(index, line)| line.starts_with("M  V30 END BOND").then_some(index))
+        .unwrap_or(lines.len());
+    (start, end)
+}
