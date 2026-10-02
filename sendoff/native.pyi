@@ -1,4 +1,4 @@
-from typing import Any, Final, final
+from typing import Any, Final, Iterable, Iterator, final
 
 __version__: Final[str]
 
@@ -131,7 +131,7 @@ class SDBlock:
             NotImplementedError: for byte-backed SDBlocks
         """
     @staticmethod
-    def from_lines(lines: Any) -> Any:
+    def from_lines(lines: Iterable[str] | Iterable[bytes]) -> Iterator[SDBlock]:
         """
         Parse in SDBlocks from a sequence of lines.
 
@@ -139,7 +139,9 @@ class SDBlock:
             lines: homogeneous str or bytes lines separated by the $$$$ delimiter
 
         Returns:
-            An iterator of SDBlocks whose values have the same type as the input
+            A lazy iterator of SDBlocks whose values have the same type as the input
+
+        The iterator does not close the caller-owned lines iterable.
         """
     def num_atoms(self, /) -> int:
         """

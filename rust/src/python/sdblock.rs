@@ -15,6 +15,182 @@ enum SDBlockInner {
     Bytes(sdblock::BytesSDBlock),
 }
 
+#[derive(Clone, Copy)]
+enum InputKind {
+    Text,
+    Bytes,
+}
+
+enum BufferedBlock {
+    Empty,
+    Text(Vec<String>),
+    Bytes(Vec<Vec<u8>>),
+}
+
+#[pyclass(name = "_SDBlockIterator", module = "sendoff.native")]
+pub(crate) struct PySDBlockIterator {
+    lines: Py<PyIterator>,
+    kind: Option<InputKind>,
+    block_lines: BufferedBlock,
+    finished: bool,
+}
+
+#[pymethods]
+impl PySDBlockIterator {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PySDBlock>>> {
+        if self.finished {
+            return Ok(None);
+        }
+
+        loop {
+            let mut lines = self.lines.bind(py).clone();
+            let line = match lines.next() {
+                Some(Ok(line)) => line,
+                Some(Err(error)) => {
+                    self.finish();
+                    return Err(error);
+                }
+                None => return self.final_block(py),
+            };
+
+            let block = if line.is_instance_of::<PyString>() {
+                let text = match line.extract::<String>() {
+                    Ok(text) => text,
+                    Err(error) => {
+                        self.finish();
+                        return Err(error);
+                    }
+                };
+                self.push_text_line(text)?
+            } else if line.is_instance_of::<PyBytes>() {
+                let bytes = match line.extract::<Vec<u8>>() {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        self.finish();
+                        return Err(error);
+                    }
+                };
+                self.push_bytes_line(bytes)?
+            } else {
+                self.finish();
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "SDBlock.from_lines lines must be str or bytes",
+                ));
+            };
+
+            if let Some(block) = block {
+                return Py::new(py, block).map(Some);
+            }
+        }
+    }
+}
+
+impl PySDBlockIterator {
+    fn push_text_line(&mut self, line: String) -> PyResult<Option<PySDBlock>> {
+        if matches!(self.kind, Some(InputKind::Bytes)) {
+            self.finish();
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "SDBlock.from_lines does not accept mixed str and bytes lines",
+            ));
+        }
+        self.kind = Some(InputKind::Text);
+
+        let is_end = line.starts_with("$$$$");
+        self.block_lines = match std::mem::replace(&mut self.block_lines, BufferedBlock::Empty) {
+            BufferedBlock::Empty => BufferedBlock::Text(vec![line]),
+            BufferedBlock::Text(mut lines) => {
+                lines.push(line);
+                BufferedBlock::Text(lines)
+            }
+            BufferedBlock::Bytes(_) => {
+                self.finish();
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "SDBlock line buffer does not match its input type",
+                ));
+            }
+        };
+        if !is_end {
+            return Ok(None);
+        }
+
+        match std::mem::replace(&mut self.block_lines, BufferedBlock::Empty) {
+            BufferedBlock::Text(lines) => Ok(Some(PySDBlock {
+                inner: SDBlockInner::Text(sdblock::SDBlock::from_block_lines(lines)),
+            })),
+            BufferedBlock::Empty | BufferedBlock::Bytes(_) => {
+                self.finish();
+                Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "SDBlock line buffer does not match its input type",
+                ))
+            }
+        }
+    }
+
+    fn push_bytes_line(&mut self, line: Vec<u8>) -> PyResult<Option<PySDBlock>> {
+        if matches!(self.kind, Some(InputKind::Text)) {
+            self.finish();
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "SDBlock.from_lines does not accept mixed str and bytes lines",
+            ));
+        }
+        self.kind = Some(InputKind::Bytes);
+
+        let is_end = line.starts_with(b"$$$$");
+        self.block_lines = match std::mem::replace(&mut self.block_lines, BufferedBlock::Empty) {
+            BufferedBlock::Empty => BufferedBlock::Bytes(vec![line]),
+            BufferedBlock::Bytes(mut lines) => {
+                lines.push(line);
+                BufferedBlock::Bytes(lines)
+            }
+            BufferedBlock::Text(_) => {
+                self.finish();
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "SDBlock line buffer does not match its input type",
+                ));
+            }
+        };
+        if !is_end {
+            return Ok(None);
+        }
+
+        match std::mem::replace(&mut self.block_lines, BufferedBlock::Empty) {
+            BufferedBlock::Bytes(lines) => Ok(Some(PySDBlock {
+                inner: SDBlockInner::Bytes(sdblock::BytesSDBlock::from_block_lines(lines)),
+            })),
+            BufferedBlock::Empty | BufferedBlock::Text(_) => {
+                self.finish();
+                Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "SDBlock line buffer does not match its input type",
+                ))
+            }
+        }
+    }
+
+    fn final_block(&mut self, py: Python<'_>) -> PyResult<Option<Py<PySDBlock>>> {
+        self.finished = true;
+        let block = match std::mem::replace(&mut self.block_lines, BufferedBlock::Empty) {
+            BufferedBlock::Empty => return Ok(None),
+            BufferedBlock::Text(lines) if !lines.is_empty() => PySDBlock {
+                inner: SDBlockInner::Text(sdblock::SDBlock::from_block_lines(lines)),
+            },
+            BufferedBlock::Bytes(lines) if !lines.is_empty() => PySDBlock {
+                inner: SDBlockInner::Bytes(sdblock::BytesSDBlock::from_block_lines(lines)),
+            },
+            BufferedBlock::Text(_) | BufferedBlock::Bytes(_) => return Ok(None),
+        };
+        Py::new(py, block).map(Some)
+    }
+
+    fn finish(&mut self) {
+        self.finished = true;
+        self.block_lines = BufferedBlock::Empty;
+    }
+}
+
 #[pymethods]
 impl PySDBlock {
     /// Parse SDBlocks from homogeneous str or bytes lines.
@@ -23,62 +199,18 @@ impl PySDBlock {
     ///     lines: an Iterable of str or bytes lines separated by the $$$$ delimiter
     ///
     /// Returns:
-    ///     An iterator of SDBlocks whose values have the same type as the input
+    ///     An iterator that produces owned SDBlocks as lines are consumed
     #[staticmethod]
-    fn from_lines<'py>(py: Python<'py>, lines: &Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-        let mut text_lines = Vec::new();
-        let mut byte_lines = Vec::new();
-        let mut is_bytes = None;
-
-        for line in lines.try_iter()? {
-            let line = line?;
-            if line.is_instance_of::<PyString>() {
-                if is_bytes == Some(true) {
-                    return Err(pyo3::exceptions::PyTypeError::new_err(
-                        "SDBlock.from_lines does not accept mixed str and bytes lines",
-                    ));
-                }
-                is_bytes = Some(false);
-                text_lines.push(line.extract::<String>()?);
-            } else if line.is_instance_of::<PyBytes>() {
-                if is_bytes == Some(false) {
-                    return Err(pyo3::exceptions::PyTypeError::new_err(
-                        "SDBlock.from_lines does not accept mixed str and bytes lines",
-                    ));
-                }
-                is_bytes = Some(true);
-                byte_lines.push(line.extract::<Vec<u8>>()?);
-            } else {
-                return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "SDBlock.from_lines lines must be str or bytes",
-                ));
-            }
-        }
-
-        let blocks: Vec<Self> = if is_bytes == Some(true) {
-            let mut lines = byte_lines.into_iter().map(Ok::<_, PyErr>);
-            sdblock::BytesSDBlock::from_lines(&mut lines)?
-                .into_iter()
-                .map(|inner| Self {
-                    inner: SDBlockInner::Bytes(inner),
-                })
-                .collect()
-        } else {
-            let mut lines = text_lines.into_iter().map(Ok::<_, PyErr>);
-            sdblock::SDBlock::from_lines(&mut lines)?
-                .into_iter()
-                .map(|inner| Self {
-                    inner: SDBlockInner::Text(inner),
-                })
-                .collect()
-        };
-        let objects = blocks
-            .into_iter()
-            .map(|block| Py::new(py, block))
-            .collect::<PyResult<Vec<_>>>()?;
-        let list = PyList::new(py, objects)?;
-        let iterator = PyIterator::from_object(&list.into_any())?;
-        Ok(iterator.into_any())
+    fn from_lines(py: Python<'_>, lines: &Bound<'_, PyAny>) -> PyResult<Py<PySDBlockIterator>> {
+        Py::new(
+            py,
+            PySDBlockIterator {
+                lines: lines.try_iter()?.unbind(),
+                kind: None,
+                block_lines: BufferedBlock::Empty,
+                finished: false,
+            },
+        )
     }
 
     /// Return the parsed molecule title without changing its input type.

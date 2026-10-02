@@ -37,7 +37,7 @@ impl SDBlock {
         Ok(blocks)
     }
 
-    fn from_block_lines(mut block_lines: Vec<String>) -> Self {
+    pub(crate) fn from_block_lines(mut block_lines: Vec<String>) -> Self {
         let title = block_lines.remove(0).trim().to_owned();
         let mut lines = block_lines.into_iter().map(Ok::<String, Infallible>);
         let mdl = parse_mdl(&mut lines).expect("infallible lines");
@@ -113,7 +113,7 @@ impl BytesSDBlock {
         Ok(blocks)
     }
 
-    fn from_block_lines(mut block_lines: Vec<Vec<u8>>) -> Self {
+    pub(crate) fn from_block_lines(mut block_lines: Vec<Vec<u8>>) -> Self {
         let title = block_lines.remove(0).trim_ascii().to_vec();
         let mut lines = block_lines.into_iter();
         let mdl = parse_mdl_bytes(&mut lines);

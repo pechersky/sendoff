@@ -4,6 +4,7 @@ import io
 import os
 from itertools import chain
 from pathlib import Path
+from typing import Generator, Iterable, Iterator, cast
 
 import pytest
 
@@ -67,12 +68,19 @@ def test_bytes_lines_preserve_invalid_bytes() -> None:
         b"> <field\xfe>\n",
         b"value\xfd\n",
         b"\n",
+        b"$$$$\n",
+        b"second\n",
+        b"\n",
+        b"M  END\n",
     ]
 
-    block = next(SDBlock.from_lines(raw))
+    blocks = SDBlock.from_lines(raw)
+    block = next(blocks)
+    tail = next(blocks)
 
     assert block.title == b"\xff title"
     assert block.records() == [(b"field\xfe", b"value\xfd")]
+    assert tail.title == b"second"
     output = io.BytesIO()
     block.write(output)
     assert b"\xff" in output.getvalue()
@@ -110,8 +118,107 @@ def test_text_path_preserves_text_values(tmp_path: Path) -> None:
 
 def test_from_lines_rejects_mixed_text_and_bytes() -> None:
     """A single line source cannot mix text and bytes."""
+    mixed_lines = cast(Iterable[str], [b"title\n", "M  END\n"])
     with pytest.raises(TypeError, match="mixed str and bytes"):
-        list(SDBlock.from_lines([b"title\n", "M  END\n"]))
+        list(SDBlock.from_lines(mixed_lines))
+
+
+def test_from_lines_yields_incrementally_and_retains_blocks() -> None:
+    """Only consume through the next delimiter and retain already parsed data."""
+    consumed: list[str] = []
+    first_record = [
+        "First\n",
+        "\n",
+        "M  END\n",
+        "> <Record>\n",
+        "one\n",
+        "\n",
+        "$$$$\n",
+    ]
+    second_record = ["Second\n", "\n", "M  END\n", "$$$$\n"]
+
+    def lines() -> Iterator[str]:
+        for line in first_record + second_record:
+            consumed.append(line)
+            yield line
+
+    blocks = SDBlock.from_lines(lines())
+
+    assert consumed == []
+    assert iter(blocks) is blocks
+    first = next(blocks)
+    assert consumed == first_record
+
+    second = next(blocks)
+
+    assert first.title == "First"
+    assert first.records() == [("Record", "one")]
+    assert second.title == "Second"
+    assert consumed == first_record + second_record
+
+
+def test_from_lines_surfaces_source_errors_on_advance() -> None:
+    """Yield completed blocks before surfacing a later source error."""
+
+    def lines() -> Iterator[str]:
+        yield "First\n"
+        yield "\n"
+        yield "M  END\n"
+        yield "$$$$\n"
+        raise OSError("read failed")
+
+    blocks = SDBlock.from_lines(lines())
+
+    assert next(blocks).title == "First"
+    with pytest.raises(OSError, match="read failed"):
+        next(blocks)
+    with pytest.raises(StopIteration):
+        next(blocks)
+
+
+def test_from_lines_does_not_close_caller_owned_iterable() -> None:
+    """Abandoning the parser leaves the caller's source open."""
+    closed: list[bool] = []
+
+    def lines() -> Generator[str, None, None]:
+        try:
+            yield "First\n"
+            yield "\n"
+            yield "M  END\n"
+            yield "$$$$\n"
+        finally:
+            closed.append(True)
+
+    source = lines()
+    blocks = SDBlock.from_lines(source)
+    assert next(blocks).title == "First"
+    del blocks
+
+    assert closed == []
+    source.close()
+    assert closed == [True]
+
+
+def test_parse_sdf_closes_owned_file_when_iterator_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closing the path parser exits its file context."""
+    first_record = "First\n\nM  END\n$$$$\n"
+    stream = io.StringIO(first_record + "Second\n\nM  END\n$$$$\n")
+
+    def fake_open(path: str | bytes, mode: str) -> io.StringIO:
+        assert path == "unused.sdf"
+        assert mode == "r"
+        return stream
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    blocks = parse_sdf("unused.sdf")
+
+    assert next(blocks).title == "First"
+    assert stream.tell() == len(first_record)
+    assert not stream.closed
+    blocks.close()
+    assert stream.closed
 
 
 def test_bytes_block_requires_binary_append_values() -> None:
