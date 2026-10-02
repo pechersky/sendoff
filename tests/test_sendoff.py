@@ -2,6 +2,7 @@
 """Test sendoff parsing of metadata on generated SDFs."""
 import io
 from itertools import chain
+from pathlib import Path
 
 import pytest
 
@@ -31,6 +32,29 @@ def test_double_mol_read(double_mol_sdf: Pathy) -> None:
     """
     mols = list(parse_sdf(double_mol_sdf))
     assert len(mols) == 2
+
+
+@pytest.mark.parametrize("trailing_newline", ["", "\n"])
+def test_unterminated_final_record_is_returned(
+    tmp_path: Path, trailing_newline: str
+) -> None:
+    """Return a final block without a delimiter, with or without a newline."""
+    sdf = tmp_path / "unterminated.sdf"
+    sdf.write_text(
+        "Closed\n\nM  END\n$$$$\n"
+        "Title\n\nM  END\n> <Record>\nValue"
+        + trailing_newline
+    )
+
+    blocks = list(parse_sdf(sdf))
+
+    assert [block.title for block in blocks] == ["Closed", "Title"]
+    assert blocks[-1].records() == [("Record", "Value")]
+
+
+def test_empty_input_has_no_blocks() -> None:
+    """Do not synthesize a block for empty input."""
+    assert list(SDBlock.from_lines([])) == []
 
 
 def test_titled_mol_read(single_titled_mol_sdf: Pathy) -> None:

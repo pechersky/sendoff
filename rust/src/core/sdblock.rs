@@ -15,8 +15,8 @@ pub struct SDBlock {
 impl SDBlock {
     /// Parse SDBlocks from a sequence of lines.
     ///
-    /// Blocks are separated by lines starting with `$$$$`; any unterminated
-    /// lines at the end of the input are ignored.
+    /// Blocks are separated by lines starting with `$$$$`. A nonempty final
+    /// block is parsed when the input ends without a delimiter.
     pub fn from_lines<I, E>(lines: &mut I) -> Result<Vec<Self>, E>
     where
         I: Iterator<Item = Result<String, E>>,
@@ -30,6 +30,9 @@ impl SDBlock {
             if is_end {
                 blocks.push(Self::from_block_lines(std::mem::take(&mut block_lines)));
             }
+        }
+        if !block_lines.is_empty() {
+            blocks.push(Self::from_block_lines(block_lines));
         }
         Ok(blocks)
     }
