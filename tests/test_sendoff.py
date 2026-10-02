@@ -1,6 +1,7 @@
 # mypy: allow-untyped-decorators
 """Test sendoff parsing of metadata on generated SDFs."""
 import io
+import os
 from itertools import chain
 from pathlib import Path
 
@@ -55,6 +56,73 @@ def test_unterminated_final_record_is_returned(
 def test_empty_input_has_no_blocks() -> None:
     """Do not synthesize a block for empty input."""
     assert list(SDBlock.from_lines([])) == []
+
+
+def test_bytes_lines_preserve_invalid_bytes() -> None:
+    """Byte-backed blocks retain non-UTF-8 title and metadata octets."""
+    raw = [
+        b"\xff title \n",
+        b"\n",
+        b"M  END\n",
+        b"> <field\xfe>\n",
+        b"value\xfd\n",
+        b"\n",
+    ]
+
+    block = next(SDBlock.from_lines(raw))
+
+    assert block.title == b"\xff title"
+    assert block.records() == [(b"field\xfe", b"value\xfd")]
+    output = io.BytesIO()
+    block.write(output)
+    assert b"\xff" in output.getvalue()
+    assert b"field\xfe" in output.getvalue()
+    assert b"value\xfd" in output.getvalue()
+    reparsed = next(SDBlock.from_lines(output.getvalue().splitlines(keepends=True)))
+    assert reparsed.title == block.title
+    assert reparsed.records() == block.records()
+
+    with pytest.raises(NotImplementedError, match="byte-backed"):
+        block.ctable()
+
+
+def test_bytes_path_uses_binary_input(tmp_path: Path) -> None:
+    """A bytes filesystem path yields bytes and preserves invalid UTF-8."""
+    path = tmp_path / "bytes.sdf"
+    path.write_bytes(b"\xff title\n\nM  END\n> <field>\nvalue\xfe\n\n$$$$\n")
+
+    block = next(parse_sdf(os.fsencode(path)))
+
+    assert block.title == b"\xff title"
+    assert block.records() == [(b"field", b"value\xfe")]
+
+
+def test_text_path_preserves_text_values(tmp_path: Path) -> None:
+    """A str filesystem path continues to use text decoding."""
+    path = tmp_path / "text.sdf"
+    path.write_text("title é\n\nM  END\n> <field>\nvalue é\n\n$$$$\n")
+
+    block = next(parse_sdf(path))
+
+    assert block.title == "title é"
+    assert block.records() == [("field", "value é")]
+
+
+def test_from_lines_rejects_mixed_text_and_bytes() -> None:
+    """A single line source cannot mix text and bytes."""
+    with pytest.raises(TypeError, match="mixed str and bytes"):
+        list(SDBlock.from_lines([b"title\n", "M  END\n"]))
+
+
+def test_bytes_block_requires_binary_append_values() -> None:
+    """Appending to a bytes block cannot introduce implicitly encoded text."""
+    block = next(SDBlock.from_lines([b"title\n", b"\n", b"M  END\n"]))
+
+    with pytest.raises(TypeError, match="must be appended as bytes"):
+        block.append_record("field", b"value")
+
+    block.append_record(b"field", b"value")
+    assert block.records() == [(b"field", b"value")]
 
 
 def test_titled_mol_read(single_titled_mol_sdf: Pathy) -> None:

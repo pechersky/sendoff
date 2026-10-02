@@ -1,5 +1,5 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyIterator, PyList};
+use pyo3::types::{PyBytes, PyIterator, PyList, PyString, PyTuple};
 
 use crate::core::sdblock;
 use crate::python::ctable::PyCTable;
@@ -7,108 +7,223 @@ use crate::python::ctable::PyCTable;
 /// Handle a single molecule block from an SD file.
 #[pyclass(name = "SDBlock", module = "sendoff.native")]
 pub(crate) struct PySDBlock {
-    inner: sdblock::SDBlock,
+    inner: SDBlockInner,
+}
+
+enum SDBlockInner {
+    Text(sdblock::SDBlock),
+    Bytes(sdblock::BytesSDBlock),
 }
 
 #[pymethods]
 impl PySDBlock {
-    /// Parse in SDBlocks from a sequence of lines.
+    /// Parse SDBlocks from homogeneous str or bytes lines.
     ///
     /// Args:
-    ///     lines: an Iterable of str that optionally have whitespace that is stripped,
-    ///         likely separated by the $$$$ SD delimiter
+    ///     lines: an Iterable of str or bytes lines separated by the $$$$ delimiter
     ///
     /// Returns:
-    ///     An iterator of SDBlocks parsed in from the lines
+    ///     An iterator of SDBlocks whose values have the same type as the input
     #[staticmethod]
     fn from_lines<'py>(py: Python<'py>, lines: &Bound<'_, PyAny>) -> PyResult<Bound<'py, PyAny>> {
-        let mut lines = lines
-            .try_iter()?
-            .map(|line| line.and_then(|line| line.extract::<String>()));
-        let blocks = sdblock::SDBlock::from_lines(&mut lines)?;
+        let mut text_lines = Vec::new();
+        let mut byte_lines = Vec::new();
+        let mut is_bytes = None;
+
+        for line in lines.try_iter()? {
+            let line = line?;
+            if line.is_instance_of::<PyString>() {
+                if is_bytes == Some(true) {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(
+                        "SDBlock.from_lines does not accept mixed str and bytes lines",
+                    ));
+                }
+                is_bytes = Some(false);
+                text_lines.push(line.extract::<String>()?);
+            } else if line.is_instance_of::<PyBytes>() {
+                if is_bytes == Some(false) {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(
+                        "SDBlock.from_lines does not accept mixed str and bytes lines",
+                    ));
+                }
+                is_bytes = Some(true);
+                byte_lines.push(line.extract::<Vec<u8>>()?);
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "SDBlock.from_lines lines must be str or bytes",
+                ));
+            }
+        }
+
+        let blocks: Vec<Self> = if is_bytes == Some(true) {
+            let mut lines = byte_lines.into_iter().map(Ok::<_, PyErr>);
+            sdblock::BytesSDBlock::from_lines(&mut lines)?
+                .into_iter()
+                .map(|inner| Self {
+                    inner: SDBlockInner::Bytes(inner),
+                })
+                .collect()
+        } else {
+            let mut lines = text_lines.into_iter().map(Ok::<_, PyErr>);
+            sdblock::SDBlock::from_lines(&mut lines)?
+                .into_iter()
+                .map(|inner| Self {
+                    inner: SDBlockInner::Text(inner),
+                })
+                .collect()
+        };
         let objects = blocks
             .into_iter()
-            .map(|inner| Py::new(py, Self { inner }))
+            .map(|block| Py::new(py, block))
             .collect::<PyResult<Vec<_>>>()?;
         let list = PyList::new(py, objects)?;
         let iterator = PyIterator::from_object(&list.into_any())?;
         Ok(iterator.into_any())
     }
 
-    /// Return the parsed molecule title.
+    /// Return the parsed molecule title without changing its input type.
     #[getter]
-    fn title(&self) -> &str {
-        &self.inner.title
+    fn title<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
+        match &self.inner {
+            SDBlockInner::Text(block) => PyString::new(py, &block.title).into_any(),
+            SDBlockInner::Bytes(block) => PyBytes::new(py, &block.title).into_any(),
+        }
     }
 
     /// Generate SD metadata records.
     ///
     /// Returns:
-    ///     Tuples of record name and value. The value includes any newlines
-    ///     if it is multiline.
-    fn records(&self) -> Vec<(String, String)> {
-        self.inner.records()
+    ///     Tuples of record name and value in the input type
+    fn records<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let records = match &self.inner {
+            SDBlockInner::Text(block) => block
+                .records()
+                .into_iter()
+                .map(|(name, value)| {
+                    let tuple = PyTuple::new(
+                        py,
+                        [
+                            PyString::new(py, &name).into_any(),
+                            PyString::new(py, &value).into_any(),
+                        ],
+                    )?;
+                    Ok(tuple.into_any().unbind())
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+            SDBlockInner::Bytes(block) => block
+                .records()
+                .into_iter()
+                .map(|(name, value)| {
+                    let tuple = PyTuple::new(
+                        py,
+                        [
+                            PyBytes::new(py, &name).into_any(),
+                            PyBytes::new(py, &value).into_any(),
+                        ],
+                    )?;
+                    Ok(tuple.into_any().unbind())
+                })
+                .collect::<PyResult<Vec<_>>>()?,
+        };
+        PyList::new(py, records)
     }
 
     /// Write an SDBlock to a file-like handle.
     ///
     /// Args:
-    ///     outh: file-like handle, such as what is returned by open(..., "w")
-    ///     with_newlines: each line is written with a trailing "\\n".
-    ///         The newline character is appended only if it was not in the line.
+    ///     outh: a text or binary file-like handle matching the input type
+    ///     with_newlines: each line is written with a trailing newline when absent
     #[pyo3(signature = (outh, with_newlines = true))]
     fn write(&self, outh: &Bound<'_, PyAny>, with_newlines: bool) -> PyResult<()> {
-        outh.call_method1("write", (self.inner.serialize(with_newlines),))?;
+        match &self.inner {
+            SDBlockInner::Text(block) => {
+                outh.call_method1("write", (block.serialize(with_newlines),))?;
+            }
+            SDBlockInner::Bytes(block) => {
+                let output = block.serialize(with_newlines);
+                outh.call_method1("write", (PyBytes::new(outh.py(), &output),))?;
+            }
+        }
         Ok(())
     }
 
-    /// Append a field and value to the SD data record.
+    /// Append a field and value of the same type as the input block.
     ///
     /// Args:
     ///     record_name: field name
     ///     value: field value, with no terminating newline
-    fn append_record(&mut self, record_name: &str, value: &str) {
-        self.inner.append_record(record_name, value);
+    fn append_record(
+        &mut self,
+        record_name: &Bound<'_, PyAny>,
+        value: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        match &mut self.inner {
+            SDBlockInner::Text(block) => {
+                if !record_name.is_instance_of::<PyString>() || !value.is_instance_of::<PyString>()
+                {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(
+                        "text SDBlock values must be appended as str",
+                    ));
+                }
+                block.append_record(
+                    &record_name.extract::<String>()?,
+                    &value.extract::<String>()?,
+                );
+            }
+            SDBlockInner::Bytes(block) => {
+                if !record_name.is_instance_of::<PyBytes>() || !value.is_instance_of::<PyBytes>() {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(
+                        "byte-backed SDBlock values must be appended as bytes",
+                    ));
+                }
+                let record_name = record_name.extract::<Vec<u8>>()?;
+                let value = value.extract::<Vec<u8>>()?;
+                block.append_record(&record_name, &value);
+            }
+        }
+        Ok(())
     }
 
-    /// Parse out the underlying CTable object from the SDBlock.
+    /// Parse out the underlying CTable object from a text SDBlock.
     ///
-    /// Returns:
-    ///     The CTable titled with this SDBlock's title, parsed from its MDL
-    ///     lines without validation.
+    /// Byte-backed SDBlocks cannot be converted without decoding their title.
     fn ctable(&self) -> PyResult<PyCTable> {
-        PyCTable::from_lines(self.inner.ctable_lines())
+        match &self.inner {
+            SDBlockInner::Text(block) => PyCTable::from_lines(block.ctable_lines()),
+            SDBlockInner::Bytes(_) => Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "ctable operations are not supported for byte-backed SDBlocks",
+            )),
+        }
     }
 
     /// Get the number of atoms as indicated in the MDL block.
     ///
-    /// The count is read from the counts line and may differ from the number
-    /// of atom lines.
-    ///
-    /// Returns:
-    ///     The number of atoms parsed from the counts line.
+    /// Byte-backed blocks raise `NotImplementedError`.
     fn num_atoms(&self) -> PyResult<i64> {
         Ok(self.ctable()?.num_atoms_value())
     }
 
     /// Get the number of bonds as indicated in the MDL block.
     ///
-    /// The count is read from the counts line and may differ from the number
-    /// of bond lines.
-    ///
-    /// Returns:
-    ///     The number of bonds parsed from the counts line.
+    /// Byte-backed blocks raise `NotImplementedError`.
     fn num_bonds(&self) -> PyResult<i64> {
         Ok(self.ctable()?.num_bonds_value())
     }
 
     /// Renumber atom and bond indices to be 1-indexed and in order.
     ///
-    /// Utilizes the underlying CTable's renumbering and overwrites this object's MDL lines.
+    /// Byte-backed blocks raise `NotImplementedError`.
     fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
+        if matches!(&self.inner, SDBlockInner::Bytes(_)) {
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "ctable operations are not supported for byte-backed SDBlocks",
+            ));
+        }
         let mut ctable = self.ctable()?;
         ctable.renumber_indices_for_block(py)?;
-        self.inner.mdl = ctable.lines_after_title();
+        if let SDBlockInner::Text(block) = &mut self.inner {
+            block.mdl = ctable.lines_after_title();
+        }
         Ok(())
     }
 }

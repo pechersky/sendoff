@@ -111,13 +111,13 @@ class SDBlock:
     Handle a single molecule block from an SD file.
     """
 
-    def append_record(self, /, record_name: str, value: str) -> None:
+    def append_record(self, /, record_name: str | bytes, value: str | bytes) -> None:
         """
         Append a field and value to the SD data record.
 
         Args:
-            record_name: field name
-            value: field value, with no terminating newline
+            record_name: field name of the same type as the input lines
+            value: field value of the same type, without a terminating newline
         """
     def ctable(self, /) -> CTable:
         """
@@ -126,6 +126,9 @@ class SDBlock:
         Returns:
             The CTable titled with this SDBlock's title, parsed from its MDL
             lines without validation.
+
+        Raises:
+            NotImplementedError: for byte-backed SDBlocks
         """
     @staticmethod
     def from_lines(lines: Any) -> Any:
@@ -133,11 +136,10 @@ class SDBlock:
         Parse in SDBlocks from a sequence of lines.
 
         Args:
-            lines: an Iterable of str that optionally have whitespace that is stripped,
-                likely separated by the $$$$ SD delimiter
+            lines: homogeneous str or bytes lines separated by the $$$$ delimiter
 
         Returns:
-            An iterator of SDBlocks parsed in from the lines
+            An iterator of SDBlocks whose values have the same type as the input
         """
     def num_atoms(self, /) -> int:
         """
@@ -148,6 +150,9 @@ class SDBlock:
 
         Returns:
             The number of atoms parsed from the counts line.
+
+        Raises:
+            NotImplementedError: for byte-backed SDBlocks
         """
     def num_bonds(self, /) -> int:
         """
@@ -158,32 +163,37 @@ class SDBlock:
 
         Returns:
             The number of bonds parsed from the counts line.
+
+        Raises:
+            NotImplementedError: for byte-backed SDBlocks
         """
-    def records(self, /) -> list[tuple[str, str]]:
+    def records(self, /) -> list[tuple[str, str]] | list[tuple[bytes, bytes]]:
         """
         Generate SD metadata records.
 
         Returns:
-            Tuples of record name and value. The value includes any newlines
-            if it is multiline.
+            Tuples of input-typed name/value pairs; multiline values include newlines.
         """
     def renumber_indices(self, /) -> None:
         """
         Renumber atom and bond indices to be 1-indexed and in order.
 
         Utilizes the underlying CTable's renumbering and overwrites this object's MDL lines.
+
+        Raises:
+            NotImplementedError: for byte-backed SDBlocks
         """
     @property
-    def title(self, /) -> str:
+    def title(self, /) -> str | bytes:
         """
-        Return the parsed molecule title.
+        Return the parsed molecule title in the input type.
         """
     def write(self, /, outh: Any, with_newlines: bool = True) -> None:
         """
         Write an SDBlock to a file-like handle.
 
         Args:
-            outh: file-like handle, such as what is returned by open(..., "w")
+            outh: text or binary file-like handle matching the input type
             with_newlines: each line is written with a trailing "\\n".
                 The newline character is appended only if it was not in the line.
         """
