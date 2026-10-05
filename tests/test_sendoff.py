@@ -475,20 +475,24 @@ def test_iter_records_preserves_bytes_and_owns_its_block() -> None:
     assert list(iterator) == [(b"Record", b"third")]
 
 
-def test_string_and_bytes_strip_only_ascii_whitespace() -> None:
-    """Text and bytes both strip Python's bytes.strip() whitespace set.
+def test_text_strips_like_str_and_bytes_like_bytes() -> None:
+    """Text blocks strip str.strip() whitespace; bytes blocks bytes.strip().
 
-    Unicode whitespace such as an em space is kept in titles, names, and
-    values; this deliberately diverges from str.strip() in sendoff < 1.0.
+    A value line holding only Unicode whitespace is blank in text blocks, as
+    with str.strip() in sendoff < 1.0, so it ends the record.
     """
     text_block = next(
         SDBlock.from_lines(
             [
-                " \u2003Title\u2003 \n",
+                " \u2003Title\u3000 \n",
                 "\n",
                 "M  END\n",
                 "> <Record>\u2003\n",
-                "\u2003Text\u2003\n",
+                "\u2003Text\x1f\n",
+                "\n",
+                "> <Blank>\n",
+                "\u3000\n",
+                "skipped\n",
                 "\n",
                 "$$$$\n",
             ]
@@ -501,17 +505,17 @@ def test_string_and_bytes_strip_only_ascii_whitespace() -> None:
                 b"\n",
                 b"M  END\n",
                 b"> <Record>\n",
-                b"\xc2\xa0Bytes\xc2\xa0\n",
+                b"\xc2\xa0Bytes\x1f\n",
                 b"\n",
                 b"$$$$\n",
             ]
         )
     )
 
-    assert text_block.title == "\u2003Title\u2003"
-    assert text_block.records() == [("Record", "\u2003Text\u2003")]
+    assert text_block.title == "Title"
+    assert text_block.records() == [("Record", "Text"), ("Blank", "")]
     assert byte_block.title == b"\xc2\xa0Title\xc2\xa0"
-    assert byte_block.records() == [(b"Record", b"\xc2\xa0Bytes\xc2\xa0")]
+    assert byte_block.records() == [(b"Record", b"\xc2\xa0Bytes\x1f")]
 
 
 @pytest.mark.xfail  # sendoff does not support metadata vals starting with $$$$

@@ -24,6 +24,11 @@ pub fn is_space(byte: u8) -> bool {
 /// Strip whitespace from both ends like Python's `bytes.strip()`.
 #[inline]
 pub fn trim(bytes: &[u8]) -> &[u8] {
+    trim_ascii_by(bytes, is_space)
+}
+
+#[inline]
+fn trim_ascii_by(bytes: &[u8], is_space: impl Fn(u8) -> bool) -> &[u8] {
     let Some(start) = bytes.iter().position(|&byte| !is_space(byte)) else {
         return &[];
     };
@@ -32,6 +37,98 @@ pub fn trim(bytes: &[u8]) -> &[u8] {
         .rposition(|&byte| !is_space(byte))
         .map_or(start, |index| index + 1);
     &bytes[start..end]
+}
+
+/// Whether an ASCII byte is whitespace for Python's `str.strip()`.
+#[inline]
+fn is_str_space(byte: u8) -> bool {
+    is_space(byte) || matches!(byte, b'\x1c'..=b'\x1f')
+}
+
+/// The UTF-8 length of a non-ASCII `str.isspace()` character starting
+/// `bytes`, or 0.
+#[inline]
+fn wide_space_prefix(bytes: &[u8]) -> usize {
+    match bytes {
+        [0xc2, 0x85 | 0xa0, ..] => 2,
+        [0xe1, 0x9a, 0x80, ..]
+        | [0xe2, 0x80, 0x80..=0x8a | 0xa8 | 0xa9 | 0xaf, ..]
+        | [0xe2, 0x81, 0x9f, ..]
+        | [0xe3, 0x80, 0x80, ..] => 3,
+        _ => 0,
+    }
+}
+
+/// The UTF-8 length of a non-ASCII `str.isspace()` character ending
+/// `bytes`, or 0.
+#[inline]
+fn wide_space_suffix(bytes: &[u8]) -> usize {
+    match bytes {
+        [.., 0xc2, 0x85 | 0xa0] => 2,
+        [.., 0xe1, 0x9a, 0x80]
+        | [.., 0xe2, 0x80, 0x80..=0x8a | 0xa8 | 0xa9 | 0xaf]
+        | [.., 0xe2, 0x81, 0x9f]
+        | [.., 0xe3, 0x80, 0x80] => 3,
+        _ => 0,
+    }
+}
+
+/// Strip whitespace from both ends of UTF-8 like Python's `str.strip()`.
+///
+/// Only complete whitespace sequences are removed, which are lead-byte
+/// anchored, so stripping never changes whether the rest decodes.
+#[inline]
+pub fn trim_str(bytes: &[u8]) -> &[u8] {
+    let trimmed = trim_ascii_by(bytes, is_str_space);
+    match (trimmed.first(), trimmed.last()) {
+        (Some(&first), Some(&last)) if first >= 0x80 || last >= 0x80 => trim_wide(trimmed),
+        _ => trimmed,
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn trim_wide(bytes: &[u8]) -> &[u8] {
+    let mut start = 0;
+    loop {
+        match wide_space_prefix(&bytes[start..]) {
+            0 => break,
+            len => start += len,
+        }
+        while start < bytes.len() && is_str_space(bytes[start]) {
+            start += 1;
+        }
+    }
+    let mut end = bytes.len();
+    loop {
+        match wide_space_suffix(&bytes[start..end]) {
+            0 => break,
+            len => end -= len,
+        }
+        while end > start && is_str_space(bytes[end - 1]) {
+            end -= 1;
+        }
+    }
+    &bytes[start..end]
+}
+
+/// Which Python `strip()` a block's lines follow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Strip {
+    /// `bytes.strip()`: ASCII whitespace only.
+    Bytes,
+    /// `str.strip()` over UTF-8: also `\x1c`-`\x1f` and Unicode spaces.
+    Str,
+}
+
+impl Strip {
+    #[inline]
+    pub fn trim(self, bytes: &[u8]) -> &[u8] {
+        match self {
+            Strip::Bytes => trim(bytes),
+            Strip::Str => trim_str(bytes),
+        }
+    }
 }
 
 /// Return the line starting at `*pos`, including its `\n`, and advance.
@@ -118,8 +215,8 @@ impl Block {
     }
 
     /// The stripped title.
-    pub fn title(&self) -> &[u8] {
-        trim(&self.data[..self.title_end])
+    pub fn title(&self, strip: Strip) -> &[u8] {
+        strip.trim(&self.data[..self.title_end])
     }
 
     /// The MDL lines after the title, through `M  END`, each ending in `\n`.
@@ -133,8 +230,8 @@ impl Block {
     }
 
     /// Write the stripped title, the remaining lines, and `$$$$`.
-    pub fn serialize_into(&self, output: &mut Vec<u8>) {
-        let title = self.title();
+    pub fn serialize_into(&self, output: &mut Vec<u8>, strip: Strip) {
+        let title = self.title(strip);
         let body = &self.data[self.title_end..];
         output.reserve(title.len() + body.len() + 6);
         output.extend_from_slice(title);
@@ -144,8 +241,8 @@ impl Block {
     }
 
     /// The serialized size in bytes.
-    pub fn serialized_len(&self) -> usize {
-        self.title().len() + 1 + (self.data.len() - self.title_end) + 5
+    pub fn serialized_len(&self, strip: Strip) -> usize {
+        self.title(strip).len() + 1 + (self.data.len() - self.title_end) + 5
     }
 
     /// Append a `> <name>` record with a single value line.
@@ -175,8 +272,12 @@ impl Block {
     }
 
     /// Parse the next record at or after `*pos` in the SD data.
-    pub fn next_record(&self, pos: &mut usize) -> Result<Option<Record<'_>>, MissingFieldName> {
-        next_record(self.metadata(), pos)
+    pub fn next_record(
+        &self,
+        pos: &mut usize,
+        strip: Strip,
+    ) -> Result<Option<Record<'_>>, MissingFieldName> {
+        next_record(self.metadata(), pos, strip)
     }
 
     /// The format and atom and bond counts declared by the MDL header.
@@ -200,6 +301,19 @@ impl Block {
 pub fn next_record<'a>(
     metadata: &'a [u8],
     pos: &mut usize,
+    strip: Strip,
+) -> Result<Option<Record<'a>>, MissingFieldName> {
+    match strip {
+        Strip::Bytes => next_record_by(metadata, pos, trim),
+        Strip::Str => next_record_by(metadata, pos, trim_str),
+    }
+}
+
+#[inline]
+fn next_record_by<'a>(
+    metadata: &'a [u8],
+    pos: &mut usize,
+    trim: impl Fn(&[u8]) -> &[u8],
 ) -> Result<Option<Record<'a>>, MissingFieldName> {
     while *pos < metadata.len() {
         let header = trim(next_line(metadata, pos));
@@ -210,7 +324,7 @@ pub fn next_record<'a>(
             while *pos < metadata.len() && !trim(next_line(metadata, pos)).is_empty() {}
             continue;
         };
-        let name = record_name(rest)?;
+        let name = record_name(rest, &trim)?;
         let mut value: Cow<'a, [u8]> = Cow::Borrowed(&[]);
         let mut first = true;
         while *pos < metadata.len() {
@@ -233,7 +347,10 @@ pub fn next_record<'a>(
 }
 
 /// Extract `name` from the text after `> ` in a `> <name>` header.
-fn record_name(rest: &[u8]) -> Result<&[u8], MissingFieldName> {
+fn record_name<'a>(
+    rest: &'a [u8],
+    trim: &impl Fn(&[u8]) -> &[u8],
+) -> Result<&'a [u8], MissingFieldName> {
     let field = trim(rest);
     let field = field
         .iter()
@@ -258,15 +375,15 @@ mod tests {
 
     fn written(block: &Block) -> String {
         let mut output = Vec::new();
-        block.serialize_into(&mut output);
-        assert_eq!(output.len(), block.serialized_len());
+        block.serialize_into(&mut output, Strip::Bytes);
+        assert_eq!(output.len(), block.serialized_len(Strip::Bytes));
         String::from_utf8(output).unwrap()
     }
 
     fn records(block: &Block) -> Result<Vec<(String, String)>, MissingFieldName> {
         let mut pos = 0;
         let mut found = Vec::new();
-        while let Some(record) = block.next_record(&mut pos)? {
+        while let Some(record) = block.next_record(&mut pos, Strip::Bytes)? {
             found.push((
                 String::from_utf8(record.name.to_vec()).unwrap(),
                 String::from_utf8(record.value.into_owned()).unwrap(),
@@ -278,7 +395,7 @@ mod tests {
     #[test]
     fn splits_title_mdl_and_metadata() {
         let block = block(" t \r\nsrc\nM  END\n> <A>\n a \nb\n\n> <B>\n\n$$$$\n", true);
-        assert_eq!(block.title(), b"t");
+        assert_eq!(block.title(Strip::Bytes), b"t");
         assert_eq!(block.mdl(), b"src\nM  END\n");
         assert_eq!(block.metadata(), b"> <A>\n a \nb\n\n> <B>\n\n");
         assert_eq!(
@@ -302,7 +419,7 @@ mod tests {
     #[test]
     fn a_delimiter_title_is_the_whole_block() {
         let block = block("$$$$\n", true);
-        assert_eq!(block.title(), b"$$$$");
+        assert_eq!(block.title(Strip::Bytes), b"$$$$");
         assert_eq!(written(&block), "$$$$\n$$$$\n");
     }
 
@@ -340,6 +457,49 @@ mod tests {
     #[test]
     fn strips_python_bytes_whitespace_only() {
         assert_eq!(trim(b"\x0b\x0c \t\r\nx\x1c\n"), b"x\x1c");
+    }
+
+    /// Every character for which Python's `str.isspace()` is true.
+    const STR_SPACES: &str = "\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f \u{85}\u{a0}\u{1680}\
+        \u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\
+        \u{2009}\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}";
+
+    #[test]
+    fn strips_python_str_whitespace() {
+        for space in STR_SPACES.chars() {
+            let padded = format!("{space}{space}x{space}y{space}{space}");
+            let expected = format!("x{space}y");
+            assert_eq!(
+                trim_str(padded.as_bytes()),
+                expected.as_bytes(),
+                "{space:?}"
+            );
+            assert_eq!(trim_str(space.to_string().as_bytes()), b"");
+        }
+        assert_eq!(trim_str(STR_SPACES.as_bytes()), b"");
+        // Neighbours of the whitespace code points are kept.
+        for kept in [
+            "\u{84}", "\u{a1}", "\u{200b}", "\u{2027}", "\u{3001}", "\u{feff}",
+        ] {
+            assert_eq!(trim_str(kept.as_bytes()), kept.as_bytes(), "{kept:?}");
+        }
+        // Incomplete sequences are not whitespace.
+        assert_eq!(trim_str(b"\xe3\x80x\xe3\x80"), b"\xe3\x80x\xe3\x80");
+    }
+
+    #[test]
+    fn str_strip_ends_records_at_unicode_blank_lines() {
+        let text = "\u{3000}t\u{a0}\nM  END\n> <A>\u{2003}\n\u{3000}\n\u{1c}tail\n\n";
+        let block = block(text, false);
+        assert_eq!(block.title(Strip::Str), b"t");
+        let mut pos = 0;
+        let record = block.next_record(&mut pos, Strip::Str).unwrap().unwrap();
+        assert_eq!((record.name, &*record.value), (&b"A"[..], &b""[..]));
+        assert_eq!(block.next_record(&mut pos, Strip::Str), Ok(None));
+        assert_eq!(block.title(Strip::Bytes), "\u{3000}t\u{a0}".as_bytes());
+        let record = block.next_record(&mut 0, Strip::Bytes).unwrap().unwrap();
+        assert_eq!(record.name, b"A");
+        assert_eq!(&*record.value, "\u{3000}\n\u{1c}tail".as_bytes());
     }
 
     #[test]

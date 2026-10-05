@@ -9,7 +9,7 @@ use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyIterator, PyList, PyString, PyTuple};
 
-use crate::core::block::{self, Block, Record};
+use crate::core::block::{self, Block, Record, Strip};
 use crate::core::scan::{Scanner, TRANSLATE_SLACK, Tail, translate_newlines};
 use crate::python::ctable::{PyCTable, error_to_py};
 
@@ -27,6 +27,14 @@ impl Kind {
         match self {
             Kind::Text => PyString::from_bytes(py, bytes).map(Bound::into_any),
             Kind::Bytes => Ok(PyBytes::new(py, bytes).into_any()),
+        }
+    }
+
+    /// The Python `strip()` that values of this kind follow.
+    fn strip(self) -> Strip {
+        match self {
+            Kind::Text => Strip::Str,
+            Kind::Bytes => Strip::Bytes,
         }
     }
 }
@@ -249,7 +257,7 @@ impl PySDRecordIterator {
             return Ok(None);
         }
         let block = self.block.borrow(py);
-        let result = match block.block.next_record(&mut self.pos) {
+        let result = match block.block.next_record(&mut self.pos, block.kind.strip()) {
             Ok(Some(record)) => block.record(py, record).map(Some),
             Ok(None) => Ok(None),
             Err(error) => Err(PyValueError::new_err(error.to_string())),
@@ -323,7 +331,7 @@ impl PySDBlock {
     /// Return the stripped molecule title in the input type.
     #[getter]
     fn title<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.kind.value(py, self.block.title())
+        self.kind.value(py, self.block.title(self.kind.strip()))
     }
 
     /// Return all SD data records.
@@ -335,7 +343,7 @@ impl PySDBlock {
         let mut pos = 0;
         while let Some(record) = self
             .block
-            .next_record(&mut pos)
+            .next_record(&mut pos, self.kind.strip())
             .map_err(|error| PyValueError::new_err(error.to_string()))?
         {
             list.append(self.record(py, record)?)?;
@@ -358,8 +366,9 @@ impl PySDBlock {
     ///     outh: a text or binary file-like handle matching the input type
     fn write(&self, outh: &Bound<'_, PyAny>) -> PyResult<()> {
         let py = outh.py();
-        let mut output = Vec::with_capacity(self.block.serialized_len());
-        self.block.serialize_into(&mut output);
+        let strip = self.kind.strip();
+        let mut output = Vec::with_capacity(self.block.serialized_len(strip));
+        self.block.serialize_into(&mut output, strip);
         outh.call_method1(intern!(py, "write"), (self.kind.value(py, &output)?,))?;
         Ok(())
     }
@@ -393,7 +402,7 @@ impl PySDBlock {
     /// Byte-backed SDBlocks cannot be converted without decoding their title.
     fn ctable(&self, py: Python<'_>) -> PyResult<PyCTable> {
         self.require_text()?;
-        let mut lines = vec![decode(py, self.block.title())?.to_owned()];
+        let mut lines = vec![decode(py, self.block.title(Strip::Str))?.to_owned()];
         for line in block::lines(self.block.mdl()) {
             lines.push(decode(py, line)?.to_owned());
         }

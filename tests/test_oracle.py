@@ -5,8 +5,8 @@ Hypothesis generates SDF-shaped inputs (titles, MDL bodies with and without
 ``$$$$`` variants, LF/CRLF/CR endings, unterminated input) and every entry
 point must agree with ``tests/reference_sdblock.py`` block by block.
 
-The alphabet leaves out whitespace that Python's ``strip`` and the native
-trimming treat differently (an accepted 1.0 divergence covered separately).
+The alphabet includes whitespace that only ``str.strip`` removes, such as
+``\x1f`` and the ideographic space, but not ``str.splitlines`` breaks.
 """
 
 from __future__ import annotations
@@ -22,11 +22,13 @@ from hypothesis import strategies as st
 from sendoff.sdblock import SDBlock, parse_sdf
 from tests.reference_sdblock import RefBlock, ref_from_lines
 
-ALPHABET = list("abXZ09 \t<>$-_.()é中")
+ALPHABET = list("abXZ09 \t<>$-_.()é中\x1f\xa0\u2003\u3000")
 SPECIAL = [
     "",
     " ",
     "\t ",
+    "\u3000",
+    " \xa0\x1f",
     "M  END",
     "M  END  ",
     "M  CHG  1   2  -1",
@@ -75,7 +77,7 @@ def sdf_lines(draw: Callable[..., Any]) -> list[str]:
             contents.append(draw(header))
             contents.extend(draw(st.lists(value_line, max_size=3)))
             if draw(st.integers(0, 3)):
-                contents.append(draw(st.sampled_from(["", " ", "\t"])))
+                contents.append(draw(st.sampled_from(["", " ", "\t", "\u3000"])))
         if draw(st.integers(0, 5)):
             contents.append(draw(st.sampled_from(["$$$$", "$$$$", "$$$$ ", "$$$$x"])))
     contents.extend(draw(st.lists(line_content, max_size=2)))

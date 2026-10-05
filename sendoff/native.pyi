@@ -230,8 +230,8 @@ class SDBlock:
         """
         Return the molecule title in the input type.
 
-        Titles, record names, and record values are stripped of the ASCII
-        whitespace that bytes.strip() removes, for both str and bytes blocks.
+        Titles, record names, and record values are stripped as str.strip()
+        does for str blocks and as bytes.strip() does for bytes blocks.
         """
 
     def write(self, /, outh: SupportsTextWrite | SupportsBytesWrite) -> None:

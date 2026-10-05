@@ -262,6 +262,7 @@ fn swar_cr_mask(window: &[u8; WINDOW]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::block::Strip;
 
     fn split(input: &[u8], chunk: usize) -> Vec<(String, String)> {
         let mut scanner = Scanner::default();
@@ -277,9 +278,9 @@ mod tests {
             .unwrap()
         {
             let mut written = Vec::new();
-            block.serialize_into(&mut written);
+            block.serialize_into(&mut written, Strip::Bytes);
             blocks.push((
-                String::from_utf8(block.title().to_vec()).unwrap(),
+                String::from_utf8(block.title(Strip::Bytes).to_vec()).unwrap(),
                 String::from_utf8(written).unwrap(),
             ));
         }
