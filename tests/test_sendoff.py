@@ -15,7 +15,7 @@ from sendoff.ctable import (
     IndicesMismatchError,
     IndicesOutOfOrderError,
 )
-from sendoff.sdblock import Pathy, SDBlock, parse_sdf
+from sendoff.sdblock import Pathy, SDBlock, parse_sdf, write_sdf
 
 
 def test_single_mol_read(single_mol_sdf: Pathy) -> None:
@@ -1498,3 +1498,59 @@ def test_renumber_slices_atom_lines_by_character() -> None:
     block = v3000_block(atom="a b 1 \u4e2d")
     block.renumber_indices()
     assert "M  V30 1" in block.ctable().lines
+
+
+def test_write_sdf_writes_what_block_write_would(tmp_path: Path) -> None:
+    """write_sdf to a path or handle matches SDBlock.write, across chunks.
+
+    Args:
+        tmp_path: pytest fixture of a temporary directory
+    """
+    # Padded titles are stripped; 3 MiB of blocks span several chunks, and
+    # non-ASCII text blocks go to a text handle on their own.
+    text = "".join(
+        f"  t{index}  \r\nM  END\n> <A>\n{'é' * (index % 7 < 2)}{'v' * 1000}\n\n$$$$\n"
+        for index in range(3000)
+    )
+    source = tmp_path / "input.sdf"
+    source.write_text(text, newline="")
+    out = tmp_path / "out.sdf"
+    paths: list[Pathy] = [source, os.fsencode(source)]
+    for path in paths:
+        blocks = list(parse_sdf(path))
+        handle = io.StringIO() if isinstance(path, Path) else io.BytesIO()
+        expected = b"".join(
+            b.to_sdf().encode() if isinstance(b.title, str) else b.to_sdf()
+            for b in blocks
+        )
+        assert write_sdf(out, blocks) == 3000
+        assert out.read_bytes() == expected
+        assert write_sdf(handle, iter(blocks)) == 3000
+        written = handle.getvalue()
+        assert (written.encode() if isinstance(written, str) else written) == expected
+    assert write_sdf(str(out), []) == 0
+    assert out.read_bytes() == b""
+
+
+def test_write_sdf_rejects_bad_input(tmp_path: Path) -> None:
+    """write_sdf reports bad paths, mixed handles, and undecodable text.
+
+    Args:
+        tmp_path: pytest fixture of a temporary directory
+    """
+    text, data = SDBlock("t\nM  END\n"), SDBlock(b"t\nM  END\n")
+    with pytest.raises(TypeError, match="mixed str and bytes"):
+        write_sdf(io.StringIO(), [text, data])  # type: ignore[list-item]
+    assert write_sdf(tmp_path / "mixed.sdf", [text, data]) == 2
+    with pytest.raises(TypeError):
+        write_sdf(tmp_path / "x.sdf", ["t\nM  END\n"])  # type: ignore[list-item]
+    with pytest.raises(FileNotFoundError) as error:
+        write_sdf(tmp_path / "missing" / "x.sdf", [text])
+    assert error.value.filename == str(tmp_path / "missing" / "x.sdf")
+
+    source = tmp_path / "latin1.sdf"
+    source.write_bytes(b"t\nM  END\n> <A>\n\xe9\n\n$$$$\n")
+    dests: list[typing.Any] = [tmp_path / "bad.sdf", io.StringIO()]
+    for dest in dests:
+        with pytest.raises(UnicodeDecodeError):
+            write_sdf(dest, parse_sdf(source))

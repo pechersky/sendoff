@@ -487,3 +487,28 @@ def parse_sdf(
     Returns:
         An iterator of SDBlocks; close() closes the file early
     """
+
+@overload
+def write_sdf(
+    dest: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+    blocks: Iterable[SDBlock[Any]],
+) -> int: ...
+@overload
+def write_sdf(dest: _SupportsWrite[AnyStr], blocks: Iterable[SDBlock[AnyStr]]) -> int:
+    """
+    Write SDBlocks to a path or a file object, and return how many.
+
+    Blocks are written as SDBlock.write would, but a MiB or so at a time:
+    to a path without holding the GIL, or to a file object with one write
+    call per chunk, as str for text blocks or bytes for byte-backed ones.
+    Text blocks must be valid UTF-8.
+
+    Args:
+        dest: a str, bytes, or os.PathLike path to create or truncate, or a
+            text or binary file object
+        blocks: an iterable of SDBlocks, all str or all bytes for a file
+            object
+
+    Returns:
+        The number of blocks written
+    """

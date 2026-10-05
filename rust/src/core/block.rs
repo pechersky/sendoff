@@ -306,6 +306,13 @@ impl Block {
         Cow::Owned(output)
     }
 
+    /// Append what `serialized` returns to `out`.
+    pub fn serialize_into(&self, strip: Strip, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.title(strip));
+        out.push(b'\n');
+        out.extend_from_slice(&self.data[self.title_end..]);
+    }
+
     /// Append a `> <name>` record with a single value line.
     pub fn append_record(&mut self, name: &[u8], value: &[u8]) {
         self.data.truncate(self.body_end());

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::{ErrorKind, Read};
+use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
 
 use pyo3::exceptions::{
@@ -797,6 +797,115 @@ impl PySDBlock {
         self.block.replace_mdl(lines.iter().map(String::as_bytes));
         Ok(())
     }
+}
+
+/// Where `write_sdf` sends serialized blocks, a chunk at a time.
+enum Sink<'py> {
+    File {
+        file: File,
+        filename: Py<PyAny>,
+    },
+    Handle {
+        write: Bound<'py, PyAny>,
+        kind: Option<Kind>,
+    },
+}
+
+impl Sink<'_> {
+    /// Check a block's kind before its serialization joins the chunk, and
+    /// return whether to write the block on its own.
+    ///
+    /// CPython stores and encodes ASCII str much faster than wider str, and
+    /// one non-ASCII character widens a whole str, so non-ASCII text goes
+    /// to a file object a block at a time, keeping ASCII chunks narrow.
+    fn accept(&mut self, py: Python<'_>, kind: Kind, serialized: &[u8]) -> PyResult<bool> {
+        match self {
+            // A file object's write validates text chunks as it decodes them.
+            Sink::Handle { kind: expected, .. } => {
+                set_kind(expected, kind).map_err(|_| {
+                    PyTypeError::new_err("write_sdf does not accept mixed str and bytes blocks")
+                })?;
+                Ok(kind == Kind::Text && !serialized.is_ascii())
+            }
+            Sink::File { .. } if kind == Kind::Text => decode(py, serialized).map(|_| false),
+            Sink::File { .. } => Ok(false),
+        }
+    }
+
+    fn write(&mut self, py: Python<'_>, chunk: &[u8]) -> PyResult<()> {
+        match self {
+            Sink::File { file, filename } => py
+                .detach(|| file.write_all(chunk))
+                .map_err(|error| os_error(py, error, filename)),
+            Sink::Handle { write, kind } => {
+                write.call1((kind.unwrap_or(Kind::Bytes).value(py, chunk)?,))?;
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Write SDBlocks to a path or a file object, and return how many.
+///
+/// Blocks are written as `SDBlock.write` would, but a MiB or so at a
+/// time: to a path without holding the GIL, or to a file object with one
+/// `write` call per chunk, as str for text blocks or bytes for byte-backed
+/// ones. Text blocks must be valid UTF-8.
+///
+/// Args:
+///     dest: a str, bytes, or os.PathLike path to create or truncate, or a
+///         text or binary file object
+///     blocks: an iterable of SDBlocks, all str or all bytes for a file
+///         object
+///
+/// Returns:
+///     The number of blocks written
+#[pyfunction]
+pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> PyResult<usize> {
+    let py = dest.py();
+    let mut sink = match dest.getattr(intern!(py, "write")) {
+        Ok(write) => Sink::Handle { write, kind: None },
+        Err(_) => {
+            let os = PyModule::import(py, "os")?;
+            let filename = os.call_method1("fspath", (dest,))?;
+            let path: PathBuf = os.call_method1("fsdecode", (&filename,))?.extract()?;
+            let filename = filename.unbind();
+            let file = py
+                .detach(|| File::create(&path))
+                .map_err(|error| os_error(py, error, &filename))?;
+            Sink::File { file, filename }
+        }
+    };
+    // Chunks for a file object become new Python objects, which stay
+    // cheaper below malloc's mmap threshold.
+    let limit = match sink {
+        Sink::File { .. } => CHUNK,
+        Sink::Handle { .. } => 64 << 10,
+    };
+    let mut chunk = Vec::with_capacity(2 * limit);
+    let mut count = 0;
+    for block in blocks.try_iter()? {
+        let block = block?;
+        let block = block.cast::<PySDBlock>()?.borrow();
+        let start = chunk.len();
+        block.block.serialize_into(block.kind.strip(), &mut chunk);
+        let alone = sink.accept(py, block.kind, &chunk[start..])?;
+        count += 1;
+        if alone {
+            if start > 0 {
+                sink.write(py, &chunk[..start])?;
+            }
+            sink.write(py, &chunk[start..])?;
+            chunk.clear();
+        } else if chunk.len() >= limit {
+            sink.write(py, &chunk)?;
+            chunk.clear();
+        }
+    }
+    if !chunk.is_empty() {
+        sink.write(py, &chunk)?;
+    }
+    Ok(count)
 }
 
 /// Lazily parse SDBlocks from an SDF path.
