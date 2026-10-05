@@ -39,11 +39,39 @@ impl From<ParseIntError> for CTableError {
     }
 }
 
-fn line_at(lines: &[String], index: usize) -> Result<&String, CTableError> {
-    lines.get(index).ok_or(CTableError::Truncated {
+fn line_at<'a>(lines: &[&'a str], index: usize) -> Result<&'a str, CTableError> {
+    lines.get(index).copied().ok_or(CTableError::Truncated {
         needed: index + 1,
         found: lines.len(),
     })
+}
+
+/// Parse the format, counts line, and declared atom and bond counts.
+///
+/// `lines` starts with the title and needs at most six lines. V3000 input
+/// skips the CTAB BEGIN line and reads its stripped counts from the
+/// following line.
+pub fn parse_header<'a>(
+    lines: &[&'a str],
+) -> Result<(CTableFormat, &'a str, i64, i64), CTableError> {
+    for index in 0..3 {
+        line_at(lines, index)?;
+    }
+    let first_counts = line_at(lines, 3)?;
+    let format = match parse_format(first_counts) {
+        Some("V2000") => CTableFormat::V2000,
+        Some("V3000") => CTableFormat::V3000,
+        Some(other) => return Err(CTableError::UnknownFormat(other.to_owned())),
+        None => return Err(CTableError::MissingField("format")),
+    };
+    let (counts, (atoms, bonds)) = match format {
+        CTableFormat::V2000 => (first_counts, parse_v2000_counts(first_counts)?),
+        CTableFormat::V3000 => {
+            let counts = line_at(lines, 5)?.trim();
+            (counts, parse_v3000_counts(counts)?)
+        }
+    };
+    Ok((format, counts, atoms, bonds))
 }
 
 fn field<'a>(fields: &[&'a str], index: usize, name: &'static str) -> Result<&'a str, CTableError> {
@@ -87,25 +115,12 @@ impl CTable {
     /// stored atom and bond counts come from the counts line, not from counting
     /// the raw atom and bond lines later in the table.
     pub fn parse(lines: Vec<String>) -> Result<Self, CTableError> {
-        let title = line_at(&lines, 0)?.trim().to_owned();
-        let source = line_at(&lines, 1)?.clone();
-        let comment = line_at(&lines, 2)?.clone();
-        let first_counts = line_at(&lines, 3)?.clone();
-        let format = match parse_format(&first_counts) {
-            Some("V2000") => CTableFormat::V2000,
-            Some("V3000") => CTableFormat::V3000,
-            Some(other) => return Err(CTableError::UnknownFormat(other.to_owned())),
-            None => return Err(CTableError::MissingField("format")),
-        };
-        let counts = match format {
-            CTableFormat::V2000 => first_counts,
-            CTableFormat::V3000 => line_at(&lines, 5)?.trim().to_owned(),
-        };
-        let (num_atoms, num_bonds) = match format {
-            CTableFormat::V2000 => parse_v2000_counts(&counts)?,
-            CTableFormat::V3000 => parse_v3000_counts(&counts)?,
-        };
-
+        let header: Vec<&str> = lines.iter().take(6).map(String::as_str).collect();
+        let (format, counts, num_atoms, num_bonds) = parse_header(&header)?;
+        let counts = counts.to_owned();
+        let title = lines[0].trim().to_owned();
+        let source = lines[1].clone();
+        let comment = lines[2].clone();
         Ok(Self {
             lines,
             title,
