@@ -1,3 +1,4 @@
+import os
 from typing import Final, Iterable, Iterator, Protocol, final
 
 DEBUG_BUILD: Final[bool]
@@ -159,7 +160,7 @@ class SDBlock:
     @staticmethod
     def from_lines(
         lines: Iterable[str] | Iterable[bytes] | SupportsRead,
-    ) -> Iterator[SDBlock]:
+    ) -> _SDBlockIterator:
         """
         Parse in SDBlocks from a sequence of lines or a file object.
 
@@ -243,3 +244,34 @@ class SDBlock:
         Args:
             outh: text or binary file-like handle matching the input type
         """
+
+@final
+class _SDBlockIterator(Iterator[SDBlock]):
+    """
+    A lazy iterator of SDBlocks.
+    """
+
+    def __next__(self, /) -> SDBlock: ...
+    def close(self, /) -> None:
+        """
+        Stop iterating and release the input source, closing files that
+        parse_sdf opened.
+        """
+
+def parse_sdf(
+    path: str | bytes | os.PathLike[str] | os.PathLike[bytes], /
+) -> _SDBlockIterator:
+    """
+    Lazily parse SDBlocks from an SDF path.
+
+    The file is opened on the first next() and read in chunks without
+    holding the GIL. str paths give str values decoded as UTF-8 on access,
+    with universal newlines; bytes paths give bytes split on b"\\n" only.
+    Use a bytes path for feeds that are not valid UTF-8.
+
+    Args:
+        path: a str, bytes, or os.PathLike path
+
+    Returns:
+        An iterator of SDBlocks; close() closes the file early
+    """

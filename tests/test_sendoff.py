@@ -1,5 +1,6 @@
 # mypy: allow-untyped-decorators
 """Test sendoff parsing of metadata on generated SDFs."""
+import errno
 import io
 import os
 from itertools import chain
@@ -211,29 +212,80 @@ def test_from_lines_does_not_close_caller_owned_iterable() -> None:
     assert closed == [True]
 
 
-def test_parse_sdf_closes_owned_file_when_iterator_closes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Closing the path parser exits its file context.
+def open_paths() -> set[str]:
+    """Return the paths this process has open, from /proc/self/fd.
+
+    Returns:
+        Resolved targets of the open file descriptors.
+    """
+    paths = set()
+    for fd in os.listdir("/proc/self/fd"):
+        try:
+            paths.add(os.readlink(os.path.join("/proc/self/fd", fd)))
+        except OSError:
+            continue
+    return paths
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc")
+def test_parse_sdf_opens_lazily_and_close_releases_the_file(tmp_path: Path) -> None:
+    """The file opens on the first next() and close() releases it.
 
     Args:
-        monkeypatch: Fixture used to replace the module-level open.
+        tmp_path: Temporary directory for the SDF fixture.
     """
-    first_record = "First\n\nM  END\n$$$$\n"
-    stream = io.StringIO(first_record + "Second\n\nM  END\n$$$$\n")
+    path = tmp_path / "two.sdf"
+    path.write_text("First\n\nM  END\n$$$$\nSecond\n\nM  END\n$$$$\n")
 
-    def fake_open(path: str | bytes, mode: str) -> io.StringIO:
-        assert path == "unused.sdf"
-        assert mode == "r"
-        return stream
-
-    monkeypatch.setattr("builtins.open", fake_open)
-    blocks = parse_sdf("unused.sdf")
-
+    blocks = parse_sdf(path)
+    assert str(path) not in open_paths()
     assert next(blocks).title == "First"
-    assert not stream.closed
+    assert str(path) in open_paths()
     blocks.close()
-    assert stream.closed
+    assert str(path) not in open_paths()
+    with pytest.raises(StopIteration):
+        next(blocks)
+
+    assert len(list(parse_sdf(path))) == 2
+    assert str(path) not in open_paths()
+
+
+def test_parse_sdf_raises_open_errors_on_first_next(tmp_path: Path) -> None:
+    """Open errors surface lazily as the OSError subclass open() raises.
+
+    Args:
+        tmp_path: Temporary directory without the SDF.
+    """
+    missing = tmp_path / "missing.sdf"
+    blocks = parse_sdf(missing)
+
+    with pytest.raises(FileNotFoundError) as info:
+        next(blocks)
+    assert info.value.errno == errno.ENOENT
+    assert info.value.filename == str(missing)
+    with pytest.raises(IsADirectoryError):
+        next(parse_sdf(os.fsencode(tmp_path)))
+    with pytest.raises(TypeError):
+        parse_sdf(1)  # type: ignore[arg-type]
+
+
+def test_parse_sdf_text_paths_decode_utf8_on_access(tmp_path: Path) -> None:
+    """A non-UTF-8 feed still splits on a str path; only bad values raise.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+    """
+    path = tmp_path / "latin1.sdf"
+    path.write_bytes(
+        b"first\n\nM  END\n> <F>\n\xa6 bad\n\n$$$$\nsecond\n\nM  END\n$$$$\n"
+    )
+
+    blocks = list(parse_sdf(path))
+
+    assert [block.title for block in blocks] == ["first", "second"]
+    with pytest.raises(UnicodeDecodeError):
+        blocks[0].records()
+    assert next(parse_sdf(os.fsencode(path))).records() == [(b"F", b"\xa6 bad")]
 
 
 def test_from_lines_reads_file_objects_in_chunks() -> None:

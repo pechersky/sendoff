@@ -21,6 +21,9 @@ mod native {
     use crate::python::sdblock::PySDRecordIterator as _SDRecordIterator;
 
     #[pymodule_export]
+    use crate::python::sdblock::parse_sdf;
+
+    #[pymodule_export]
     #[allow(non_upper_case_globals)]
     const __version__: &str = env!("CARGO_PKG_VERSION");
 

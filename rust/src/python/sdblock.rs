@@ -1,13 +1,19 @@
-use pyo3::exceptions::{PyNotImplementedError, PyTypeError, PyUnicodeDecodeError, PyValueError};
+use std::fs::File;
+use std::io::{ErrorKind, Read};
+use std::path::PathBuf;
+
+use pyo3::exceptions::{
+    PyNotImplementedError, PyOSError, PyTypeError, PyUnicodeDecodeError, PyValueError,
+};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyIterator, PyList, PyString, PyTuple};
 
 use crate::core::block::{self, Block, Record};
-use crate::core::scan::Scanner;
+use crate::core::scan::{Scanner, translate_newlines};
 use crate::python::ctable::{PyCTable, error_to_py};
 
-/// Characters or bytes requested per `read` call on file objects.
+/// Characters or bytes requested per `read` call.
 const CHUNK: usize = 1 << 20;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -53,7 +59,31 @@ enum Source {
     Lines(Py<PyIterator>),
     /// A file object's bound `read1` or `read` method.
     Reader(Py<PyAny>),
+    /// A path to open on the first read; `text` translates newlines.
+    Path {
+        path: PathBuf,
+        filename: Py<PyAny>,
+        text: bool,
+    },
+    /// A file opened from `Path`, read without holding the GIL.
+    File {
+        file: File,
+        filename: Py<PyAny>,
+        text: bool,
+        pending_cr: bool,
+    },
     Closed,
+}
+
+/// Build the `OSError` subclass Python's `open` would raise.
+fn os_error(py: Python<'_>, error: std::io::Error, filename: &Py<PyAny>) -> PyErr {
+    let Some(errno) = error.raw_os_error() else {
+        return error.into();
+    };
+    match PyModule::import(py, "os").and_then(|os| os.call_method1("strerror", (errno,))) {
+        Ok(strerror) => PyOSError::new_err((errno, strerror.unbind(), filename.clone_ref(py))),
+        Err(error) => error,
+    }
 }
 
 impl Source {
@@ -101,6 +131,48 @@ impl Source {
                 set_kind(kind, found)?;
                 buf.extend_from_slice(bytes);
                 Ok(false)
+            }
+            Source::Path {
+                path,
+                filename,
+                text,
+            } => {
+                let file = File::open(&*path).map_err(|error| os_error(py, error, filename))?;
+                *kind = Some(if *text { Kind::Text } else { Kind::Bytes });
+                *self = Source::File {
+                    file,
+                    filename: filename.clone_ref(py),
+                    text: *text,
+                    pending_cr: false,
+                };
+                self.fill(py, kind, buf)
+            }
+            Source::File {
+                file,
+                filename,
+                text,
+                pending_cr,
+            } => {
+                let start = buf.len();
+                buf.resize(start + CHUNK, 0);
+                let read = loop {
+                    match py.detach(|| file.read(&mut buf[start..])) {
+                        Err(error) if error.kind() == ErrorKind::Interrupted => {
+                            py.check_signals()?;
+                        }
+                        result => break result,
+                    }
+                };
+                let read = read.map_err(|error| os_error(py, error, filename));
+                buf.truncate(start + *read.as_ref().unwrap_or(&0));
+                match read? {
+                    0 => Ok(true),
+                    _ if *text => {
+                        translate_newlines(buf, start, pending_cr);
+                        Ok(false)
+                    }
+                    _ => Ok(false),
+                }
             }
             Source::Closed => Ok(true),
         }
@@ -153,7 +225,8 @@ impl PySDBlockIterator {
         }
     }
 
-    /// Stop iterating and release the input source.
+    /// Stop iterating and release the input source, closing files that
+    /// `parse_sdf` opened.
     fn close(&mut self) {
         self.source = Source::Closed;
         self.scanner = Scanner::default();
@@ -352,4 +425,29 @@ impl PySDBlock {
         self.block.replace_mdl(lines.iter().map(String::as_bytes));
         Ok(())
     }
+}
+
+/// Lazily parse SDBlocks from an SDF path.
+///
+/// The file is opened on the first `next()` and read in chunks without
+/// holding the GIL. str paths give str values decoded as UTF-8 on access,
+/// with universal newlines; bytes paths give bytes split on b"\n" only.
+///
+/// Args:
+///     path: a str, bytes, or os.PathLike path
+///
+/// Returns:
+///     An iterator of SDBlocks; `close()` closes the file early
+#[pyfunction]
+pub(crate) fn parse_sdf(path: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
+    let os = PyModule::import(path.py(), "os")?;
+    let filename = os.call_method1("fspath", (path,))?;
+    let text = filename.is_instance_of::<PyString>();
+    // fsdecode round-trips bytes paths losslessly through surrogateescape.
+    let path = os.call_method1("fsdecode", (&filename,))?.extract()?;
+    Ok(PySDBlockIterator::new(Source::Path {
+        path,
+        filename: filename.unbind(),
+        text,
+    }))
 }
