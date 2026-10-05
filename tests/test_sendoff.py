@@ -475,6 +475,24 @@ def test_iter_records_preserves_bytes_and_owns_its_block() -> None:
     assert list(iterator) == [(b"Record", b"third")]
 
 
+def test_get_and_to_dict_match_dict_of_records() -> None:
+    """get() and to_dict() let later duplicate records win, like dict()."""
+    text = "t\nM  END\n> <A>\n1\n\n> <B>\nx\ny\n\n> <A>\n2\n\n$$$$\n"
+    block = next(SDBlock.from_lines(io.StringIO(text)))
+    byte_block = next(SDBlock.from_lines(io.BytesIO(text.encode())))
+
+    assert block.to_dict() == dict(block.records()) == {"A": "2", "B": "x\ny"}
+    assert byte_block.to_dict() == {b"A": b"2", b"B": b"x\ny"}
+    assert block.get("A") == "2"
+    assert block.get("missing") is None
+    assert block.get("missing", "default") == "default"
+    assert byte_block.get(b"B") == b"x\ny"
+    with pytest.raises(TypeError, match="must be bytes"):
+        byte_block.get("A")
+    with pytest.raises(TypeError, match="must be str"):
+        block.get(b"A")
+
+
 def test_text_strips_like_str_and_bytes_like_bytes() -> None:
     """Text blocks strip str.strip() whitespace; bytes blocks bytes.strip().
 

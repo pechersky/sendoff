@@ -7,7 +7,7 @@ use pyo3::exceptions::{
 };
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyIterator, PyList, PyString, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyIterator, PyList, PyString, PyTuple};
 
 use crate::core::block::{self, Block, Record, Strip};
 use crate::core::scan::{Scanner, TRANSLATE_SLACK, Tail, translate_newlines};
@@ -295,6 +295,17 @@ impl PySDBlock {
             )),
         }
     }
+
+    /// The bytes of a record name, which must match the block's type.
+    fn name_bytes<'a>(&self, name: &'a Bound<'_, PyAny>) -> PyResult<&'a [u8]> {
+        match bytes_of(name)? {
+            Some((kind, bytes)) if kind == self.kind => Ok(bytes),
+            _ => Err(PyTypeError::new_err(match self.kind {
+                Kind::Text => "text SDBlock record names must be str",
+                Kind::Bytes => "byte-backed SDBlock record names must be bytes",
+            })),
+        }
+    }
 }
 
 fn decode<'a>(py: Python<'_>, bytes: &'a [u8]) -> PyResult<&'a str> {
@@ -367,6 +378,63 @@ impl PySDBlock {
             pos: 0,
             finished: false,
         }
+    }
+
+    /// Return the value of the last record named `name`, or `default`.
+    ///
+    /// Equivalent to `dict(block.records()).get(name, default)`, without
+    /// building the other values.
+    ///
+    /// Args:
+    ///     name: record name in the block's type
+    ///     default: returned when no record has that name
+    ///
+    /// Returns:
+    ///     The record value in the block's type, or `default`
+    #[pyo3(signature = (name, default=None))]
+    fn get<'py>(
+        &self,
+        name: &Bound<'py, PyAny>,
+        default: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let py = name.py();
+        let name = self.name_bytes(name)?;
+        let strip = self.kind.strip();
+        let mut pos = 0;
+        let mut found = None;
+        while let Some(record) = self
+            .block
+            .next_record(&mut pos, strip)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+        {
+            if record.name == name {
+                found = Some(record.value);
+            }
+        }
+        match found {
+            Some(value) => self.kind.value(py, &value).map(Some),
+            None => Ok(default),
+        }
+    }
+
+    /// Return the records as a dict, later duplicates winning.
+    ///
+    /// Equivalent to `dict(block.records())`.
+    fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        let strip = self.kind.strip();
+        let mut pos = 0;
+        while let Some(record) = self
+            .block
+            .next_record(&mut pos, strip)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+        {
+            dict.set_item(
+                self.kind.value(py, record.name)?,
+                self.kind.value(py, &record.value)?,
+            )?;
+        }
+        Ok(dict)
     }
 
     /// Write the block, ending with $$$$, to a file-like handle.

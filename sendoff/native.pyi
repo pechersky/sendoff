@@ -1,5 +1,7 @@
 import os
-from typing import Final, Iterable, Iterator, Protocol, final
+from typing import Final, Iterable, Iterator, Protocol, TypeVar, final
+
+_T = TypeVar("_T")
 
 DEBUG_BUILD: Final[bool]
 """True when compiled without optimizations; never benchmark such a build."""
@@ -213,6 +215,33 @@ class SDBlock:
         Lazily iterate over SD metadata records in input order.
 
         Returned names and values are owned and have the same type as the block.
+        """
+
+    def get(
+        self, /, name: str | bytes, default: _T | None = None
+    ) -> str | bytes | _T | None:
+        """
+        Return the value of the last record named `name`, or `default`.
+
+        Equivalent to `dict(block.records()).get(name, default)`, without
+        building the other values.
+
+        Args:
+            name: record name in the block's type
+            default: returned when no record has that name
+
+        Returns:
+            The record value in the block's type, or `default`
+
+        Raises:
+            TypeError: if `name` is not the block's type
+        """
+
+    def to_dict(self, /) -> dict[str, str] | dict[bytes, bytes]:
+        """
+        Return the records as a dict, later duplicates winning.
+
+        Equivalent to `dict(block.records())`.
         """
 
     def renumber_indices(self, /) -> None:

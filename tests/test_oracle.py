@@ -140,6 +140,13 @@ def assert_blocks_match(
         ), context
         assert serialized(block, text) == expected.serialize(), context
         assert block.molblock == expected.molblock(), context
+        expected_dict = outcome(lambda: dict(expected.records()))
+        assert outcome(block.to_dict) == expected_dict, context
+        for field in ["A", "B", " spaced name ", "missing"]:
+            key = field if text else field.encode()
+            assert outcome(lambda: block.get(key, 0)) == outcome(
+                lambda: expected_dict.get(key, 0)
+            ), context
         name, value = ("Z", "v\u00e9") if text else (b"Z", "v\u00e9".encode())
         block.append_record(name, value)
         expected.append_record(name, value)
