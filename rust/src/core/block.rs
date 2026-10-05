@@ -170,7 +170,13 @@ pub struct Record<'a> {
     pub value: Cow<'a, [u8]>,
 }
 
+/// The delimiter line that ends every serialized block.
+const TRAILER: &[u8] = b"$$$$\n";
+
 /// One molecule block: a title line, MDL lines, and SD data lines.
+///
+/// `data` also ends with [`TRAILER`], so an unstripped block serializes
+/// as a single copy of `data`.
 #[derive(Clone, Debug)]
 pub struct Block {
     data: Vec<u8>,
@@ -197,21 +203,27 @@ impl Block {
         } else {
             MEND.find(body).map(|index| title_end + index + 1)
         };
-        let Some(mut mdl_end) = mend else {
-            let mdl_end = data.len();
-            return Self {
-                data,
-                title_end,
-                mdl_end,
-            };
+        let (mdl_end, body_end) = match mend {
+            Some(mut mdl_end) => {
+                next_line(&data, &mut mdl_end);
+                (mdl_end, body_end)
+            }
+            None => (data.len(), data.len()),
         };
-        next_line(&data, &mut mdl_end);
-        data.truncate(body_end);
+        if data[body_end..] != *TRAILER {
+            data.truncate(body_end);
+            data.extend_from_slice(TRAILER);
+        }
         Self {
             data,
             title_end,
             mdl_end,
         }
+    }
+
+    /// Where the SD data ends and the trailer starts.
+    fn body_end(&self) -> usize {
+        self.data.len() - TRAILER.len()
     }
 
     /// The stripped title.
@@ -244,33 +256,36 @@ impl Block {
 
     /// The SD data lines, each ending in `\n`.
     pub fn metadata(&self) -> &[u8] {
-        &self.data[self.mdl_end..]
+        &self.data[self.mdl_end..self.body_end()]
     }
 
-    /// Write the stripped title, the remaining lines, and `$$$$`.
-    pub fn serialize_into(&self, output: &mut Vec<u8>, strip: Strip) {
+    /// The stripped title, the remaining lines, and `$$$$`.
+    ///
+    /// Borrows from the block unless stripping changed the title.
+    pub fn serialized(&self, strip: Strip) -> Cow<'_, [u8]> {
         let title = self.title(strip);
+        if title.len() + 1 == self.title_end {
+            return Cow::Borrowed(&self.data);
+        }
         let body = &self.data[self.title_end..];
-        output.reserve(title.len() + body.len() + 6);
+        let mut output = Vec::with_capacity(title.len() + 1 + body.len());
         output.extend_from_slice(title);
         output.push(b'\n');
         output.extend_from_slice(body);
-        output.extend_from_slice(b"$$$$\n");
-    }
-
-    /// The serialized size in bytes.
-    pub fn serialized_len(&self, strip: Strip) -> usize {
-        self.title(strip).len() + 1 + (self.data.len() - self.title_end) + 5
+        Cow::Owned(output)
     }
 
     /// Append a `> <name>` record with a single value line.
     pub fn append_record(&mut self, name: &[u8], value: &[u8]) {
-        self.data.reserve(name.len() + value.len() + 7);
+        self.data.truncate(self.body_end());
+        self.data
+            .reserve(name.len() + value.len() + 7 + TRAILER.len());
         self.data.extend_from_slice(b"> <");
         self.data.extend_from_slice(name);
         self.data.extend_from_slice(b">\n");
         self.data.extend_from_slice(value);
         self.data.extend_from_slice(b"\n\n");
+        self.data.extend_from_slice(TRAILER);
     }
 
     /// Replace the MDL lines, keeping the raw title line and SD data.
@@ -284,7 +299,7 @@ impl Block {
             }
         }
         let mdl_end = data.len();
-        data.extend_from_slice(self.metadata());
+        data.extend_from_slice(&self.data[self.mdl_end..]);
         self.data = data;
         self.mdl_end = mdl_end;
     }
@@ -392,10 +407,7 @@ mod tests {
     }
 
     fn written(block: &Block) -> String {
-        let mut output = Vec::new();
-        block.serialize_into(&mut output, Strip::Bytes);
-        assert_eq!(output.len(), block.serialized_len(Strip::Bytes));
-        String::from_utf8(output).unwrap()
+        String::from_utf8(block.serialized(Strip::Bytes).into_owned()).unwrap()
     }
 
     fn records(block: &Block) -> Result<Vec<(String, String)>, MissingFieldName> {

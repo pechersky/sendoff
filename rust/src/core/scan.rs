@@ -277,11 +277,9 @@ mod tests {
             })
             .unwrap()
         {
-            let mut written = Vec::new();
-            block.serialize_into(&mut written, Strip::Bytes);
             blocks.push((
                 String::from_utf8(block.title(Strip::Bytes).to_vec()).unwrap(),
-                String::from_utf8(written).unwrap(),
+                String::from_utf8(block.serialized(Strip::Bytes).into_owned()).unwrap(),
             ));
         }
         blocks

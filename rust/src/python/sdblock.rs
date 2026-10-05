@@ -375,9 +375,7 @@ impl PySDBlock {
     ///     outh: a text or binary file-like handle matching the input type
     fn write(&self, outh: &Bound<'_, PyAny>) -> PyResult<()> {
         let py = outh.py();
-        let strip = self.kind.strip();
-        let mut output = Vec::with_capacity(self.block.serialized_len(strip));
-        self.block.serialize_into(&mut output, strip);
+        let output = self.block.serialized(self.kind.strip());
         outh.call_method1(intern!(py, "write"), (self.kind.value(py, &output)?,))?;
         Ok(())
     }
