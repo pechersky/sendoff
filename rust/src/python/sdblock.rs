@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::path::PathBuf;
@@ -31,6 +32,28 @@ impl Kind {
         }
     }
 
+    /// Return a record name, reusing the object made for an earlier record
+    /// with the same name, since names repeat from block to block.
+    fn name<'py>(self, py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+        if bytes.len() > MAX_CACHED_NAME {
+            return self.value(py, bytes);
+        }
+        let slot = self as usize * NAME_SLOTS + name_slot(bytes);
+        let cached = NAMES.with_borrow(|names| match &names[slot] {
+            Some((key, object)) if **key == *bytes => Some(object.clone_ref(py)),
+            _ => None,
+        });
+        if let Some(object) = cached {
+            return Ok(object.into_bound(py));
+        }
+        let object = self.value(py, bytes)?;
+        // Drop the evicted entry after releasing the cache.
+        let old = NAMES
+            .with_borrow_mut(|names| names[slot].replace((bytes.into(), object.clone().unbind())));
+        drop(old);
+        Ok(object)
+    }
+
     /// The Python `strip()` that values of this kind follow.
     fn strip(self) -> Strip {
         match self {
@@ -38,6 +61,30 @@ impl Kind {
             Kind::Bytes => Strip::Bytes,
         }
     }
+}
+
+/// Direct-mapped slots per kind in the record-name cache.
+const NAME_SLOTS: usize = 256;
+/// Longer names are rare and are not cached.
+const MAX_CACHED_NAME: usize = 64;
+
+type NameEntry = Option<(Box<[u8]>, Py<PyAny>)>;
+
+thread_local! {
+    /// Text names in the first `NAME_SLOTS` slots, then bytes names.
+    static NAMES: RefCell<Vec<NameEntry>> =
+        RefCell::new((0..2 * NAME_SLOTS).map(|_| None).collect());
+}
+
+/// Hash a name into `0..NAME_SLOTS`, eight bytes at a time.
+fn name_slot(bytes: &[u8]) -> usize {
+    let mut hash = bytes.len() as u64;
+    for chunk in bytes.chunks(8) {
+        let mut word = [0; 8];
+        word[..chunk.len()].copy_from_slice(chunk);
+        hash = (hash.rotate_left(5) ^ u64::from_le_bytes(word)).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    (hash >> (64 - NAME_SLOTS.trailing_zeros())) as usize
 }
 
 /// Return the kind and UTF-8 or raw bytes of a str or bytes object.
@@ -343,7 +390,7 @@ impl PySDBlock {
         PyTuple::new(
             py,
             [
-                self.kind.value(py, record.name)?,
+                self.kind.name(py, record.name)?,
                 self.kind.value(py, &record.value)?,
             ],
         )
@@ -624,7 +671,7 @@ impl PySDBlock {
             .map_err(|error| PyValueError::new_err(error.to_string()))?
         {
             dict.set_item(
-                self.kind.value(py, record.name)?,
+                self.kind.name(py, record.name)?,
                 self.kind.value(py, &record.value)?,
             )?;
         }

@@ -559,6 +559,22 @@ def test_record_mutators_check_types_and_headers() -> None:
     assert bad.records() == [("A", "1")]
 
 
+def test_record_names_are_shared_between_blocks() -> None:
+    """Repeated names reuse one object; colliding and long names stay exact."""
+
+    def check(sdf: typing.AnyStr, names: list[typing.AnyStr]) -> None:
+        first, second = SDBlock(sdf), SDBlock(sdf)
+        assert [n for n, _ in first.records()] == names
+        assert list(first.to_dict()) == [n for n, _ in second.records()]
+        assert all(n + v[-1:] == v for n, v in second.iter_records())
+        assert first.records()[-1][0] is second.records()[-1][0]
+
+    names = [f"N{index}" for index in range(2000)] + ["L" * 65, "A"]
+    sdf = "t\nM  END\n" + "".join(f"> <{name}>\n{name}v\n\n" for name in names)
+    check(sdf, names)
+    check(sdf.encode(), [name.encode() for name in names])
+
+
 def test_sdblock_is_generic_at_runtime() -> None:
     """SDBlock[str] and SDBlock[bytes] work in evaluated annotations."""
     alias = SDBlock[str]
