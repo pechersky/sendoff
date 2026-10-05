@@ -118,7 +118,7 @@ def serialized(block: Any, text: bool) -> Any:
 
 
 def assert_blocks_match(
-    native_blocks: Iterable[SDBlock], reference: list[RefBlock[Any]], text: bool
+    native_blocks: Iterable[SDBlock[Any]], reference: list[RefBlock[Any]], text: bool
 ) -> None:
     """Compare block count, titles, records, writes, and appended writes.
 
@@ -176,7 +176,7 @@ def cast_like(like: Any, value: str) -> Any:
     return value if isinstance(like, str) else value.encode()
 
 
-def reparsed_records(block: SDBlock, text: bool) -> Any:
+def reparsed_records(block: SDBlock[Any], text: bool) -> Any:
     """Return the records the reference parses from what ``block`` writes.
 
     Args:
@@ -197,7 +197,7 @@ def reparsed_records(block: SDBlock, text: bool) -> Any:
     return reference.records()
 
 
-def assert_mutations_match(block: SDBlock, text: bool) -> None:
+def assert_mutations_match(block: SDBlock[Any], text: bool) -> None:
     """Check record and title mutators against a list model of records.
 
     Args:

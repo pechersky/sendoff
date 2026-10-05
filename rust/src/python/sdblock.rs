@@ -7,7 +7,7 @@ use pyo3::exceptions::{
 };
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyIterator, PyList, PyString, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyIterator, PyList, PyString, PyTuple, PyType};
 
 use crate::core::block::{self, Block, Record, Strip};
 use crate::core::scan::{Scanner, TRANSLATE_SLACK, Tail, translate_newlines};
@@ -316,6 +316,15 @@ fn decode<'a>(py: Python<'_>, bytes: &'a [u8]) -> PyResult<&'a str> {
 
 #[pymethods]
 impl PySDBlock {
+    /// Allow `SDBlock[str]` and `SDBlock[bytes]` in runtime annotations.
+    #[classmethod]
+    fn __class_getitem__<'py>(
+        cls: &Bound<'py, PyType>,
+        item: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyGenericAlias>> {
+        PyGenericAlias::new(cls.py(), cls.as_any(), item)
+    }
+
     /// Parse SDBlocks from homogeneous str or bytes lines or a file object.
     ///
     /// File objects are read in large chunks with `read1`, when available,

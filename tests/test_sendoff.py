@@ -3,6 +3,7 @@
 import errno
 import io
 import os
+import typing
 from itertools import chain
 from pathlib import Path
 from typing import Generator, Iterable, Iterator, cast
@@ -96,7 +97,7 @@ def test_bytes_lines_preserve_invalid_bytes() -> None:
     assert reparsed.records() == block.records()
 
     with pytest.raises(NotImplementedError, match="byte-backed"):
-        block.ctable()
+        block.ctable()  # type: ignore[misc]
 
 
 def test_bytes_path_uses_binary_input(tmp_path: Path) -> None:
@@ -266,7 +267,7 @@ def test_parse_sdf_raises_open_errors_on_first_next(tmp_path: Path) -> None:
     with pytest.raises(IsADirectoryError):
         next(parse_sdf(os.fsencode(tmp_path)))
     with pytest.raises(TypeError):
-        parse_sdf(1)  # type: ignore[arg-type]
+        parse_sdf(1)  # type: ignore[call-overload]
 
 
 def test_parse_sdf_text_paths_decode_utf8_on_access(tmp_path: Path) -> None:
@@ -328,9 +329,9 @@ def test_bytes_block_requires_binary_append_values() -> None:
     block = next(SDBlock.from_lines([b"title\n", b"\n", b"M  END\n"]))
 
     with pytest.raises(TypeError, match="record names must be bytes"):
-        block.append_record("field", b"value")
+        block.append_record("field", b"value")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="values must be bytes"):
-        block.append_record(b"field", "value")
+        block.append_record(b"field", "value")  # type: ignore[arg-type]
 
     block.append_record(b"field", b"value")
     assert block.records() == [(b"field", b"value")]
@@ -359,7 +360,7 @@ def test_titled_mol_read(single_titled_mol_sdf: Pathy) -> None:
     Args:
         single_titled_mol_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_titled_mol_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_titled_mol_sdf))
     assert mol.title == "Title"
 
 
@@ -373,8 +374,8 @@ def test_first_delimiter_titled_mol_read(
         double_first_delimiter_titled_mol_sdf: pytest fixture of a Path to sdf
     """
     supp = parse_sdf(double_first_delimiter_titled_mol_sdf)
-    mol: SDBlock = next(supp)
-    other_mol: SDBlock = next(supp)
+    mol: SDBlock[str] = next(supp)
+    other_mol: SDBlock[str] = next(supp)
     assert mol.title == "$$$$"
     assert other_mol.title == "Title"
 
@@ -388,8 +389,8 @@ def test_second_delimiter_titled_mol_read(
         double_second_delimiter_titled_mol_sdf: pytest fixture of a Path to sdf
     """
     supp = parse_sdf(double_second_delimiter_titled_mol_sdf)
-    other_mol: SDBlock = next(supp)
-    mol: SDBlock = next(supp)
+    other_mol: SDBlock[str] = next(supp)
+    mol: SDBlock[str] = next(supp)
     assert other_mol.title == "Title"
     assert mol.title == "$$$$"
 
@@ -507,9 +508,9 @@ def test_get_and_to_dict_match_dict_of_records() -> None:
     assert block.get("missing", "default") == "default"
     assert byte_block.get(b"B") == b"x\ny"
     with pytest.raises(TypeError, match="must be bytes"):
-        byte_block.get("A")
+        byte_block.get("A")  # type: ignore[call-overload]
     with pytest.raises(TypeError, match="must be str"):
-        block.get(b"A")
+        block.get(b"A")  # type: ignore[call-overload]
 
 
 def test_record_mutators_keep_order_and_other_lines() -> None:
@@ -541,13 +542,13 @@ def test_record_mutators_check_types_and_headers() -> None:
     byte_block.set_record(b"A", b"2")
     assert byte_block.to_dict() == {b"A": b"2"}
     with pytest.raises(TypeError, match="record names must be bytes"):
-        byte_block.set_record("A", b"2")
+        byte_block.set_record("A", b"2")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="values must be bytes"):
         byte_block.replace_records({b"A": "2"})  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="record names must be bytes"):
-        byte_block.remove_record("A")
+        byte_block.remove_record("A")  # type: ignore[arg-type]
     with pytest.raises(TypeError):
-        byte_block.replace_records([b"AB"])  # type: ignore[arg-type]
+        byte_block.replace_records([b"AB"])  # type: ignore[list-item]
 
     bad = next(SDBlock.from_lines(["t\n", "M  END\n", "> no name\n", "1\n"]))
     with pytest.raises(ValueError, match="missing a name"):
@@ -558,6 +559,14 @@ def test_record_mutators_check_types_and_headers() -> None:
     assert bad.records() == [("A", "1")]
 
 
+def test_sdblock_is_generic_at_runtime() -> None:
+    """SDBlock[str] and SDBlock[bytes] work in evaluated annotations."""
+    alias = SDBlock[str]
+    assert typing.get_origin(alias) is SDBlock
+    assert typing.get_args(alias) == (str,)
+    assert typing.get_args(SDBlock[bytes]) == (bytes,)
+
+
 def test_mdl_is_the_ctab_lines_without_endings() -> None:
     """The mdl property is the CTAB lines through M  END, without the title."""
     text = "title\r\n  prog\r\n\r\nM  END\r\n> <A>\r\n1\r\n"
@@ -565,8 +574,8 @@ def test_mdl_is_the_ctab_lines_without_endings() -> None:
     byte_block = next(SDBlock.from_lines(io.BytesIO(text.encode())))
 
     assert block.mdl == ("  prog", "", "M  END")
-    ctab = "\n".join(cast("tuple[str, ...]", block.mdl)) + "\n"
-    assert ctab == cast(str, block.molblock).partition("\n")[2]
+    ctab = "\n".join(block.mdl) + "\n"
+    assert ctab == block.molblock.partition("\n")[2]
     assert byte_block.mdl == (b"  prog\r", b"\r", b"M  END\r")
     assert next(SDBlock.from_lines(["t\n", "M  END\n"])).mdl == ("M  END",)
     assert next(SDBlock.from_lines(["t\n"])).mdl == ()
@@ -576,7 +585,7 @@ def test_mdl_is_the_ctab_lines_without_endings() -> None:
     assert not block.mdl_contains("M  END\n")
     assert byte_block.mdl_contains(b"prog\r")
     with pytest.raises(TypeError, match="needles must be bytes"):
-        byte_block.mdl_contains("prog")
+        byte_block.mdl_contains("prog")  # type: ignore[arg-type]
 
 
 def test_molblock_setter_replaces_the_structure_only() -> None:
@@ -598,7 +607,7 @@ def test_molblock_setter_replaces_the_structure_only() -> None:
         with pytest.raises(ValueError, match=message):
             block.molblock = bad
     with pytest.raises(TypeError, match="molblocks must be str"):
-        block.molblock = b"t\nM  END\n"
+        block.molblock = b"t\nM  END\n"  # type: ignore[assignment]
     assert block.molblock == "new\n  prog\n\nM  END\n"
 
     byte_block = next(SDBlock.from_lines([b"t\n", b"M  END\n", b"> <A>\n", b"1\n"]))
@@ -622,7 +631,7 @@ def test_title_setter_replaces_only_the_title() -> None:
         with pytest.raises(ValueError, match="single line"):
             block.title = bad
     with pytest.raises(TypeError, match="titles must be str"):
-        block.title = b"bytes"
+        block.title = b"bytes"  # type: ignore[assignment]
     assert block.title == "padded"
 
 
@@ -760,7 +769,7 @@ def test_right_angle_bracket_record_name_mol_read(
     Args:
         single_right_angle_bracket_record_name_mol_sdf: fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_right_angle_bracket_record_name_mol_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_right_angle_bracket_record_name_mol_sdf))
     records = list(mol.records())
     assert records == [("Rec>ord", "Value")]
 
@@ -771,7 +780,7 @@ def test_0_atoms_mol_num_atoms(single_0_atoms_mol_sdf: Pathy) -> None:
     Args:
         single_0_atoms_mol_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_0_atoms_mol_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_0_atoms_mol_sdf))
     assert mol.num_atoms() == 0
 
 
@@ -781,7 +790,7 @@ def test_star_atom_mol_num_atoms(single_star_atom_mol_sdf: Pathy) -> None:
     Args:
         single_star_atom_mol_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_star_atom_mol_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_star_atom_mol_sdf))
     assert mol.num_atoms() == 1
 
 
@@ -791,7 +800,7 @@ def test_999_atoms_mol_num_atoms(single_999_atoms_mol_sdf: Pathy) -> None:
     Args:
         single_999_atoms_mol_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_999_atoms_mol_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_999_atoms_mol_sdf))
     assert mol.num_atoms() == 999
 
 
@@ -801,7 +810,7 @@ def test_1001_atoms_mol_num_atoms(single_1001_atoms_mol_sdf: Pathy) -> None:
     Args:
         single_1001_atoms_mol_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_1001_atoms_mol_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_1001_atoms_mol_sdf))
     assert mol.num_atoms() == 1001
 
 
@@ -811,7 +820,7 @@ def test_0_atoms_mol_num_bonds(single_0_atoms_mol_sdf: Pathy) -> None:
     Args:
         single_0_atoms_mol_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_0_atoms_mol_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_0_atoms_mol_sdf))
     assert mol.num_bonds() == 0
 
 
@@ -821,7 +830,7 @@ def test_star_atom_mol_num_bonds(single_star_atom_mol_sdf: Pathy) -> None:
     Args:
         single_star_atom_mol_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_star_atom_mol_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_star_atom_mol_sdf))
     assert mol.num_bonds() == 0
 
 
@@ -831,7 +840,7 @@ def test_999_atoms_mol_num_bonds(single_999_atoms_mol_sdf: Pathy) -> None:
     Args:
         single_999_atoms_mol_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_999_atoms_mol_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_999_atoms_mol_sdf))
     assert mol.num_bonds() == 998
 
 
@@ -841,7 +850,7 @@ def test_1001_atoms_mol_num_bonds(single_1001_atoms_mol_sdf: Pathy) -> None:
     Args:
         single_1001_atoms_mol_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_1001_atoms_mol_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_1001_atoms_mol_sdf))
     assert mol.num_bonds() == 1000
 
 
@@ -853,7 +862,7 @@ def test_single_mol_v2000_sdf_valid_atom_indices_not_implemented(
     Args:
         single_mol_v2000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_mol_v2000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_mol_v2000_sdf))
     ctable = mol.ctable()
     with pytest.raises(NotImplementedError):
         assert ctable.valid_atom_indices()
@@ -867,7 +876,7 @@ def test_single_mol_v2000_sdf_valid_bond_indices_not_implemented(
     Args:
         single_mol_v2000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_mol_v2000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_mol_v2000_sdf))
     ctable = mol.ctable()
     with pytest.raises(NotImplementedError):
         assert ctable.valid_bond_indices()
@@ -885,7 +894,7 @@ def test_single_large_atom_index_valid_atom_indices(
     Args:
         single_large_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_large_atom_index_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_large_atom_index_v3000_sdf))
     ctable = mol.ctable()
     assert ctable.valid_atom_indices()
 
@@ -902,7 +911,7 @@ def test_single_large_atom_index_strict_invalid_atom_indices(
     Args:
         single_large_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_large_atom_index_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_large_atom_index_v3000_sdf))
     ctable = mol.ctable()
     with pytest.raises(IndicesOutOfOrderError, match="atoms"):
         ctable.valid_atom_indices(strict=True)
@@ -920,7 +929,7 @@ def test_single_large_bond_index_valid_bond_indices(
     Args:
         single_large_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_large_bond_index_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_large_bond_index_v3000_sdf))
     ctable = mol.ctable()
     assert ctable.valid_bond_indices()
 
@@ -937,7 +946,7 @@ def test_single_large_bond_index_strict_invalid_bond_indices(
     Args:
         single_large_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_large_bond_index_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_large_bond_index_v3000_sdf))
     ctable = mol.ctable()
     with pytest.raises(IndicesOutOfOrderError, match="bonds"):
         ctable.valid_bond_indices(strict=True)
@@ -953,7 +962,7 @@ def test_single_missing_atom_line_invalid_atom_indices(
     Args:
         single_missing_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_missing_atom_line_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_missing_atom_line_v3000_sdf))
     ctable = mol.ctable()
     with pytest.raises(IndicesMismatchError, match="fewer atom lines than count line"):
         ctable.valid_atom_indices()
@@ -969,7 +978,7 @@ def test_single_extra_atom_line_invalid_atom_indices(
     Args:
         single_extra_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_extra_atom_line_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_extra_atom_line_v3000_sdf))
     ctable = mol.ctable()
     with pytest.raises(IndicesMismatchError, match="more atom lines than count line"):
         ctable.valid_atom_indices()
@@ -985,7 +994,7 @@ def test_single_missing_bond_line_invalid_atom_indices(
     Args:
         single_missing_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_missing_bond_line_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_missing_bond_line_v3000_sdf))
     ctable = mol.ctable()
     with pytest.raises(IndicesMismatchError, match="fewer bond lines than count line"):
         ctable.valid_bond_indices()
@@ -1001,7 +1010,7 @@ def test_single_extra_bond_line_invalid_atom_indices(
     Args:
         single_extra_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_extra_bond_line_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_extra_bond_line_v3000_sdf))
     ctable = mol.ctable()
     with pytest.raises(IndicesMismatchError, match="more bond lines than count line"):
         ctable.valid_bond_indices()
@@ -1015,7 +1024,7 @@ def test_single_duplicate_atom_index_invalid_atom_indices(
     Args:
         single_duplicate_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_duplicate_atom_index_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_duplicate_atom_index_v3000_sdf))
     ctable = mol.ctable()
     with pytest.raises(IndicesDuplicateError, match="atoms"):
         ctable.valid_atom_indices()
@@ -1029,7 +1038,7 @@ def test_single_duplicate_bond_index_invalid_bond_indices(
     Args:
         single_duplicate_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_duplicate_bond_index_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_duplicate_bond_index_v3000_sdf))
     ctable = mol.ctable()
     with pytest.raises(IndicesDuplicateError, match="bonds"):
         ctable.valid_bond_indices()
@@ -1047,7 +1056,7 @@ def test_single_shuffled_atom_lines_valid_atom_indices(
     Args:
         single_shuffled_atom_lines_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_shuffled_atom_lines_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_shuffled_atom_lines_v3000_sdf))
     ctable = mol.ctable()
     assert ctable.valid_atom_indices()
 
@@ -1064,7 +1073,7 @@ def test_single_shuffled_atom_lines_strict_invalid_atom_indices(
     Args:
         single_shuffled_atom_lines_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_shuffled_atom_lines_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_shuffled_atom_lines_v3000_sdf))
     ctable = mol.ctable()
     with pytest.raises(IndicesOutOfOrderError, match="atoms"):
         ctable.valid_atom_indices(strict=True)
@@ -1082,7 +1091,7 @@ def test_single_shuffled_bond_lines_valid_bond_indices(
     Args:
         single_shuffled_bond_lines_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_shuffled_bond_lines_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_shuffled_bond_lines_v3000_sdf))
     ctable = mol.ctable()
     assert ctable.valid_bond_indices()
 
@@ -1099,7 +1108,7 @@ def test_single_shuffled_bond_lines_strict_invalid_bond_indices(
     Args:
         single_shuffled_bond_lines_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_shuffled_bond_lines_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_shuffled_bond_lines_v3000_sdf))
     ctable = mol.ctable()
     with pytest.raises(IndicesOutOfOrderError, match="bonds"):
         ctable.valid_bond_indices(strict=True)
@@ -1113,7 +1122,7 @@ def test_single_mol_v2000_sdf_renumber_indices_not_implemented(
     Args:
         single_mol_v2000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_mol_v2000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_mol_v2000_sdf))
     with pytest.raises(NotImplementedError):
         mol.renumber_indices()
 
@@ -1130,7 +1139,7 @@ def test_single_large_atom_index_strict_valid_atom_indices_renumbered(
     Args:
         single_large_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_large_atom_index_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_large_atom_index_v3000_sdf))
     mol.renumber_indices()
     ctable = mol.ctable()
     assert ctable.valid_atom_indices(strict=True)
@@ -1148,7 +1157,7 @@ def test_single_large_bond_index_strict_valid_bond_indices_renumbered(
     Args:
         single_large_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_large_bond_index_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_large_bond_index_v3000_sdf))
     mol.renumber_indices()
     ctable = mol.ctable()
     assert ctable.valid_bond_indices(strict=True)
@@ -1162,7 +1171,7 @@ def test_single_missing_atom_line_valid_atom_indices_after_renumbering(
     Args:
         single_missing_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_missing_atom_line_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_missing_atom_line_v3000_sdf))
     mol.renumber_indices()
     ctable = mol.ctable()
     assert ctable.valid_atom_indices(strict=True)
@@ -1176,7 +1185,7 @@ def test_single_extra_atom_line_valid_atom_indices_after_renumbering(
     Args:
         single_extra_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_extra_atom_line_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_extra_atom_line_v3000_sdf))
     mol.renumber_indices()
     ctable = mol.ctable()
     assert ctable.valid_atom_indices(strict=True)
@@ -1190,7 +1199,7 @@ def test_single_missing_bond_line_valid_atom_indices_after_renumbering(
     Args:
         single_missing_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_missing_bond_line_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_missing_bond_line_v3000_sdf))
     mol.renumber_indices()
     ctable = mol.ctable()
     assert ctable.valid_bond_indices(strict=True)
@@ -1204,7 +1213,7 @@ def test_single_extra_bond_line_valid_atom_indices_after_renumbering(
     Args:
         single_extra_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_extra_bond_line_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_extra_bond_line_v3000_sdf))
     mol.renumber_indices()
     ctable = mol.ctable()
     assert ctable.valid_bond_indices(strict=True)
@@ -1218,7 +1227,7 @@ def test_single_duplicate_atom_index_invalid_atom_indices_even_renumbering(
     Args:
         single_duplicate_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_duplicate_atom_index_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_duplicate_atom_index_v3000_sdf))
     with pytest.raises(IndicesDuplicateError, match="atom index mapping in bond"):
         mol.renumber_indices()
 
@@ -1231,7 +1240,7 @@ def test_single_duplicate_bond_index_valid_bond_indices_after_renumbering(
     Args:
         single_duplicate_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_duplicate_bond_index_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_duplicate_bond_index_v3000_sdf))
     mol.renumber_indices()
     ctable = mol.ctable()
     assert ctable.valid_bond_indices(strict=True)
@@ -1249,7 +1258,7 @@ def test_single_shuffled_atom_lines_strict_valid_atom_indices_after_renumbering(
     Args:
         single_shuffled_atom_lines_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_shuffled_atom_lines_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_shuffled_atom_lines_v3000_sdf))
     mol.renumber_indices()
     ctable = mol.ctable()
     assert ctable.valid_atom_indices(strict=True)
@@ -1267,7 +1276,7 @@ def test_single_shuffled_bond_lines_strict_valid_bond_indices_after_renumbering(
     Args:
         single_shuffled_bond_lines_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_shuffled_bond_lines_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_shuffled_bond_lines_v3000_sdf))
     mol.renumber_indices()
     ctable = mol.ctable()
     assert ctable.valid_bond_indices(strict=True)
@@ -1281,7 +1290,7 @@ def test_single_mol_v3000_sdf_idempotent_renumber(
     Args:
         single_mol_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(parse_sdf(single_mol_v3000_sdf))
+    mol: SDBlock[str] = next(parse_sdf(single_mol_v3000_sdf))
     mol.renumber_indices()
     buffer = io.StringIO()
     mol.write(buffer)
@@ -1296,7 +1305,7 @@ def test_single_mol_v3000_sdf_idempotent_renumber_with_splitlines(
     Args:
         single_mol_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    mol: SDBlock = next(
+    mol: SDBlock[str] = next(
         SDBlock.from_lines(open(single_mol_v3000_sdf).read().splitlines())
     )
     mol.renumber_indices()
@@ -1312,7 +1321,7 @@ def v3000_block(
     atom: str = "M  V30 1 C 0 0 0 0",
     bond: str = "M  V30 1 1 1 2",
     counts: str = "M  V30 COUNTS 2 1 0 0 0",
-) -> SDBlock:
+) -> SDBlock[str]:
     """Build a two-atom V3000 block with one replaceable line of each kind.
 
     Args:
