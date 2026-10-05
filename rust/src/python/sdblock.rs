@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs::File;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
 
@@ -38,19 +40,20 @@ impl Kind {
         if bytes.len() > MAX_CACHED_NAME {
             return self.value(py, bytes);
         }
-        let slot = self as usize * NAME_SLOTS + name_slot(bytes);
-        let cached = NAMES.with_borrow(|names| match &names[slot] {
-            Some((key, object)) if **key == *bytes => Some(object.clone_ref(py)),
-            _ => None,
-        });
+        let cached =
+            NAMES.with_borrow(|names| names[self as usize].get(bytes).map(|o| o.clone_ref(py)));
         if let Some(object) = cached {
             return Ok(object.into_bound(py));
         }
         let object = self.value(py, bytes)?;
-        // Drop the evicted entry after releasing the cache.
-        let old = NAMES
-            .with_borrow_mut(|names| names[slot].replace((bytes.into(), object.clone().unbind())));
-        drop(old);
+        let evicted = NAMES.with_borrow_mut(|names| {
+            let names = &mut names[self as usize];
+            let evicted = (names.len() >= MAX_NAMES).then(|| std::mem::take(names));
+            names.insert(bytes.into(), object.clone().unbind());
+            evicted
+        });
+        // Release evicted names after releasing the cache.
+        drop(evicted);
         Ok(object)
     }
 
@@ -63,28 +66,37 @@ impl Kind {
     }
 }
 
-/// Direct-mapped slots per kind in the record-name cache.
-const NAME_SLOTS: usize = 256;
+/// Names cached per kind before the cache is emptied, which bounds what
+/// one-off names can hold on to.
+const MAX_NAMES: usize = 4096;
 /// Longer names are rare and are not cached.
 const MAX_CACHED_NAME: usize = 64;
 
-type NameEntry = Option<(Box<[u8]>, Py<PyAny>)>;
+/// A fast hash for short record names, eight bytes at a time.
+#[derive(Default)]
+struct NameHasher(u64);
 
-thread_local! {
-    /// Text names in the first `NAME_SLOTS` slots, then bytes names.
-    static NAMES: RefCell<Vec<NameEntry>> =
-        RefCell::new((0..2 * NAME_SLOTS).map(|_| None).collect());
+impl Hasher for NameHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.0 = (self.0.rotate_left(5) ^ u64::from_le_bytes(word))
+                .wrapping_mul(0x517c_c1b7_2722_0a95);
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        // Fold the well-mixed high bits into the low bits buckets use.
+        self.0 ^ (self.0 >> 32)
+    }
 }
 
-/// Hash a name into `0..NAME_SLOTS`, eight bytes at a time.
-fn name_slot(bytes: &[u8]) -> usize {
-    let mut hash = bytes.len() as u64;
-    for chunk in bytes.chunks(8) {
-        let mut word = [0; 8];
-        word[..chunk.len()].copy_from_slice(chunk);
-        hash = (hash.rotate_left(5) ^ u64::from_le_bytes(word)).wrapping_mul(0x517c_c1b7_2722_0a95);
-    }
-    (hash >> (64 - NAME_SLOTS.trailing_zeros())) as usize
+type Names = HashMap<Box<[u8]>, Py<PyAny>, BuildHasherDefault<NameHasher>>;
+
+thread_local! {
+    /// Record-name objects by their bytes, for text and then bytes names.
+    static NAMES: RefCell<[Names; 2]> = RefCell::default();
 }
 
 /// Return the kind and UTF-8 or raw bytes of a str or bytes object.

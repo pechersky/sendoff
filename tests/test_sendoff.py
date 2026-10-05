@@ -560,7 +560,7 @@ def test_record_mutators_check_types_and_headers() -> None:
 
 
 def test_record_names_are_shared_between_blocks() -> None:
-    """Repeated names reuse one object; colliding and long names stay exact."""
+    """Repeated names reuse one object; evicted and long names stay exact."""
 
     def check(sdf: typing.AnyStr, names: list[typing.AnyStr]) -> None:
         first, second = SDBlock(sdf), SDBlock(sdf)
@@ -569,7 +569,7 @@ def test_record_names_are_shared_between_blocks() -> None:
         assert all(n + v[-1:] == v for n, v in second.iter_records())
         assert first.records()[-1][0] is second.records()[-1][0]
 
-    names = [f"N{index}" for index in range(2000)] + ["L" * 65, "A"]
+    names = [f"N{index}" for index in range(5000)] + ["L" * 65, "A"]
     sdf = "t\nM  END\n" + "".join(f"> <{name}>\n{name}v\n\n" for name in names)
     check(sdf, names)
     check(sdf.encode(), [name.encode() for name in names])
