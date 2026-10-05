@@ -1,5 +1,8 @@
 from typing import Final, Iterable, Iterator, Protocol, final
 
+DEBUG_BUILD: Final[bool]
+"""True when compiled without optimizations; never benchmark such a build."""
+
 __version__: Final[str]
 
 class SupportsTextWrite(Protocol):

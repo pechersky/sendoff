@@ -24,6 +24,10 @@ mod native {
     #[allow(non_upper_case_globals)]
     const __version__: &str = env!("CARGO_PKG_VERSION");
 
+    /// True when compiled without optimizations; never benchmark such a build.
+    #[pymodule_export]
+    const DEBUG_BUILD: bool = cfg!(debug_assertions);
+
     #[cfg(feature = "coverage")]
     #[pyfunction]
     fn flush_coverage() -> pyo3::PyResult<()> {
