@@ -1,6 +1,13 @@
 """Reading and validating connection tables from SDFs."""
 
-from sendoff.native import CTable as CTable
+from sendoff.native import CTable
+
+__all__ = [
+    "CTable",
+    "IndicesMismatchError",
+    "IndicesOutOfOrderError",
+    "IndicesDuplicateError",
+]
 
 
 class IndicesMismatchError(Exception):

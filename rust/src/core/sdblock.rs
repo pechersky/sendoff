@@ -13,17 +13,6 @@ pub struct SDBlock {
 }
 
 impl SDBlock {
-    /// Parse SDBlocks from a sequence of lines.
-    ///
-    /// Blocks are separated by lines starting with `$$$$`. A nonempty final
-    /// block is parsed when the input ends without a delimiter.
-    pub fn from_lines<I, E>(lines: &mut I) -> Result<Vec<Self>, E>
-    where
-        I: Iterator<Item = Result<String, E>>,
-    {
-        split_blocks(lines).map(|blocks| blocks.into_iter().map(Self::from_block_lines).collect())
-    }
-
     pub(crate) fn from_block_lines(block_lines: Vec<String>) -> Self {
         let (title, mdl, metadata) = parse_block_lines(block_lines);
         Self {
@@ -36,7 +25,7 @@ impl SDBlock {
     /// Generate SD metadata records.
     ///
     /// Each value includes embedded newlines when it spans multiple lines.
-    pub fn records(&self) -> Result<Vec<(String, String)>, crate::core::sddata::RecordParseError> {
+    pub fn records(&self) -> crate::core::sddata::ParsedRecords<String> {
         crate::core::sddata::records(&self.metadata)
     }
 
@@ -73,17 +62,6 @@ pub struct BytesSDBlock {
 }
 
 impl BytesSDBlock {
-    /// Parse SDBlocks from a sequence of byte lines.
-    ///
-    /// Blocks are separated by lines starting with `$$$$`. A nonempty final
-    /// block is parsed when the input ends without a delimiter.
-    pub fn from_lines<I, E>(lines: &mut I) -> Result<Vec<Self>, E>
-    where
-        I: Iterator<Item = Result<Vec<u8>, E>>,
-    {
-        split_blocks(lines).map(|blocks| blocks.into_iter().map(Self::from_block_lines).collect())
-    }
-
     pub(crate) fn from_block_lines(block_lines: Vec<Vec<u8>>) -> Self {
         let (title, mdl, metadata) = parse_block_lines(block_lines);
         Self {
@@ -94,9 +72,7 @@ impl BytesSDBlock {
     }
 
     /// Generate SD metadata records without decoding their bytes.
-    pub fn records(
-        &self,
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, crate::core::sddata::RecordParseError> {
+    pub fn records(&self) -> crate::core::sddata::ParsedRecords<Vec<u8>> {
         crate::core::sddata::records(&self.metadata)
     }
 
@@ -111,14 +87,6 @@ impl BytesSDBlock {
         value_line.extend_from_slice(value);
         value_line.push(b'\n');
         self.metadata.extend([name, value_line, b"\n".to_vec()]);
-    }
-
-    /// Return the title and MDL lines expected by `CTable`.
-    pub fn ctable_lines(&self) -> Vec<Vec<u8>> {
-        let mut lines = Vec::with_capacity(self.mdl.len() + 1);
-        lines.push(self.title.clone());
-        lines.extend(self.mdl.iter().cloned());
-        lines
     }
 
     /// Serialize this block, preserving existing line endings when requested.
@@ -162,27 +130,6 @@ impl SdfLine for Vec<u8> {
     }
 }
 
-fn split_blocks<T, E, I>(lines: &mut I) -> Result<Vec<Vec<T>>, E>
-where
-    T: SdfLine,
-    I: Iterator<Item = Result<T, E>>,
-{
-    let mut blocks = Vec::new();
-    let mut block_lines = Vec::new();
-    for line in lines {
-        let line = line?;
-        let is_end = line.starts_with_ascii(b"$$$$");
-        block_lines.push(line);
-        if is_end {
-            blocks.push(std::mem::take(&mut block_lines));
-        }
-    }
-    if !block_lines.is_empty() {
-        blocks.push(block_lines);
-    }
-    Ok(blocks)
-}
-
 fn parse_block_lines<T: SdfLine>(mut block_lines: Vec<T>) -> (T, Vec<T>, Vec<T>) {
     let title = block_lines.remove(0).trim_title();
     let mut lines = block_lines.into_iter().map(Ok::<T, Infallible>);
@@ -209,22 +156,6 @@ where
         collected.push(line);
     }
     Ok(collected)
-}
-
-/// Collect lines through the first `M  END` line, including that line.
-pub fn parse_mdl<I, E>(lines: &mut I) -> Result<Vec<String>, E>
-where
-    I: Iterator<Item = Result<String, E>>,
-{
-    collect_until(lines, b"M  END", true)
-}
-
-/// Collect metadata lines before the first `$$$$` delimiter.
-pub fn parse_metadata<I, E>(lines: &mut I) -> Result<Vec<String>, E>
-where
-    I: Iterator<Item = Result<String, E>>,
-{
-    collect_until(lines, b"$$$$", false)
 }
 
 /// Serialize an SDF block, preserving existing line endings when requested.

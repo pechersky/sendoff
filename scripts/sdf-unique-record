@@ -47,7 +47,7 @@ def parse_args() -> argparse.ArgumentParser:
 def main() -> None:
     """Uniquify an input SDF."""
     args = parse_args().parse_args()
-    values: set[str] = set()
+    values: set[str | bytes] = set()
     for sdblock in SDBlock.from_lines(args.input):
         for record, value in sdblock.records():
             if record != args.field:

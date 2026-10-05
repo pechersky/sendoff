@@ -103,7 +103,10 @@ impl RecordValue for Vec<u8> {
     }
 }
 
-pub(crate) fn records<T: RecordValue>(metadata: &[T]) -> Result<Vec<(T, T)>, RecordParseError> {
+/// The name/value pairs parsed from one block's metadata lines.
+pub type ParsedRecords<T> = Result<Vec<(T, T)>, RecordParseError>;
+
+pub(crate) fn records<T: RecordValue>(metadata: &[T]) -> ParsedRecords<T> {
     let mut records = Vec::new();
     let mut index = 0;
     while let Some(record) = next_record(metadata, &mut index)? {

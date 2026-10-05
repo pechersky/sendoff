@@ -47,3 +47,15 @@ coverage.xml
 # Local development environment and Rust artifacts
 .venv/
 target/
+
+# Release wheel build output
+dist-rel/
+
+# Benchmark harness: tracked on tooling/sdf-benchmark-harness, not here
+/scripts/README.md
+/scripts/sdf-benchmark
+/scripts/sdf-benchmark-ec2
+/scripts/sdf_benchmark/
+/scripts/sdf_benchmark_ec2/
+/tests/test_benchmark.py
+/tests/test_benchmark_ec2.py

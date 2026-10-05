@@ -1,6 +1,16 @@
-from typing import Any, Final, Iterable, Iterator, final
+from typing import Final, Iterable, Iterator, Protocol, final
 
 __version__: Final[str]
+
+class SupportsTextWrite(Protocol):
+    """A text file-like handle accepting str payloads."""
+
+    def write(self, data: str, /) -> object: ...
+
+class SupportsBytesWrite(Protocol):
+    """A binary file-like handle accepting bytes payloads."""
+
+    def write(self, data: bytes, /) -> object: ...
 
 @final
 class CTable:
@@ -15,7 +25,7 @@ class CTable:
     be the number of lines of atoms.
     """
 
-    def __new__(cls, /, lines: Any) -> CTable:
+    def __new__(cls, /, lines: Iterable[str]) -> CTable:
         """
         Parse in lines representing the CTAB, including the title line.
 
@@ -24,21 +34,25 @@ class CTable:
                 The title line is parsed in by the SDBlock, and should
                 be supplied as the first in lines.
         """
+
     @property
     def lines(self, /) -> list[str]:
         """
         Return a copy of the original connection-table lines.
         """
+
     @property
     def num_atoms(self, /) -> int:
         """
         Return the atom count from the counts line.
         """
+
     @property
     def num_bonds(self, /) -> int:
         """
         Return the bond count from the counts line.
         """
+
     def renumber_indices(self, /) -> None:
         """
         Renumber the indices in the block, including changing counts line.
@@ -64,6 +78,7 @@ class CTable:
                 original indices to use in the remapping.
             NotImplementedError: if trying to renumber in a V2000 format table
         """
+
     def valid_atom_indices(self, /, strict: "bool" = False) -> bool:
         """
         Validate that the atom lines match the counts line.
@@ -84,6 +99,7 @@ class CTable:
         Returns:
             If all the checks pass, return True.
         """
+
     def valid_bond_indices(self, /, strict: "bool" = False) -> bool:
         """
         Validate that the bond lines match the counts line.
@@ -119,6 +135,7 @@ class SDBlock:
             record_name: field name of the same type as the input lines
             value: field value of the same type, without a terminating newline
         """
+
     def ctable(self, /) -> CTable:
         """
         Parse out the underlying CTable object from the SDBlock.
@@ -130,6 +147,7 @@ class SDBlock:
         Raises:
             NotImplementedError: for byte-backed SDBlocks
         """
+
     @staticmethod
     def from_lines(lines: Iterable[str] | Iterable[bytes]) -> Iterator[SDBlock]:
         """
@@ -143,6 +161,7 @@ class SDBlock:
 
         The iterator does not close the caller-owned lines iterable.
         """
+
     def num_atoms(self, /) -> int:
         """
         Get the number of atoms as indicated in the MDL block.
@@ -156,6 +175,7 @@ class SDBlock:
         Raises:
             NotImplementedError: for byte-backed SDBlocks
         """
+
     def num_bonds(self, /) -> int:
         """
         Get the number of bonds as indicated in the MDL block.
@@ -169,6 +189,7 @@ class SDBlock:
         Raises:
             NotImplementedError: for byte-backed SDBlocks
         """
+
     def records(self, /) -> list[tuple[str, str]] | list[tuple[bytes, bytes]]:
         """
         Generate SD metadata records.
@@ -176,12 +197,14 @@ class SDBlock:
         Returns:
             Tuples of input-typed name/value pairs; multiline values include newlines.
         """
+
     def iter_records(self, /) -> Iterator[tuple[str, str] | tuple[bytes, bytes]]:
         """
         Lazily iterate over SD metadata records in input order.
 
         Returned names and values are owned and have the same type as the block.
         """
+
     def renumber_indices(self, /) -> None:
         """
         Renumber atom and bond indices to be 1-indexed and in order.
@@ -191,12 +214,19 @@ class SDBlock:
         Raises:
             NotImplementedError: for byte-backed SDBlocks
         """
+
     @property
     def title(self, /) -> str | bytes:
         """
         Return the parsed molecule title in the input type.
         """
-    def write(self, /, outh: Any, with_newlines: bool = True) -> None:
+
+    def write(
+        self,
+        /,
+        outh: SupportsTextWrite | SupportsBytesWrite,
+        with_newlines: bool = True,
+    ) -> None:
         """
         Write an SDBlock to a file-like handle.
 

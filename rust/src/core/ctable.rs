@@ -87,31 +87,13 @@ impl CTable {
         })
     }
 
-    /// Return the raw atom-table lines as a new vector.
-    ///
-    /// The range starts after the seven-line CTable header and stops before the
-    /// V3000 `END ATOM` marker, if present.
-    pub fn atomlines(&self) -> Vec<String> {
-        let (start, stop) = atom_line_range(&self.lines);
-        self.lines[start..stop].to_vec()
-    }
-
-    /// Return the raw bond-table lines as a new vector.
-    ///
-    /// The range starts after `BEGIN BOND` and stops before `END BOND`; if
-    /// there is no bond section, the result is empty.
-    pub fn bondlines(&self) -> Vec<String> {
-        let (start, stop) = bond_line_range(&self.lines);
-        self.lines[start..stop].to_vec()
-    }
-
     /// Validate raw atom lines against the parsed atom count.
     ///
     /// With `strict` enabled, indices must be one-based and in increasing
     /// order. The result distinguishes unsupported V2000 validation,
     /// out-of-order and duplicate indices, and fewer or more lines than the
-    /// count line. Lines are selected using the same raw V3000 section
-    /// boundaries as `atomlines`.
+    /// count line. Lines are selected using the raw V3000 atom-section
+    /// boundaries.
     pub fn valid_atom_indices(&self, strict: bool) -> Result<(), &'static str> {
         if self.format != CTableFormat::V3000 {
             return Err("not_implemented");
@@ -124,8 +106,8 @@ impl CTable {
     /// With `strict` enabled, indices must be one-based and in increasing
     /// order. The result distinguishes unsupported V2000 validation,
     /// out-of-order and duplicate indices, and fewer or more lines than the
-    /// count line. Lines are selected using the same raw V3000 section
-    /// boundaries as `bondlines`.
+    /// count line. Lines are selected using the raw V3000 bond-section
+    /// boundaries.
     pub fn valid_bond_indices(&self, strict: bool) -> Result<(), &'static str> {
         if self.format != CTableFormat::V3000 {
             return Err("not_implemented");

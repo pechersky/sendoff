@@ -40,12 +40,16 @@ def test_double_mol_read(double_mol_sdf: Pathy) -> None:
 def test_unterminated_final_record_is_returned(
     tmp_path: Path, trailing_newline: str
 ) -> None:
-    """Return a final block without a delimiter, with or without a newline."""
+    """Return a final block without a delimiter, with or without a newline.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+        trailing_newline: Newline appended after the unterminated value.
+    """
     sdf = tmp_path / "unterminated.sdf"
     sdf.write_text(
         "Closed\n\nM  END\n$$$$\n"
-        "Title\n\nM  END\n> <Record>\nValue"
-        + trailing_newline
+        "Title\n\nM  END\n> <Record>\nValue" + trailing_newline
     )
 
     blocks = list(parse_sdf(sdf))
@@ -95,7 +99,11 @@ def test_bytes_lines_preserve_invalid_bytes() -> None:
 
 
 def test_bytes_path_uses_binary_input(tmp_path: Path) -> None:
-    """A bytes filesystem path yields bytes and preserves invalid UTF-8."""
+    """A bytes filesystem path yields bytes and preserves invalid UTF-8.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+    """
     path = tmp_path / "bytes.sdf"
     path.write_bytes(b"\xff title\n\nM  END\n> <field>\nvalue\xfe\n\n$$$$\n")
 
@@ -106,7 +114,11 @@ def test_bytes_path_uses_binary_input(tmp_path: Path) -> None:
 
 
 def test_text_path_preserves_text_values(tmp_path: Path) -> None:
-    """A str filesystem path continues to use text decoding."""
+    """A str filesystem path continues to use text decoding.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+    """
     path = tmp_path / "text.sdf"
     path.write_text("title é\n\nM  END\n> <field>\nvalue é\n\n$$$$\n")
 
@@ -202,7 +214,11 @@ def test_from_lines_does_not_close_caller_owned_iterable() -> None:
 def test_parse_sdf_closes_owned_file_when_iterator_closes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Closing the path parser exits its file context."""
+    """Closing the path parser exits its file context.
+
+    Args:
+        monkeypatch: Fixture used to replace the module-level open.
+    """
     first_record = "First\n\nM  END\n$$$$\n"
     stream = io.StringIO(first_record + "Second\n\nM  END\n$$$$\n")
 
