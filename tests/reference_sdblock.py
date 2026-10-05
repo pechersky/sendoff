@@ -95,6 +95,19 @@ class RefBlock(Generic[AnyStr]):
             [_lit(name, "> <") + name + _lit(name, ">\n"), value + newline, newline]
         )
 
+    def molblock(self) -> AnyStr:
+        """Return the title and MDL lines as main's idiom joins them.
+
+        Returns:
+            The stripped title, a newline, and the MDL lines, each
+            terminated by a newline as ``write`` terminates them.
+        """
+        newline = _lit(self.title, "\n")
+        return self.title[:0].join(
+            [self.title, newline]
+            + [line if line.endswith(newline) else line + newline for line in self.mdl]
+        )
+
     def serialize(self) -> AnyStr:
         """Return what main's ``write(outh)`` writes, as one value.
 

@@ -139,6 +139,7 @@ def assert_blocks_match(
             expected.records
         ), context
         assert serialized(block, text) == expected.serialize(), context
+        assert block.molblock == expected.molblock(), context
         name, value = ("Z", "v\u00e9") if text else (b"Z", "v\u00e9".encode())
         block.append_record(name, value)
         expected.append_record(name, value)

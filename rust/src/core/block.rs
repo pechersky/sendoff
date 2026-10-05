@@ -224,6 +224,24 @@ impl Block {
         &self.data[self.title_end..self.mdl_end]
     }
 
+    /// The stripped title line followed by the MDL lines: a mol block.
+    ///
+    /// Borrows from the block unless stripping changed the title.
+    pub fn molblock(&self, strip: Strip) -> Cow<'_, [u8]> {
+        let title = self.title(strip);
+        // Trimming always drops the title line's `\n`; if that is all it
+        // dropped, the title and MDL are already contiguous.
+        if title.len() + 1 == self.title_end {
+            return Cow::Borrowed(&self.data[..self.mdl_end]);
+        }
+        let mdl = self.mdl();
+        let mut molblock = Vec::with_capacity(title.len() + 1 + mdl.len());
+        molblock.extend_from_slice(title);
+        molblock.push(b'\n');
+        molblock.extend_from_slice(mdl);
+        Cow::Owned(molblock)
+    }
+
     /// The SD data lines, each ending in `\n`.
     pub fn metadata(&self) -> &[u8] {
         &self.data[self.mdl_end..]
@@ -521,6 +539,18 @@ mod tests {
                 found: 2
             })
         );
+    }
+
+    #[test]
+    fn molblock_is_the_stripped_title_and_mdl() {
+        let plain = block("t\nsrc\nM  END\n> <A>\na\n\n", false);
+        assert!(matches!(plain.molblock(Strip::Bytes), Cow::Borrowed(_)));
+        assert_eq!(&*plain.molblock(Strip::Bytes), b"t\nsrc\nM  END\n");
+        let padded = block(" t \nsrc\nM  END\n", false);
+        assert_eq!(&*padded.molblock(Strip::Bytes), b"t\nsrc\nM  END\n");
+        let empty = block("\nM  END\n", false);
+        assert!(matches!(empty.molblock(Strip::Bytes), Cow::Borrowed(_)));
+        assert_eq!(&*empty.molblock(Strip::Bytes), b"\nM  END\n");
     }
 
     #[test]

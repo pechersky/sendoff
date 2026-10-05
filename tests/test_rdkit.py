@@ -1,8 +1,10 @@
 """Test rdkit parsing of metadata on generated SDFs."""
 
+import os
+
 from rdkit import Chem
 
-from sendoff.sdblock import Pathy
+from sendoff.sdblock import Pathy, parse_sdf
 
 
 def test_single_mol_read(single_mol_sdf: Pathy) -> None:
@@ -389,3 +391,20 @@ def test_single_shuffled_bond_lines_valid_bond_indices(
     """
     mol = next(Chem.SDMolSupplier(str(single_shuffled_bond_lines_v3000_sdf)))
     assert mol.GetNumBonds() == 9
+
+
+def test_molblock_round_trips_through_rdkit(double_mol_sdf: Pathy) -> None:
+    """Each block's molblock parses to the molecule RDKit reads from the file.
+
+    Args:
+        double_mol_sdf: pytest fixture of a Path to the sdf
+    """
+    expected = [
+        Chem.MolToSmiles(mol) for mol in Chem.SDMolSupplier(str(double_mol_sdf))
+    ]
+    for path in (str(double_mol_sdf), os.fsencode(double_mol_sdf)):
+        smiles = [
+            Chem.MolToSmiles(Chem.MolFromMolBlock(block.molblock))
+            for block in parse_sdf(path)
+        ]
+        assert smiles == expected

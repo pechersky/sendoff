@@ -234,6 +234,15 @@ class SDBlock:
         does for str blocks and as bytes.strip() does for bytes blocks.
         """
 
+    @property
+    def molblock(self, /) -> str | bytes:
+        """
+        Return the title line and CTAB through `M  END` as one value.
+
+        Suitable for RDKit's `Chem.MolFromMolBlock` or OpenEye's
+        `OEReadMolFromBytes`.
+        """
+
     def write(self, /, outh: SupportsTextWrite | SupportsBytesWrite) -> None:
         """
         Write an SDBlock, ending with "$$$$", to a file-like handle.

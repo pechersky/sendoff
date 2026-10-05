@@ -334,6 +334,15 @@ impl PySDBlock {
         self.kind.value(py, self.block.title(self.kind.strip()))
     }
 
+    /// Return the title line and CTAB through `M  END` as one value.
+    ///
+    /// Suitable for RDKit's `Chem.MolFromMolBlock` or OpenEye's
+    /// `OEReadMolFromBytes`.
+    #[getter]
+    fn molblock<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.kind.value(py, &self.block.molblock(self.kind.strip()))
+    }
+
     /// Return all SD data records.
     ///
     /// Returns:
