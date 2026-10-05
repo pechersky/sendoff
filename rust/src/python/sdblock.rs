@@ -121,7 +121,7 @@ impl PySDRecordIterator {
                         .map(|record| record.map(|(name, value)| SDRecord::Text(name, value)))
                 }
                 SDBlockInner::Bytes(block) => {
-                    crate::core::sddata::next_record_bytes(&block.metadata, &mut index)
+                    crate::core::sddata::next_record(&block.metadata, &mut index)
                         .map(|record| record.map(|(name, value)| SDRecord::Bytes(name, value)))
                 }
             }

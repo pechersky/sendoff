@@ -355,6 +355,10 @@ def test_iter_records_preserves_bytes_and_owns_its_block() -> None:
                 b"M  END\n",
                 b"> <Record>\n",
                 b"first\xfe\n",
+                b"second\n",
+                b"\n",
+                b"> <Record>\n",
+                b"third\n",
                 b"\n",
                 b"$$$$\n",
             ]
@@ -365,7 +369,43 @@ def test_iter_records_preserves_bytes_and_owns_its_block() -> None:
 
     record = next(iterator)
 
-    assert record == (b"Record", b"first\xfe")
+    assert record == (b"Record", b"first\xfe\nsecond")
+    assert list(iterator) == [(b"Record", b"third")]
+
+
+def test_string_and_bytes_whitespace_follow_their_input_rules() -> None:
+    """Text uses Unicode trim while bytes preserve non-ASCII whitespace."""
+    text_block = next(
+        SDBlock.from_lines(
+            [
+                " \u2003Title\u2003 \n",
+                "\n",
+                "M  END\n",
+                "> <Record>\u2003\n",
+                "\u2003Text\u2003\n",
+                "\n",
+                "$$$$\n",
+            ]
+        )
+    )
+    byte_block = next(
+        SDBlock.from_lines(
+            [
+                b"\xc2\xa0Title\xc2\xa0\n",
+                b"\n",
+                b"M  END\n",
+                b"> <Record>\n",
+                b"\xc2\xa0Bytes\xc2\xa0\n",
+                b"\n",
+                b"$$$$\n",
+            ]
+        )
+    )
+
+    assert text_block.title == "Title"
+    assert text_block.records() == [("Record", "Text")]
+    assert byte_block.title == b"\xc2\xa0Title\xc2\xa0"
+    assert byte_block.records() == [(b"Record", b"\xc2\xa0Bytes\xc2\xa0")]
 
 
 @pytest.mark.xfail  # sendoff does not support metadata vals starting with $$$$

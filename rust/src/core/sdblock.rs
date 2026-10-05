@@ -21,27 +21,11 @@ impl SDBlock {
     where
         I: Iterator<Item = Result<String, E>>,
     {
-        let mut blocks = Vec::new();
-        let mut block_lines = Vec::new();
-        for line in lines {
-            let line = line?;
-            let is_end = line.starts_with("$$$$");
-            block_lines.push(line);
-            if is_end {
-                blocks.push(Self::from_block_lines(std::mem::take(&mut block_lines)));
-            }
-        }
-        if !block_lines.is_empty() {
-            blocks.push(Self::from_block_lines(block_lines));
-        }
-        Ok(blocks)
+        split_blocks(lines).map(|blocks| blocks.into_iter().map(Self::from_block_lines).collect())
     }
 
-    pub(crate) fn from_block_lines(mut block_lines: Vec<String>) -> Self {
-        let title = block_lines.remove(0).trim().to_owned();
-        let mut lines = block_lines.into_iter().map(Ok::<String, Infallible>);
-        let mdl = parse_mdl(&mut lines).expect("infallible lines");
-        let metadata = parse_metadata(&mut lines).expect("infallible lines");
+    pub(crate) fn from_block_lines(block_lines: Vec<String>) -> Self {
+        let (title, mdl, metadata) = parse_block_lines(block_lines);
         Self {
             title,
             mdl,
@@ -97,27 +81,11 @@ impl BytesSDBlock {
     where
         I: Iterator<Item = Result<Vec<u8>, E>>,
     {
-        let mut blocks = Vec::new();
-        let mut block_lines = Vec::new();
-        for line in lines {
-            let line = line?;
-            let is_end = line.starts_with(b"$$$$");
-            block_lines.push(line);
-            if is_end {
-                blocks.push(Self::from_block_lines(std::mem::take(&mut block_lines)));
-            }
-        }
-        if !block_lines.is_empty() {
-            blocks.push(Self::from_block_lines(block_lines));
-        }
-        Ok(blocks)
+        split_blocks(lines).map(|blocks| blocks.into_iter().map(Self::from_block_lines).collect())
     }
 
-    pub(crate) fn from_block_lines(mut block_lines: Vec<Vec<u8>>) -> Self {
-        let title = block_lines.remove(0).trim_ascii().to_vec();
-        let mut lines = block_lines.into_iter();
-        let mdl = parse_mdl_bytes(&mut lines);
-        let metadata = parse_metadata_bytes(&mut lines);
+    pub(crate) fn from_block_lines(block_lines: Vec<Vec<u8>>) -> Self {
+        let (title, mdl, metadata) = parse_block_lines(block_lines);
         Self {
             title,
             mdl,
@@ -129,7 +97,7 @@ impl BytesSDBlock {
     pub fn records(
         &self,
     ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, crate::core::sddata::RecordParseError> {
-        crate::core::sddata::records_bytes(&self.metadata)
+        crate::core::sddata::records(&self.metadata)
     }
 
     /// Append a byte-valued SD data record.
@@ -169,21 +137,86 @@ impl BytesSDBlock {
     }
 }
 
+trait SdfLine: Sized {
+    fn starts_with_ascii(&self, prefix: &[u8]) -> bool;
+    fn trim_title(self) -> Self;
+}
+
+impl SdfLine for String {
+    fn starts_with_ascii(&self, prefix: &[u8]) -> bool {
+        self.as_bytes().starts_with(prefix)
+    }
+
+    fn trim_title(self) -> Self {
+        self.trim().to_owned()
+    }
+}
+
+impl SdfLine for Vec<u8> {
+    fn starts_with_ascii(&self, prefix: &[u8]) -> bool {
+        self.starts_with(prefix)
+    }
+
+    fn trim_title(self) -> Self {
+        self.trim_ascii().to_vec()
+    }
+}
+
+fn split_blocks<T, E, I>(lines: &mut I) -> Result<Vec<Vec<T>>, E>
+where
+    T: SdfLine,
+    I: Iterator<Item = Result<T, E>>,
+{
+    let mut blocks = Vec::new();
+    let mut block_lines = Vec::new();
+    for line in lines {
+        let line = line?;
+        let is_end = line.starts_with_ascii(b"$$$$");
+        block_lines.push(line);
+        if is_end {
+            blocks.push(std::mem::take(&mut block_lines));
+        }
+    }
+    if !block_lines.is_empty() {
+        blocks.push(block_lines);
+    }
+    Ok(blocks)
+}
+
+fn parse_block_lines<T: SdfLine>(mut block_lines: Vec<T>) -> (T, Vec<T>, Vec<T>) {
+    let title = block_lines.remove(0).trim_title();
+    let mut lines = block_lines.into_iter().map(Ok::<T, Infallible>);
+    let mdl = collect_until(&mut lines, b"M  END", true).expect("infallible lines");
+    let metadata = collect_until(&mut lines, b"$$$$", false).expect("infallible lines");
+    (title, mdl, metadata)
+}
+
+fn collect_until<I, T, E>(lines: &mut I, marker: &[u8], include_marker: bool) -> Result<Vec<T>, E>
+where
+    T: SdfLine,
+    I: Iterator<Item = Result<T, E>>,
+{
+    let mut collected = Vec::new();
+    for line in lines {
+        let line = line?;
+        let found_marker = line.starts_with_ascii(marker);
+        if found_marker {
+            if include_marker {
+                collected.push(line);
+            }
+            break;
+        }
+        collected.push(line);
+    }
+    Ok(collected)
+}
+
 /// Collect lines through the first `M  END` line, including that line.
 pub fn parse_mdl<I, E>(lines: &mut I) -> Result<Vec<String>, E>
 where
     I: Iterator<Item = Result<String, E>>,
 {
-    let mut mdl_lines = Vec::new();
-    for line in lines {
-        let line = line?;
-        let is_end = line.starts_with("M  END");
-        mdl_lines.push(line);
-        if is_end {
-            break;
-        }
-    }
-    Ok(mdl_lines)
+    collect_until(lines, b"M  END", true)
 }
 
 /// Collect metadata lines before the first `$$$$` delimiter.
@@ -191,44 +224,7 @@ pub fn parse_metadata<I, E>(lines: &mut I) -> Result<Vec<String>, E>
 where
     I: Iterator<Item = Result<String, E>>,
 {
-    let mut metadata_lines = Vec::new();
-    for line in lines {
-        let line = line?;
-        if line.starts_with("$$$$") {
-            break;
-        }
-        metadata_lines.push(line);
-    }
-    Ok(metadata_lines)
-}
-
-fn parse_mdl_bytes<I>(lines: &mut I) -> Vec<Vec<u8>>
-where
-    I: Iterator<Item = Vec<u8>>,
-{
-    let mut mdl_lines = Vec::new();
-    for line in lines {
-        let is_end = line.starts_with(b"M  END");
-        mdl_lines.push(line);
-        if is_end {
-            break;
-        }
-    }
-    mdl_lines
-}
-
-fn parse_metadata_bytes<I>(lines: &mut I) -> Vec<Vec<u8>>
-where
-    I: Iterator<Item = Vec<u8>>,
-{
-    let mut metadata_lines = Vec::new();
-    for line in lines {
-        if line.starts_with(b"$$$$") {
-            break;
-        }
-        metadata_lines.push(line);
-    }
-    metadata_lines
+    collect_until(lines, b"$$$$", false)
 }
 
 /// Serialize an SDF block, preserving existing line endings when requested.

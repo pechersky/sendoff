@@ -23,91 +23,57 @@ pub fn append_record(record_name: &str, value: &str) -> (String, String, String)
     )
 }
 
-pub fn records(metadata: &[String]) -> Result<Vec<(String, String)>, RecordParseError> {
-    let mut records = Vec::new();
-    let mut index = 0;
-    while let Some(record) = next_record(metadata, &mut index)? {
-        records.push(record);
-    }
-    Ok(records)
+pub(crate) trait RecordValue: Sized {
+    fn is_blank(&self) -> bool;
+    fn record_name(&self) -> Result<Option<Self>, RecordParseError>;
+    fn trimmed_len(&self) -> usize;
+    fn append_trimmed(&self, output: &mut Self);
+    fn with_capacity(capacity: usize) -> Self;
+    fn push_line_separator(output: &mut Self);
 }
 
-pub fn records_bytes(metadata: &[Vec<u8>]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, RecordParseError> {
-    let mut records = Vec::new();
-    let mut index = 0;
-    while let Some(record) = next_record_bytes(metadata, &mut index)? {
-        records.push(record);
+impl RecordValue for String {
+    fn is_blank(&self) -> bool {
+        self.trim().is_empty()
     }
-    Ok(records)
-}
 
-pub fn next_record(
-    metadata: &[String],
-    index: &mut usize,
-) -> Result<Option<(String, String)>, RecordParseError> {
-    while *index < metadata.len() {
-        let start = *index;
-        while *index < metadata.len() && !metadata[*index].trim().is_empty() {
-            *index += 1;
-        }
-        let end = *index;
-        if *index < metadata.len() {
-            *index += 1;
-        }
-
-        let Some(header) = metadata[start..end].first() else {
-            continue;
+    fn record_name(&self) -> Result<Option<Self>, RecordParseError> {
+        let Some(header) = self.trim().strip_prefix("> ") else {
+            return Ok(None);
         };
-        let header = header.trim();
-        if !header.starts_with("> ") {
-            continue;
-        }
-        let Some((_, field)) = header.split_once("> ") else {
-            continue;
-        };
-        let field = field.trim();
+        let field = header.trim();
         let field = field.rsplit_once('>').map_or(field, |(name, _)| name);
-        let Some((_, field)) = field.split_once('<') else {
+        let Some((_, name)) = field.split_once('<') else {
             return Err(RecordParseError::MissingFieldName);
         };
-        let field = field.to_owned();
-
-        let value_lines = &metadata[start + 1..end];
-        let value_capacity = value_lines
-            .iter()
-            .fold(0usize, |size, line| size.saturating_add(line.trim().len()))
-            .saturating_add(value_lines.len().saturating_sub(1));
-        let mut value = String::with_capacity(value_capacity);
-        for (line_index, line) in value_lines.iter().enumerate() {
-            if line_index > 0 {
-                value.push('\n');
-            }
-            value.push_str(line.trim());
-        }
-        return Ok(Some((field, value)));
+        Ok(Some(name.to_owned()))
     }
-    Ok(None)
+
+    fn trimmed_len(&self) -> usize {
+        self.trim().len()
+    }
+
+    fn append_trimmed(&self, output: &mut Self) {
+        output.push_str(self.trim());
+    }
+
+    fn with_capacity(capacity: usize) -> Self {
+        String::with_capacity(capacity)
+    }
+
+    fn push_line_separator(output: &mut Self) {
+        output.push('\n');
+    }
 }
 
-pub fn next_record_bytes(
-    metadata: &[Vec<u8>],
-    index: &mut usize,
-) -> Result<Option<(Vec<u8>, Vec<u8>)>, RecordParseError> {
-    while *index < metadata.len() {
-        let start = *index;
-        while *index < metadata.len() && !metadata[*index].trim_ascii().is_empty() {
-            *index += 1;
-        }
-        let end = *index;
-        if *index < metadata.len() {
-            *index += 1;
-        }
+impl RecordValue for Vec<u8> {
+    fn is_blank(&self) -> bool {
+        self.trim_ascii().is_empty()
+    }
 
-        let Some(header) = metadata[start..end].first() else {
-            continue;
-        };
-        let Some(header) = header.trim_ascii().strip_prefix(b"> ") else {
-            continue;
+    fn record_name(&self) -> Result<Option<Self>, RecordParseError> {
+        let Some(header) = self.trim_ascii().strip_prefix(b"> ") else {
+            return Ok(None);
         };
         let field = header.trim_ascii();
         let field = field
@@ -117,21 +83,67 @@ pub fn next_record_bytes(
         let Some(name_start) = field.iter().position(|byte| *byte == b'<') else {
             return Err(RecordParseError::MissingFieldName);
         };
-        let field = field[name_start + 1..].to_vec();
+        Ok(Some(field[name_start + 1..].to_vec()))
+    }
+
+    fn trimmed_len(&self) -> usize {
+        self.trim_ascii().len()
+    }
+
+    fn append_trimmed(&self, output: &mut Self) {
+        output.extend_from_slice(self.trim_ascii());
+    }
+
+    fn with_capacity(capacity: usize) -> Self {
+        Vec::with_capacity(capacity)
+    }
+
+    fn push_line_separator(output: &mut Self) {
+        output.push(b'\n');
+    }
+}
+
+pub(crate) fn records<T: RecordValue>(metadata: &[T]) -> Result<Vec<(T, T)>, RecordParseError> {
+    let mut records = Vec::new();
+    let mut index = 0;
+    while let Some(record) = next_record(metadata, &mut index)? {
+        records.push(record);
+    }
+    Ok(records)
+}
+
+pub(crate) fn next_record<T: RecordValue>(
+    metadata: &[T],
+    index: &mut usize,
+) -> Result<Option<(T, T)>, RecordParseError> {
+    while *index < metadata.len() {
+        let start = *index;
+        while *index < metadata.len() && !metadata[*index].is_blank() {
+            *index += 1;
+        }
+        let end = *index;
+        if *index < metadata.len() {
+            *index += 1;
+        }
+
+        let Some(header) = metadata[start..end].first() else {
+            continue;
+        };
+        let Some(field) = header.record_name()? else {
+            continue;
+        };
 
         let value_lines = &metadata[start + 1..end];
         let value_capacity = value_lines
             .iter()
-            .fold(0usize, |size, line| {
-                size.saturating_add(line.trim_ascii().len())
-            })
+            .fold(0usize, |size, line| size.saturating_add(line.trimmed_len()))
             .saturating_add(value_lines.len().saturating_sub(1));
-        let mut value = Vec::with_capacity(value_capacity);
+        let mut value = T::with_capacity(value_capacity);
         for (line_index, line) in value_lines.iter().enumerate() {
             if line_index > 0 {
-                value.push(b'\n');
+                T::push_line_separator(&mut value);
             }
-            value.extend_from_slice(line.trim_ascii());
+            line.append_trimmed(&mut value);
         }
         return Ok(Some((field, value)));
     }
