@@ -327,8 +327,10 @@ def test_bytes_block_requires_binary_append_values() -> None:
     """Appending to a bytes block cannot introduce implicitly encoded text."""
     block = next(SDBlock.from_lines([b"title\n", b"\n", b"M  END\n"]))
 
-    with pytest.raises(TypeError, match="must be appended as bytes"):
+    with pytest.raises(TypeError, match="record names must be bytes"):
         block.append_record("field", b"value")
+    with pytest.raises(TypeError, match="values must be bytes"):
+        block.append_record(b"field", "value")
 
     block.append_record(b"field", b"value")
     assert block.records() == [(b"field", b"value")]
@@ -491,6 +493,70 @@ def test_get_and_to_dict_match_dict_of_records() -> None:
         byte_block.get("A")
     with pytest.raises(TypeError, match="must be str"):
         block.get(b"A")
+
+
+def test_record_mutators_keep_order_and_other_lines() -> None:
+    """set_record edits in place; remove_record and replace_records rebuild."""
+    text = "t\nM  END\n> <A>  (1)\n1\n\nnote\n\n> <B>\nb\n\n> <A>\n2\n\n$$$$\n"
+    block = next(SDBlock.from_lines(io.StringIO(text)))
+
+    block.set_record("A", "new")
+    block.set_record("C", "c")
+    assert block.records() == [("A", "new"), ("B", "b"), ("C", "c")]
+    assert block.remove_record("B") == 1
+    assert block.remove_record("B") == 0
+    out = io.StringIO()
+    block.write(out)
+    assert out.getvalue() == ("t\nM  END\n> <A>\nnew\n\nnote\n\n> <C>\nc\n\n$$$$\n")
+
+    block.replace_records({"X": "1", "Y": "2"})
+    assert block.records() == [("X", "1"), ("Y", "2")]
+    block.replace_records((name, value) for name, value in [("X", "a"), ("X", "b")])
+    assert block.records() == [("X", "a"), ("X", "b")]
+    block.replace_records([])
+    assert block.records() == []
+    assert block.molblock == "t\nM  END\n"
+
+
+def test_record_mutators_check_types_and_headers() -> None:
+    """Names and values must match the block's type; bad headers raise."""
+    byte_block = next(SDBlock.from_lines([b"t\n", b"M  END\n", b"> <A>\n", b"1\n"]))
+    byte_block.set_record(b"A", b"2")
+    assert byte_block.to_dict() == {b"A": b"2"}
+    with pytest.raises(TypeError, match="record names must be bytes"):
+        byte_block.set_record("A", b"2")
+    with pytest.raises(TypeError, match="values must be bytes"):
+        byte_block.replace_records({b"A": "2"})  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="record names must be bytes"):
+        byte_block.remove_record("A")
+    with pytest.raises(TypeError):
+        byte_block.replace_records([b"AB"])  # type: ignore[arg-type]
+
+    bad = next(SDBlock.from_lines(["t\n", "M  END\n", "> no name\n", "1\n"]))
+    with pytest.raises(ValueError, match="missing a name"):
+        bad.set_record("A", "1")
+    with pytest.raises(ValueError, match="missing a name"):
+        bad.remove_record("A")
+    bad.replace_records({"A": "1"})
+    assert bad.records() == [("A", "1")]
+
+
+def test_title_setter_replaces_only_the_title() -> None:
+    """Setting the title keeps the CTAB and records and rejects line breaks."""
+    block = next(SDBlock.from_lines(["old\n", "src\n", "M  END\n", "> <A>\n", "1\n"]))
+
+    block.title = "a much longer title"
+    assert block.title == "a much longer title"
+    assert block.molblock == "a much longer title\nsrc\nM  END\n"
+    assert block.records() == [("A", "1")]
+    block.title = " padded "
+    assert block.title == "padded"
+    for bad in ["two\nlines", "cr\r"]:
+        with pytest.raises(ValueError, match="single line"):
+            block.title = bad
+    with pytest.raises(TypeError, match="titles must be str"):
+        block.title = b"bytes"
+    assert block.title == "padded"
 
 
 def test_text_strips_like_str_and_bytes_like_bytes() -> None:

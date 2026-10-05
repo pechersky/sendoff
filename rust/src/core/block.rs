@@ -168,6 +168,18 @@ pub struct Record<'a> {
     pub name: &'a [u8],
     /// Stripped value lines joined with `\n`.
     pub value: Cow<'a, [u8]>,
+    /// Offset of the header line in the SD data.
+    pub start: usize,
+}
+
+/// Append `> <name>`, the value line, and a blank line.
+fn push_record(data: &mut Vec<u8>, name: &[u8], value: &[u8]) {
+    data.reserve(name.len() + value.len() + 7);
+    data.extend_from_slice(b"> <");
+    data.extend_from_slice(name);
+    data.extend_from_slice(b">\n");
+    data.extend_from_slice(value);
+    data.extend_from_slice(b"\n\n");
 }
 
 /// The delimiter line that ends every serialized block.
@@ -278,14 +290,82 @@ impl Block {
     /// Append a `> <name>` record with a single value line.
     pub fn append_record(&mut self, name: &[u8], value: &[u8]) {
         self.data.truncate(self.body_end());
-        self.data
-            .reserve(name.len() + value.len() + 7 + TRAILER.len());
-        self.data.extend_from_slice(b"> <");
-        self.data.extend_from_slice(name);
-        self.data.extend_from_slice(b">\n");
-        self.data.extend_from_slice(value);
-        self.data.extend_from_slice(b"\n\n");
+        push_record(&mut self.data, name, value);
         self.data.extend_from_slice(TRAILER);
+    }
+
+    /// Replace the title line with `title`, which must not contain `\n`.
+    pub fn set_title(&mut self, title: &[u8]) {
+        let old_end = self.title_end;
+        let mut line = Vec::with_capacity(title.len() + 1);
+        line.extend_from_slice(title);
+        line.push(b'\n');
+        self.data.splice(..old_end, line);
+        self.title_end = title.len() + 1;
+        self.mdl_end = self.mdl_end - old_end + self.title_end;
+    }
+
+    /// Give the first record named `name` the single-line `value` and
+    /// remove later ones, or append the record if there is none.
+    pub fn set_record(
+        &mut self,
+        name: &[u8],
+        value: &[u8],
+        strip: Strip,
+    ) -> Result<(), MissingFieldName> {
+        if self.rewrite_records(name, Some(value), strip)? == 0 {
+            self.append_record(name, value);
+        }
+        Ok(())
+    }
+
+    /// Remove every record named `name`, returning how many there were.
+    pub fn remove_records(&mut self, name: &[u8], strip: Strip) -> Result<usize, MissingFieldName> {
+        self.rewrite_records(name, None, strip)
+    }
+
+    /// Replace the whole SD data with `records`.
+    pub fn replace_records<'a>(&mut self, records: impl IntoIterator<Item = (&'a [u8], &'a [u8])>) {
+        self.data.truncate(self.mdl_end);
+        for (name, value) in records {
+            push_record(&mut self.data, name, value);
+        }
+        self.data.extend_from_slice(TRAILER);
+    }
+
+    /// Drop the records named `name`, putting `value` in place of the
+    /// first, and return how many matched.
+    fn rewrite_records(
+        &mut self,
+        name: &[u8],
+        value: Option<&[u8]>,
+        strip: Strip,
+    ) -> Result<usize, MissingFieldName> {
+        let metadata = self.metadata();
+        let mut spans = Vec::new();
+        let mut pos = 0;
+        while let Some(record) = next_record(metadata, &mut pos, strip)? {
+            if record.name == name {
+                spans.push((record.start, pos));
+            }
+        }
+        if spans.is_empty() {
+            return Ok(0);
+        }
+        let mut data =
+            Vec::with_capacity(self.data.len() + name.len() + value.map_or(0, <[u8]>::len) + 7);
+        data.extend_from_slice(&self.data[..self.mdl_end]);
+        let mut copied = 0;
+        for (index, &(start, end)) in spans.iter().enumerate() {
+            data.extend_from_slice(&metadata[copied..start]);
+            if let (0, Some(value)) = (index, value) {
+                push_record(&mut data, name, value);
+            }
+            copied = end;
+        }
+        data.extend_from_slice(&self.data[self.mdl_end + copied..]);
+        self.data = data;
+        Ok(spans.len())
     }
 
     /// Replace the MDL lines, keeping the raw title line and SD data.
@@ -349,6 +429,7 @@ fn next_record_by<'a>(
     trim: impl Fn(&[u8]) -> &[u8],
 ) -> Result<Option<Record<'a>>, MissingFieldName> {
     while *pos < metadata.len() {
+        let start = *pos;
         let header = trim(next_line(metadata, pos));
         if header.is_empty() {
             continue;
@@ -374,7 +455,7 @@ fn next_record_by<'a>(
                 owned.extend_from_slice(line);
             }
         }
-        return Ok(Some(Record { name, value }));
+        return Ok(Some(Record { name, value, start }));
     }
     Ok(None)
 }
@@ -482,6 +563,50 @@ mod tests {
             [("A".into(), "a".into()), ("B".into(), "b".into())]
         );
         assert_eq!(written(&block), "t\nM  END\n> <A>\na\n\n> <B>\nb\n\n$$$$\n");
+    }
+
+    #[test]
+    fn set_title_keeps_the_rest() {
+        let mut block = block(" old \nsrc\nM  END\n> <A>\na\n\n$$$$\n", true);
+        block.set_title(b"a much longer title");
+        assert_eq!(block.title(Strip::Bytes), b"a much longer title");
+        assert_eq!(block.mdl(), b"src\nM  END\n");
+        assert_eq!(records(&block).unwrap(), [("A".into(), "a".into())]);
+        block.set_title(b"");
+        assert_eq!(written(&block), "\nsrc\nM  END\n> <A>\na\n\n$$$$\n");
+    }
+
+    #[test]
+    fn set_record_replaces_the_first_and_drops_the_rest() {
+        let text = "t\nM  END\n> <A>  (1)\n1\nmore\n\njunk\n\n> <B>\nb\n\n> <A>\n2\n\n";
+        let mut block = block(text, false);
+        block.set_record(b"A", b"new", Strip::Bytes).unwrap();
+        assert_eq!(
+            written(&block),
+            "t\nM  END\n> <A>\nnew\n\njunk\n\n> <B>\nb\n\n$$$$\n"
+        );
+        block.set_record(b"C", b"c", Strip::Bytes).unwrap();
+        assert_eq!(
+            records(&block).unwrap(),
+            [
+                ("A".into(), "new".into()),
+                ("B".into(), "b".into()),
+                ("C".into(), "c".into())
+            ]
+        );
+        assert_eq!(block.remove_records(b"B", Strip::Bytes), Ok(1));
+        assert_eq!(block.remove_records(b"B", Strip::Bytes), Ok(0));
+        assert_eq!(
+            written(&block),
+            "t\nM  END\n> <A>\nnew\n\njunk\n\n> <C>\nc\n\n$$$$\n"
+        );
+        block.replace_records([(&b"Z"[..], &b"z"[..])]);
+        assert_eq!(written(&block), "t\nM  END\n> <Z>\nz\n\n$$$$\n");
+        let mut malformed = self::block("t\nM  END\n> bad\n\n", false);
+        assert_eq!(
+            malformed.remove_records(b"A", Strip::Bytes),
+            Err(MissingFieldName)
+        );
     }
 
     #[test]

@@ -296,13 +296,14 @@ impl PySDBlock {
         }
     }
 
-    /// The bytes of a record name, which must match the block's type.
-    fn name_bytes<'a>(&self, name: &'a Bound<'_, PyAny>) -> PyResult<&'a [u8]> {
-        match bytes_of(name)? {
+    /// The bytes of a str or bytes argument, which must match the block's
+    /// type; `what` names the argument in the error.
+    fn arg_bytes<'a>(&self, value: &'a Bound<'_, PyAny>, what: &str) -> PyResult<&'a [u8]> {
+        match bytes_of(value)? {
             Some((kind, bytes)) if kind == self.kind => Ok(bytes),
             _ => Err(PyTypeError::new_err(match self.kind {
-                Kind::Text => "text SDBlock record names must be str",
-                Kind::Bytes => "byte-backed SDBlock record names must be bytes",
+                Kind::Text => format!("text SDBlock {what} must be str"),
+                Kind::Bytes => format!("byte-backed SDBlock {what} must be bytes"),
             })),
         }
     }
@@ -343,6 +344,19 @@ impl PySDBlock {
     #[getter]
     fn title<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.kind.value(py, self.block.title(self.kind.strip()))
+    }
+
+    /// Replace the title line.
+    #[setter(title)]
+    fn set_title(&mut self, title: &Bound<'_, PyAny>) -> PyResult<()> {
+        let title = self.arg_bytes(title, "titles")?;
+        if title.iter().any(|&byte| byte == b'\n' || byte == b'\r') {
+            return Err(PyValueError::new_err(
+                "SDBlock titles must be a single line",
+            ));
+        }
+        self.block.set_title(title);
+        Ok(())
     }
 
     /// Return the title line and CTAB through `M  END` as one value.
@@ -398,7 +412,7 @@ impl PySDBlock {
         default: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         let py = name.py();
-        let name = self.name_bytes(name)?;
+        let name = self.arg_bytes(name, "record names")?;
         let strip = self.kind.strip();
         let mut pos = 0;
         let mut found = None;
@@ -458,18 +472,68 @@ impl PySDBlock {
         record_name: &Bound<'_, PyAny>,
         value: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        match (bytes_of(record_name)?, bytes_of(value)?) {
-            (Some((name_kind, name)), Some((value_kind, value)))
-                if name_kind == self.kind && value_kind == self.kind =>
-            {
-                self.block.append_record(name, value);
-                Ok(())
-            }
-            _ => Err(PyTypeError::new_err(match self.kind {
-                Kind::Text => "text SDBlock values must be appended as str",
-                Kind::Bytes => "byte-backed SDBlock values must be appended as bytes",
-            })),
-        }
+        let name = self.arg_bytes(record_name, "record names")?;
+        let value = self.arg_bytes(value, "values")?;
+        self.block.append_record(name, value);
+        Ok(())
+    }
+
+    /// Set a record, keeping the position of the first with that name.
+    ///
+    /// Later records with the same name are removed; if there is none, the
+    /// record is appended.
+    ///
+    /// Args:
+    ///     name: record name in the block's type
+    ///     value: record value in the block's type
+    fn set_record(&mut self, name: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let name = self.arg_bytes(name, "record names")?;
+        let value = self.arg_bytes(value, "values")?;
+        self.block
+            .set_record(name, value, self.kind.strip())
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// Remove every record named `name`.
+    ///
+    /// Args:
+    ///     name: record name in the block's type
+    ///
+    /// Returns:
+    ///     How many records were removed
+    fn remove_record(&mut self, name: &Bound<'_, PyAny>) -> PyResult<usize> {
+        let name = self.arg_bytes(name, "record names")?;
+        self.block
+            .remove_records(name, self.kind.strip())
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// Replace all SD data with the given records.
+    ///
+    /// Args:
+    ///     records: a mapping, or an iterable of (name, value) tuples, in
+    ///         the block's type
+    fn replace_records(&mut self, records: &Bound<'_, PyAny>) -> PyResult<()> {
+        let py = records.py();
+        let items = match records.getattr(intern!(py, "items")) {
+            Ok(items) => items.call0()?,
+            Err(_) => records.clone(),
+        };
+        let pairs = items
+            .try_iter()?
+            .map(|item| item?.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>())
+            .collect::<PyResult<Vec<_>>>()?;
+        let records = pairs
+            .iter()
+            .map(|(name, value)| {
+                Ok((
+                    self.arg_bytes(name, "record names")?,
+                    self.arg_bytes(value, "values")?,
+                ))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        self.block.replace_records(records);
+        Ok(())
     }
 
     /// Parse out the underlying CTable object from a text SDBlock.

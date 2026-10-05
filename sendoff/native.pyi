@@ -1,5 +1,5 @@
 import os
-from typing import Final, Iterable, Iterator, Protocol, TypeVar, final
+from typing import Final, Iterable, Iterator, Mapping, Protocol, TypeVar, final
 
 _T = TypeVar("_T")
 
@@ -244,6 +244,56 @@ class SDBlock:
         Equivalent to `dict(block.records())`.
         """
 
+    def set_record(self, /, name: str | bytes, value: str | bytes) -> None:
+        """
+        Set a record, keeping the position of the first with that name.
+
+        Later records with the same name are removed; if there is none, the
+        record is appended.
+
+        Args:
+            name: record name in the block's type
+            value: record value in the block's type
+
+        Raises:
+            TypeError: if `name` or `value` is not the block's type
+        """
+
+    def remove_record(self, /, name: str | bytes) -> int:
+        """
+        Remove every record named `name`.
+
+        Args:
+            name: record name in the block's type
+
+        Returns:
+            How many records were removed
+
+        Raises:
+            TypeError: if `name` is not the block's type
+        """
+
+    def replace_records(
+        self,
+        /,
+        records: (
+            Mapping[str, str]
+            | Mapping[bytes, bytes]
+            | Iterable[tuple[str, str]]
+            | Iterable[tuple[bytes, bytes]]
+        ),
+    ) -> None:
+        """
+        Replace all SD data with the given records.
+
+        Args:
+            records: a mapping, or an iterable of (name, value) tuples, in
+                the block's type
+
+        Raises:
+            TypeError: if a name or value is not the block's type
+        """
+
     def renumber_indices(self, /) -> None:
         """
         Renumber atom and bond indices to be 1-indexed and in order.
@@ -261,6 +311,12 @@ class SDBlock:
 
         Titles, record names, and record values are stripped as str.strip()
         does for str blocks and as bytes.strip() does for bytes blocks.
+        """
+
+    @title.setter
+    def title(self, /, title: str | bytes) -> None:
+        """
+        Replace the title line; a ValueError if it contains a line break.
         """
 
     @property

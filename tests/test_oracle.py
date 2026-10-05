@@ -154,6 +154,87 @@ def assert_blocks_match(
         assert outcome(lambda: list(block.records())) == outcome(
             expected.records
         ), context
+        assert_mutations_match(block, text)
+
+
+def cast_like(like: Any, value: str) -> Any:
+    """Return ``value`` as str or bytes to match ``like``.
+
+    Args:
+        like: a str or bytes value
+        value: the text to convert
+
+    Returns:
+        ``value`` in the type of ``like``.
+    """
+    return value if isinstance(like, str) else value.encode()
+
+
+def reparsed_records(block: SDBlock, text: bool) -> Any:
+    """Return the records the reference parses from what ``block`` writes.
+
+    Args:
+        block: a native SDBlock
+        text: whether the block holds str values
+
+    Returns:
+        The reference parser's records for the written block.
+    """
+    written = serialized(block, text)
+    mdl = block.molblock.split(cast_like(written, "\n"))[1:]
+    if not any(line.startswith(cast_like(written, "M  END")) for line in mdl):
+        return block.records()  # records after MDL without M  END read as MDL
+    if block.title.startswith(cast_like(written, "$$$$")):
+        return block.records()  # a written $$$$ title reads as a delimiter
+    handle: Any = io.StringIO(written) if text else io.BytesIO(written)
+    (reference,) = ref_from_lines(handle)
+    return reference.records()
+
+
+def assert_mutations_match(block: SDBlock, text: bool) -> None:
+    """Check record and title mutators against a list model of records.
+
+    Args:
+        block: a native SDBlock, which is mutated
+        text: whether the block holds str values
+    """
+
+    def cast(value: str) -> Any:
+        return value if text else value.encode()
+
+    before = outcome(block.records)
+    name, other, value = cast("A"), cast(" spaced name "), cast("new\u00e9 v")
+    if before == "<error>":
+        assert outcome(lambda: block.set_record(name, value)) == "<error>"
+        assert outcome(lambda: block.remove_record(name)) == "<error>"
+    else:
+        expected = [(n, v) for n, v in before if n != name]
+        matches = [i for i, (n, _) in enumerate(before) if n == name]
+        position = matches[0] if matches else len(before)
+        expected.insert(position, (name, value))
+        block.set_record(name, value)
+        assert block.records() == expected
+        assert reparsed_records(block, text) == expected
+        removed = sum(n == other for n, _ in expected)
+        assert block.remove_record(other) == removed
+        expected = [(n, v) for n, v in expected if n != other]
+        assert block.records() == expected
+        assert reparsed_records(block, text) == expected
+
+    title: Any = block.title
+    molblock: Any = block.molblock
+    replacement = [(cast("B"), cast("1")), (cast("B"), cast("x\ny")), (name, value)]
+    block.replace_records(replacement)
+    assert block.records() == replacement
+    block.replace_records(dict(replacement))
+    assert block.records() == [(cast("B"), cast("x\ny")), (name, value)]
+    assert reparsed_records(block, text) == block.records()
+    assert (block.title, block.molblock) == (title, molblock)
+
+    block.title = cast(" \u3000new title\t" if text else " new title\t")
+    assert block.title == cast("new title")
+    assert block.molblock == cast("new title") + molblock.removeprefix(title)
+    assert block.records() == [(cast("B"), cast("x\ny")), (name, value)]
 
 
 class ChunkedReader:
