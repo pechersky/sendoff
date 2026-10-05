@@ -588,6 +588,74 @@ def test_mdl_is_the_ctab_lines_without_endings() -> None:
         byte_block.mdl_contains("prog")  # type: ignore[arg-type]
 
 
+def serialized(block: SDBlock[typing.AnyStr]) -> typing.AnyStr:
+    """Return what ``block.write`` writes.
+
+    Args:
+        block: the block to write
+
+    Returns:
+        The written str or bytes.
+    """
+    handle: typing.Any = io.StringIO() if isinstance(block.title, str) else io.BytesIO()
+    block.write(handle)
+    return typing.cast(typing.AnyStr, handle.getvalue())
+
+
+def test_constructor_parses_one_block() -> None:
+    """SDBlock(sdf) parses a molblock or one record and appends records."""
+    molblock = "title\n  prog\n\nM  END\n"
+    block = SDBlock(molblock)
+    assert (block.title, block.molblock, block.records()) == ("title", molblock, [])
+    assert serialized(block) == molblock + "$$$$\n"
+
+    with_data = SDBlock(molblock + "> <A>\n1\n\n$$$$\n\n", {"B": "2"})
+    assert with_data.molblock == molblock
+    assert with_data.records() == [("A", "1"), ("B", "2")]
+    pairs = SDBlock(molblock.encode(), [(b"A", b"1"), (b"A", b"2")])
+    assert pairs.records() == [(b"A", b"1"), (b"A", b"2")]
+
+    assert SDBlock(molblock.replace("\n", "\r\n")).molblock == molblock
+    assert SDBlock(molblock.encode().replace(b"\n", b"\r\n")).mdl[-1] == b"M  END\r"
+    empty = SDBlock("")
+    assert (empty.title, empty.mdl, empty.records()) == ("", (), [])
+
+    with pytest.raises(ValueError, match="one block"):
+        SDBlock(molblock + "$$$$\n" + molblock)
+    with pytest.raises(TypeError, match="str or bytes"):
+        SDBlock(1)  # type: ignore[type-var]
+    with pytest.raises(TypeError, match="record names must be str"):
+        SDBlock(molblock, [(b"A", b"1")])  # type: ignore[type-var]
+
+
+def test_from_sdf_parses_like_a_file(tmp_path: Path) -> None:
+    """from_sdf parses in-memory str with universal newlines, bytes as is.
+
+    Args:
+        tmp_path: pytest fixture of a temporary directory
+    """
+    # The title's CRLF straddles the 1 MiB chunk size.
+    title = "x" * ((1 << 20) - 1)
+    text = f"{title}\r\nM  END\r> <A>\r\n1\n\n$$$$\r\nt\nM  END\n$$$$\n"
+    path = tmp_path / "input.sdf"
+    path.write_text(text, newline="")
+    data = text.encode()
+    assert list(map(serialized, SDBlock.from_sdf(text))) == list(
+        map(serialized, parse_sdf(path))
+    )
+    assert list(map(serialized, SDBlock.from_sdf(data))) == list(
+        map(serialized, parse_sdf(os.fsencode(path)))
+    )
+    assert [b.records() for b in SDBlock.from_sdf(text)] == [[("A", "1")], []]
+    assert list(SDBlock.from_sdf("")) == []
+    with pytest.raises(TypeError, match="use SDBlock.from_sdf"):
+        SDBlock.from_lines("text")
+    with pytest.raises(TypeError, match="use SDBlock.from_sdf"):
+        SDBlock.from_lines(b"bytes")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="str or bytes"):
+        SDBlock.from_sdf(["lines"])  # type: ignore[call-overload]
+
+
 def test_molblock_setter_replaces_the_structure_only() -> None:
     """Setting molblock swaps title and CTAB and keeps every record line."""
     text = "old\nsrc\nM  END\n> <A>  (1)\n1\n\nnote\n\n$$$$\n"

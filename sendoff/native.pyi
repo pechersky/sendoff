@@ -150,6 +150,28 @@ class SDBlock(Generic[AnyStr]):
     from binary input; names, values, and lines have the block's type.
     """
 
+    def __new__(
+        cls,
+        sdf: AnyStr,
+        records: (
+            Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]] | None
+        ) = None,
+    ) -> SDBlock[AnyStr]:
+        """
+        Parse one block from SDF str or bytes, such as a molblock.
+
+        The block ends at an optional $$$$ line, after which only whitespace
+        may follow. str input has universal newlines.
+
+        Args:
+            sdf: a molblock or one SDF record, as str or bytes
+            records: SD data to append after any in `sdf`, as a mapping or an
+                iterable of (name, value) tuples of the same type
+
+        Raises:
+            ValueError: if `sdf` holds more than one block
+        """
+
     def append_record(self, /, record_name: AnyStr, value: AnyStr) -> None:
         """
         Append a field and value to the SD data record.
@@ -203,6 +225,29 @@ class SDBlock(Generic[AnyStr]):
             A lazy iterator of SDBlocks whose values have the same type as the input
 
         The iterator does not close the caller-owned lines iterable.
+
+        Raises:
+            TypeError: for a str or bytes argument; use `from_sdf` for those
+        """
+
+    @overload
+    @staticmethod
+    def from_sdf(sdf: str) -> _SDBlockIterator[str]: ...
+    @overload
+    @staticmethod
+    def from_sdf(sdf: bytes) -> _SDBlockIterator[bytes]:
+        """
+        Lazily parse SDBlocks from SDF str or bytes held in memory.
+
+        Equivalent to ``from_lines(io.StringIO(sdf))`` or
+        ``from_lines(io.BytesIO(sdf))`` without splitting lines: str input has
+        universal newlines, and bytes are split on b"\\n" only.
+
+        Args:
+            sdf: SDF content as str or bytes
+
+        Returns:
+            A lazy iterator of SDBlocks of the input type
         """
 
     def num_atoms(self, /) -> int:

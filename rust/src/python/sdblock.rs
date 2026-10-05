@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::path::PathBuf;
@@ -10,7 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyIterator, PyList, PyString, PyTuple, PyType};
 
 use crate::core::block::{self, Block, Record, Strip};
-use crate::core::scan::{Scanner, TRANSLATE_SLACK, Tail, translate_newlines};
+use crate::core::scan::{Scanner, TRANSLATE_SLACK, Tail, single_block, translate_newlines};
 use crate::python::ctable::{PyCTable, error_to_py};
 
 /// Characters or bytes requested per `read` call.
@@ -50,6 +51,31 @@ fn bytes_of<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<Option<(Kind, &'a [u8])
     }
 }
 
+/// Translate `\r\n` and lone `\r` to `\n`, as text files read in Python.
+fn universal_newlines(bytes: &[u8]) -> Cow<'_, [u8]> {
+    if memchr::memchr(b'\r', bytes).is_none() {
+        return Cow::Borrowed(bytes);
+    }
+    let mut buffer = Vec::with_capacity(bytes.len() + TRANSLATE_SLACK);
+    buffer.extend_from_slice(bytes);
+    buffer.resize(bytes.len() + TRANSLATE_SLACK, 0);
+    let len = translate_newlines(&mut buffer, bytes.len(), &mut false);
+    buffer.truncate(len);
+    Cow::Owned(buffer)
+}
+
+/// Collect `(name, value)` pairs from a mapping or an iterable of pairs.
+fn record_pairs<'py>(
+    records: &Bound<'py, PyAny>,
+) -> PyResult<Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)>> {
+    let py = records.py();
+    let items = match records.getattr(intern!(py, "items")) {
+        Ok(items) => items.call0()?,
+        Err(_) => records.clone(),
+    };
+    items.try_iter()?.map(|item| item?.extract()).collect()
+}
+
 fn set_kind(kind: &mut Option<Kind>, found: Kind) -> PyResult<()> {
     match kind {
         Some(existing) if *existing != found => Err(PyTypeError::new_err(
@@ -67,6 +93,14 @@ enum Source {
     Lines(Py<PyIterator>),
     /// A file object's bound `read1` or `read` method.
     Reader(Py<PyAny>),
+    /// An in-memory str or bytes, copied out a chunk at a time from `pos`;
+    /// `text` translates newlines.
+    Buffer {
+        data: Py<PyAny>,
+        pos: usize,
+        text: bool,
+        pending_cr: bool,
+    },
     /// A path to open on the first read; `text` translates newlines.
     Path {
         path: PathBuf,
@@ -140,6 +174,27 @@ impl Source {
                 tail.extend(bytes);
                 Ok(false)
             }
+            Source::Buffer {
+                data,
+                pos,
+                text,
+                pending_cr,
+            } => {
+                let Some((_, bytes)) = bytes_of(data.bind(py))? else {
+                    unreachable!("Source::Buffer holds str or bytes");
+                };
+                let chunk = &bytes[*pos..bytes.len().min(*pos + CHUNK)];
+                *pos += chunk.len();
+                if *text {
+                    let space = tail.space(chunk.len() + TRANSLATE_SLACK);
+                    space[..chunk.len()].copy_from_slice(chunk);
+                    let len = translate_newlines(space, chunk.len(), pending_cr);
+                    tail.commit(len);
+                } else {
+                    tail.extend(chunk);
+                }
+                Ok(*pos == bytes.len())
+            }
             Source::Path {
                 path,
                 filename,
@@ -198,6 +253,13 @@ impl PySDBlockIterator {
             source,
             kind: None,
             scanner: Scanner::default(),
+        }
+    }
+
+    fn of_kind(source: Source, kind: Kind) -> Self {
+        Self {
+            kind: Some(kind),
+            ..Self::new(source)
         }
     }
 }
@@ -339,6 +401,12 @@ impl PySDBlock {
     #[staticmethod]
     fn from_lines(lines: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
         let py = lines.py();
+        if lines.is_instance_of::<PyString>() || lines.is_instance_of::<PyBytes>() {
+            return Err(PyTypeError::new_err(
+                "SDBlock.from_lines takes lines or a file object; \
+                 use SDBlock.from_sdf to parse SDF str or bytes",
+            ));
+        }
         for method in [intern!(py, "read1"), intern!(py, "read")] {
             if let Ok(read) = lines.getattr(method) {
                 return Ok(PySDBlockIterator::new(Source::Reader(read.unbind())));
@@ -347,6 +415,72 @@ impl PySDBlock {
         Ok(PySDBlockIterator::new(Source::Lines(
             lines.try_iter()?.unbind(),
         )))
+    }
+
+    /// Parse one block from SDF str or bytes, such as a molblock.
+    ///
+    /// The block ends at an optional `$$$$` line, after which only
+    /// whitespace may follow. str input has universal newlines.
+    ///
+    /// Args:
+    ///     sdf: a molblock or one SDF record, as str or bytes
+    ///     records: SD data to append after any in `sdf`, as a mapping or
+    ///         an iterable of (name, value) tuples of the same type
+    #[new]
+    #[pyo3(signature = (sdf, records=None))]
+    fn new(sdf: &Bound<'_, PyAny>, records: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        let Some((kind, bytes)) = bytes_of(sdf)? else {
+            return Err(PyTypeError::new_err(
+                "SDBlock() argument must be str or bytes",
+            ));
+        };
+        let data = match kind {
+            Kind::Text => universal_newlines(bytes).into_owned(),
+            Kind::Bytes => bytes.to_vec(),
+        };
+        let block = single_block(data).ok_or_else(|| {
+            PyValueError::new_err(
+                "SDBlock() takes one block; use SDBlock.from_sdf to parse several",
+            )
+        })?;
+        let mut slf = Self { block, kind };
+        if let Some(records) = records {
+            for (name, value) in record_pairs(records)? {
+                let name = slf.arg_bytes(&name, "record names")?;
+                let value = slf.arg_bytes(&value, "values")?;
+                slf.block.append_record(name, value);
+            }
+        }
+        Ok(slf)
+    }
+
+    /// Lazily parse SDBlocks from SDF str or bytes held in memory.
+    ///
+    /// Equivalent to `from_lines(io.StringIO(sdf))` or
+    /// `from_lines(io.BytesIO(sdf))`, without splitting lines: str input
+    /// has universal newlines, and bytes are split on b"\n" only.
+    ///
+    /// Args:
+    ///     sdf: SDF content as str or bytes
+    ///
+    /// Returns:
+    ///     An iterator of SDBlocks of the input type
+    #[staticmethod]
+    fn from_sdf(sdf: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
+        let Some((kind, _)) = bytes_of(sdf)? else {
+            return Err(PyTypeError::new_err(
+                "SDBlock.from_sdf argument must be str or bytes",
+            ));
+        };
+        Ok(PySDBlockIterator::of_kind(
+            Source::Buffer {
+                data: sdf.clone().unbind(),
+                pos: 0,
+                text: kind == Kind::Text,
+                pending_cr: false,
+            },
+            kind,
+        ))
     }
 
     /// Return the stripped molecule title in the input type.
@@ -381,18 +515,12 @@ impl PySDBlock {
     #[setter(molblock)]
     fn set_molblock(&mut self, molblock: &Bound<'_, PyAny>) -> PyResult<()> {
         let molblock = self.arg_bytes(molblock, "molblocks")?;
-        let translated;
-        let molblock = if self.kind == Kind::Text && memchr::memchr(b'\r', molblock).is_some() {
-            let mut buffer = molblock.to_vec();
-            let len = translate_newlines(&mut buffer, molblock.len(), &mut false);
-            buffer.truncate(len);
-            translated = buffer;
-            &translated[..]
-        } else {
-            molblock
+        let molblock = match self.kind {
+            Kind::Text => universal_newlines(molblock),
+            Kind::Bytes => Cow::Borrowed(molblock),
         };
         self.block
-            .set_molblock(molblock)
+            .set_molblock(&molblock)
             .map_err(|error| PyValueError::new_err(error.to_string()))
     }
 
@@ -566,15 +694,7 @@ impl PySDBlock {
     ///     records: a mapping, or an iterable of (name, value) tuples, in
     ///         the block's type
     fn replace_records(&mut self, records: &Bound<'_, PyAny>) -> PyResult<()> {
-        let py = records.py();
-        let items = match records.getattr(intern!(py, "items")) {
-            Ok(items) => items.call0()?,
-            Err(_) => records.clone(),
-        };
-        let pairs = items
-            .try_iter()?
-            .map(|item| item?.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>())
-            .collect::<PyResult<Vec<_>>>()?;
+        let pairs = record_pairs(records)?;
         let records = pairs
             .iter()
             .map(|(name, value)| {

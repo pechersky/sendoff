@@ -138,7 +138,13 @@ def assert_blocks_match(
         assert outcome(lambda: list(block.iter_records())) == outcome(
             expected.records
         ), context
-        assert serialized(block, text) == expected.serialize(), context
+        written = serialized(block, text)
+        assert written == expected.serialize(), context
+        if not (
+            block.title.startswith(cast_like(written, "$$$$"))  # reads as delimiter
+            or cast_like(written, "\r") in written  # SDBlock() translates str \r
+        ):
+            assert serialized(SDBlock(written), text) == written, context
         assert block.molblock == expected.molblock(), context
         newline: Any = "\n" if text else b"\n"
         assert block.mdl == tuple(expected.molblock().split(newline)[1:-1]), context
@@ -342,6 +348,22 @@ def test_file_objects_match_reference(lines: list[str], sizes: list[int]) -> Non
     for bytes_source in bytes_sources:
         bytes_reference = list(ref_from_lines(io.BytesIO(data)))
         assert_blocks_match(SDBlock.from_lines(bytes_source), bytes_reference, False)
+
+
+@examples
+@given(sdf_lines())
+def test_from_sdf_matches_reference(lines: list[str]) -> None:
+    """In-memory str uses universal newlines; bytes split on LF only.
+
+    Args:
+        lines: generated lines with endings
+    """
+    text = "".join(lines)
+    data = text.encode()
+    text_reference = list(ref_from_lines(io.StringIO(text, newline=None)))
+    assert_blocks_match(SDBlock.from_sdf(text), text_reference, text=True)
+    bytes_reference = list(ref_from_lines(io.BytesIO(data)))
+    assert_blocks_match(SDBlock.from_sdf(data), bytes_reference, text=False)
 
 
 @examples

@@ -105,6 +105,25 @@ impl Scanner {
     }
 }
 
+/// Parse `data` as one block ending at its first `$$$$` line, if any.
+///
+/// Returns `None` when anything but ASCII whitespace follows that line.
+pub fn single_block(mut data: Vec<u8>) -> Option<Block> {
+    let delimiter = if data.starts_with(b"$$$$") {
+        Some(0)
+    } else {
+        DELIMITER.find(&data).map(|index| index + 1)
+    };
+    if let Some(start) = delimiter {
+        let end = memchr(b'\n', &data[start..]).map_or(data.len(), |index| start + index + 1);
+        if !data[end..].iter().all(u8::is_ascii_whitespace) {
+            return None;
+        }
+        data.truncate(end);
+    }
+    Some(Block::new(data, delimiter))
+}
+
 /// Writable space after a scanner's input.
 pub struct Tail<'a> {
     buf: &'a mut Vec<u8>,
@@ -301,6 +320,25 @@ mod tests {
         for chunk in 1..input.len() {
             assert_eq!(split(input, chunk), expected, "chunk {chunk}");
         }
+    }
+
+    #[test]
+    fn single_block_allows_only_whitespace_after_its_delimiter() {
+        let serialized = |input: &[u8]| {
+            single_block(input.to_vec()).map(|block| block.serialized(Strip::Bytes).into_owned())
+        };
+        assert_eq!(
+            serialized(b"t\nM  END"),
+            Some(b"t\nM  END\n$$$$\n".to_vec())
+        );
+        assert_eq!(
+            serialized(b"t\nM  END\n$$$$\n \n\t"),
+            Some(b"t\nM  END\n$$$$\n".to_vec())
+        );
+        assert_eq!(serialized(b"$$$$"), Some(b"$$$$\n$$$$\n".to_vec()));
+        assert_eq!(serialized(b""), Some(b"\n$$$$\n".to_vec()));
+        assert_eq!(serialized(b"t\n$$$$\nu\n"), None);
+        assert_eq!(serialized(b"$$$$\n$$$$\n"), None);
     }
 
     #[test]
