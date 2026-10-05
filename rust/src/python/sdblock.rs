@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
 use std::fs::File;
 use std::hash::{BuildHasherDefault, Hasher};
@@ -36,25 +36,15 @@ impl Kind {
 
     /// Return a record name, reusing the object made for an earlier record
     /// with the same name, since names repeat from block to block.
-    fn name<'py>(self, py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
-        if bytes.len() > MAX_CACHED_NAME {
-            return self.value(py, bytes);
-        }
-        let cached =
-            NAMES.with_borrow(|names| names[self as usize].get(bytes).map(|o| o.clone_ref(py)));
-        if let Some(object) = cached {
-            return Ok(object.into_bound(py));
-        }
-        let object = self.value(py, bytes)?;
-        let evicted = NAMES.with_borrow_mut(|names| {
-            let names = &mut names[self as usize];
-            let evicted = (names.len() >= MAX_NAMES).then(|| std::mem::take(names));
-            names.insert(bytes.into(), object.clone().unbind());
-            evicted
-        });
-        // Release evicted names after releasing the cache.
-        drop(evicted);
-        Ok(object)
+    /// Call `f` with a `Namer` that reuses name objects across blocks, or
+    /// creates new ones in a re-entrant call that finds the cache in use.
+    fn with_names<R>(self, f: impl FnOnce(&mut Namer<'_>) -> R) -> R {
+        NAMES.with(|cache| {
+            f(&mut Namer {
+                kind: self,
+                cache: cache.try_borrow_mut().ok(),
+            })
+        })
     }
 
     /// The Python `strip()` that values of this kind follow.
@@ -97,6 +87,35 @@ type Names = HashMap<Box<[u8]>, Py<PyAny>, BuildHasherDefault<NameHasher>>;
 thread_local! {
     /// Record-name objects by their bytes, for text and then bytes names.
     static NAMES: RefCell<[Names; 2]> = RefCell::default();
+}
+
+/// Record-name objects of one kind, from the cache when it is available.
+struct Namer<'a> {
+    kind: Kind,
+    cache: Option<RefMut<'a, [Names; 2]>>,
+}
+
+impl Namer<'_> {
+    fn name<'py>(&mut self, py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+        let Some(cache) = self.cache.as_deref_mut() else {
+            return self.kind.value(py, bytes);
+        };
+        if bytes.len() > MAX_CACHED_NAME {
+            return self.kind.value(py, bytes);
+        }
+        let names = &mut cache[self.kind as usize];
+        if let Some(object) = names.get(bytes) {
+            return Ok(object.bind(py).clone());
+        }
+        let object = self.kind.value(py, bytes)?;
+        if names.len() >= MAX_NAMES {
+            // Releasing exact str and bytes objects runs no Python code, so
+            // it cannot re-enter the cache.
+            names.clear();
+        }
+        names.insert(bytes.into(), object.clone().unbind());
+        Ok(object)
+    }
 }
 
 /// Return the kind and UTF-8 or raw bytes of a str or bytes object.
@@ -379,7 +398,11 @@ impl PySDRecordIterator {
         }
         let block = self.block.borrow(py);
         let result = match block.block.next_record(&mut self.pos, block.kind.strip()) {
-            Ok(Some(record)) => block.record(py, record).map(Some),
+            Ok(Some(record)) => block
+                .kind
+                .with_names(|names| names.name(py, record.name))
+                .and_then(|name| PyTuple::new(py, [name, block.kind.value(py, &record.value)?]))
+                .map(Some),
             Ok(None) => Ok(None),
             Err(error) => Err(PyValueError::new_err(error.to_string())),
         };
@@ -398,11 +421,16 @@ pub(crate) struct PySDBlock {
 }
 
 impl PySDBlock {
-    fn record<'py>(&self, py: Python<'py>, record: Record<'_>) -> PyResult<Bound<'py, PyTuple>> {
+    fn record<'py>(
+        &self,
+        py: Python<'py>,
+        names: &mut Namer<'_>,
+        record: Record<'_>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
         PyTuple::new(
             py,
             [
-                self.kind.name(py, record.name)?,
+                names.name(py, record.name)?,
                 self.kind.value(py, &record.value)?,
             ],
         )
@@ -614,14 +642,16 @@ impl PySDBlock {
     fn records<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let list = PyList::empty(py);
         let mut pos = 0;
-        while let Some(record) = self
-            .block
-            .next_record(&mut pos, self.kind.strip())
-            .map_err(|error| PyValueError::new_err(error.to_string()))?
-        {
-            list.append(self.record(py, record)?)?;
-        }
-        Ok(list)
+        self.kind.with_names(|names| {
+            while let Some(record) = self
+                .block
+                .next_record(&mut pos, self.kind.strip())
+                .map_err(|error| PyValueError::new_err(error.to_string()))?
+            {
+                list.append(self.record(py, names, record)?)?;
+            }
+            Ok(list)
+        })
     }
 
     /// Lazily iterate over the SD data records.
@@ -677,17 +707,19 @@ impl PySDBlock {
         let dict = PyDict::new(py);
         let strip = self.kind.strip();
         let mut pos = 0;
-        while let Some(record) = self
-            .block
-            .next_record(&mut pos, strip)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?
-        {
-            dict.set_item(
-                self.kind.name(py, record.name)?,
-                self.kind.value(py, &record.value)?,
-            )?;
-        }
-        Ok(dict)
+        self.kind.with_names(|names| {
+            while let Some(record) = self
+                .block
+                .next_record(&mut pos, strip)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?
+            {
+                dict.set_item(
+                    names.name(py, record.name)?,
+                    self.kind.value(py, &record.value)?,
+                )?;
+            }
+            Ok(dict)
+        })
     }
 
     /// Return the block as SDF text ending with $$$$, in the input type.
