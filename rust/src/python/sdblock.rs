@@ -10,7 +10,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyIterator, PyList, PyString, PyTuple};
 
 use crate::core::block::{self, Block, Record};
-use crate::core::scan::{Scanner, translate_newlines};
+use crate::core::scan::{Scanner, TRANSLATE_SLACK, Tail, translate_newlines};
 use crate::python::ctable::{PyCTable, error_to_py};
 
 /// Characters or bytes requested per `read` call.
@@ -87,12 +87,12 @@ fn os_error(py: Python<'_>, error: std::io::Error, filename: &Py<PyAny>) -> PyEr
 }
 
 impl Source {
-    /// Append input to `buf`, returning `true` at end of input.
+    /// Append input to `tail`, returning `true` at end of input.
     fn fill(
         &mut self,
         py: Python<'_>,
         kind: &mut Option<Kind>,
-        buf: &mut Vec<u8>,
+        tail: &mut Tail<'_>,
     ) -> PyResult<bool> {
         match self {
             Source::Lines(lines) => {
@@ -108,9 +108,9 @@ impl Source {
                         ));
                     };
                     set_kind(kind, found)?;
-                    buf.extend_from_slice(bytes);
+                    tail.extend(bytes);
                     if !bytes.ends_with(b"\n") {
-                        buf.push(b'\n');
+                        tail.extend(b"\n");
                     }
                     // Stop at a delimiter so blocks are produced as lines arrive.
                     if bytes.starts_with(b"$$$$") {
@@ -129,7 +129,7 @@ impl Source {
                     return Ok(true);
                 }
                 set_kind(kind, found)?;
-                buf.extend_from_slice(bytes);
+                tail.extend(bytes);
                 Ok(false)
             }
             Source::Path {
@@ -145,7 +145,7 @@ impl Source {
                     text: *text,
                     pending_cr: false,
                 };
-                self.fill(py, kind, buf)
+                self.fill(py, kind, tail)
             }
             Source::File {
                 file,
@@ -153,26 +153,23 @@ impl Source {
                 text,
                 pending_cr,
             } => {
-                let start = buf.len();
-                buf.resize(start + CHUNK, 0);
+                let space = tail.space(CHUNK + TRANSLATE_SLACK);
                 let read = loop {
-                    match py.detach(|| file.read(&mut buf[start..])) {
+                    match py.detach(|| file.read(&mut space[..CHUNK])) {
                         Err(error) if error.kind() == ErrorKind::Interrupted => {
                             py.check_signals()?;
                         }
                         result => break result,
                     }
                 };
-                let read = read.map_err(|error| os_error(py, error, filename));
-                buf.truncate(start + *read.as_ref().unwrap_or(&0));
-                match read? {
-                    0 => Ok(true),
-                    _ if *text => {
-                        translate_newlines(buf, start, pending_cr);
-                        Ok(false)
-                    }
-                    _ => Ok(false),
-                }
+                let read = read.map_err(|error| os_error(py, error, filename))?;
+                let len = if *text {
+                    translate_newlines(space, read, pending_cr)
+                } else {
+                    read
+                };
+                tail.commit(len);
+                Ok(read == 0)
             }
             Source::Closed => Ok(true),
         }
@@ -209,7 +206,7 @@ impl PySDBlockIterator {
             kind,
             scanner,
         } = self;
-        match scanner.next_block(|buf| source.fill(py, kind, buf)) {
+        match scanner.next_block(|tail| source.fill(py, kind, tail)) {
             Ok(Some(block)) => Ok(Some(PySDBlock {
                 block,
                 kind: kind.unwrap_or(Kind::Text),

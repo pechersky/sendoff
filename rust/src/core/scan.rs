@@ -2,7 +2,9 @@
 //!
 //! The scanner owns a buffer that its caller refills on demand, so the same
 //! search serves file reads, Python `read()` chunks, and Python line
-//! iterables. Each block is copied out once into its own `Block`.
+//! iterables. Each block is copied out once into its own `Block`. The buffer
+//! stays initialized up to its high-water mark, so refills write into it
+//! without zero-filling first.
 
 use std::sync::LazyLock;
 
@@ -16,7 +18,9 @@ static DELIMITER: LazyLock<memmem::Finder<'static>> =
 /// Incremental block splitter over a caller-filled buffer.
 #[derive(Default)]
 pub struct Scanner {
+    /// Input is `buf[..end]`; bytes after `end` are stale.
     buf: Vec<u8>,
+    end: usize,
     /// Start of the next block.
     pos: usize,
     /// Where to resume searching for `\n$$$$`.
@@ -34,7 +38,7 @@ impl Scanner {
     /// be its first line; trailing input without a delimiter is a final block.
     pub fn next_block<E>(
         &mut self,
-        mut fill: impl FnMut(&mut Vec<u8>) -> Result<bool, E>,
+        mut fill: impl FnMut(&mut Tail<'_>) -> Result<bool, E>,
     ) -> Result<Option<Block>, E> {
         loop {
             if let Some(block) = self.take_block() {
@@ -44,31 +48,35 @@ impl Scanner {
                 return Ok(None);
             }
             self.compact();
-            self.eof = fill(&mut self.buf)?;
+            self.eof = fill(&mut Tail {
+                buf: &mut self.buf,
+                end: &mut self.end,
+            })?;
         }
     }
 
     fn take_block(&mut self) -> Option<Block> {
-        let available = self.buf.len() - self.pos;
+        let buf = &self.buf[..self.end];
+        let available = buf.len() - self.pos;
         if available == 0 || (available < 4 && !self.eof) {
             return None;
         }
         let start = match self.delimiter {
             Some(start) => start,
-            None if self.buf[self.pos..].starts_with(b"$$$$") => self.pos,
-            None => match DELIMITER.find(&self.buf[self.search_from..]) {
+            None if buf[self.pos..].starts_with(b"$$$$") => self.pos,
+            None => match DELIMITER.find(&buf[self.search_from..]) {
                 Some(index) => self.search_from + index + 1,
-                None if self.eof => return Some(self.emit(self.buf.len(), None)),
+                None if self.eof => return Some(self.emit(buf.len(), None)),
                 None => {
-                    self.search_from = self.buf.len().saturating_sub(4).max(self.pos);
+                    self.search_from = buf.len().saturating_sub(4).max(self.pos);
                     return None;
                 }
             },
         };
         self.delimiter = Some(start);
-        let end = match memchr(b'\n', &self.buf[start..]) {
+        let end = match memchr(b'\n', &buf[start..]) {
             Some(index) => start + index + 1,
-            None if self.eof => self.buf.len(),
+            None if self.eof => buf.len(),
             None => return None,
         };
         Some(self.emit(end, Some(start)))
@@ -87,7 +95,8 @@ impl Scanner {
         if self.pos == 0 {
             return;
         }
-        self.buf.drain(..self.pos);
+        self.buf.copy_within(self.pos..self.end, 0);
+        self.end -= self.pos;
         self.search_from -= self.pos;
         if let Some(start) = &mut self.delimiter {
             *start -= self.pos;
@@ -96,49 +105,98 @@ impl Scanner {
     }
 }
 
-/// Translate `\r\n` and lone `\r` to `\n` in `buf[start..]`, in place.
+/// Writable space after a scanner's input.
+pub struct Tail<'a> {
+    buf: &'a mut Vec<u8>,
+    end: &'a mut usize,
+}
+
+impl Tail<'_> {
+    /// Append `bytes` to the input.
+    pub fn extend(&mut self, bytes: &[u8]) {
+        self.space(bytes.len())[..bytes.len()].copy_from_slice(bytes);
+        self.commit(bytes.len());
+    }
+
+    /// Return at least `len` writable bytes with unspecified contents.
+    pub fn space(&mut self, len: usize) -> &mut [u8] {
+        let needed = *self.end + len;
+        if self.buf.len() < needed {
+            self.buf.resize(needed, 0);
+        }
+        &mut self.buf[*self.end..]
+    }
+
+    /// Append the first `len` bytes of `space` to the input.
+    pub fn commit(&mut self, len: usize) {
+        assert!(*self.end + len <= self.buf.len());
+        *self.end += len;
+    }
+}
+
+/// Spare bytes after the input that let `translate_newlines` move whole lanes.
+pub const TRANSLATE_SLACK: usize = LANE;
+
+const LANE: usize = 16;
+
+/// Translate `\r\n` and lone `\r` in `space[..len]` to `\n` in place, and
+/// return the translated length.
 ///
 /// `pending_cr` carries a chunk-final `\r` so that a `\n` starting the next
-/// chunk is dropped, matching Python's universal newlines.
-pub fn translate_newlines(buf: &mut Vec<u8>, start: usize, pending_cr: &mut bool) {
-    let len = buf.len();
-    if start == len {
-        return;
+/// chunk is dropped, matching Python's universal newlines. Translation is
+/// fastest with `TRANSLATE_SLACK` bytes of `space` after the input.
+pub fn translate_newlines(space: &mut [u8], len: usize, pending_cr: &mut bool) -> usize {
+    if len == 0 {
+        return 0;
     }
-    let mut read = start;
-    let mut write = start;
-    if std::mem::take(pending_cr) && buf[read] == b'\n' {
+    let mut read = 0;
+    let mut write = 0;
+    if std::mem::take(pending_cr) && space[read] == b'\n' {
         read += 1;
     }
     // Scan each window once for `\r` instead of calling `memchr` per `\r`:
     // CRLF files have a `\r` every line, where per-call setup dominates.
     // Writes stay below `read`, so bytes at or after `read` are unmodified.
-    for base in (start..len).step_by(WINDOW) {
-        let mut mask = cr_mask(&buf[base..len.min(base + WINDOW)]);
+    let lane_end = space.len().saturating_sub(LANE);
+    let mut base = 0;
+    while base < len {
+        let mut mask = cr_mask(&space[base..len.min(base + WINDOW)]);
         while mask != 0 {
             let cr = base + mask.trailing_zeros() as usize;
             mask &= mask - 1;
             if cr < read {
                 continue;
             }
-            if read != write {
-                buf.copy_within(read..cr, write);
+            if read - write >= LANE && cr <= lane_end {
+                // Whole-lane copies are safe once writes trail reads by a
+                // lane: they only overwrite consumed input or bytes that
+                // later output replaces.
+                let (mut from, mut to) = (read, write);
+                while from < cr {
+                    let lane: [u8; LANE] = space[from..from + LANE].try_into().unwrap();
+                    space[to..to + LANE].copy_from_slice(&lane);
+                    from += LANE;
+                    to += LANE;
+                }
+            } else if read != write {
+                space.copy_within(read..cr, write);
             }
             write += cr - read;
-            buf[write] = b'\n';
+            space[write] = b'\n';
             write += 1;
             read = cr + 1;
             if read == len {
                 *pending_cr = true;
-            } else if buf[read] == b'\n' {
+            } else if space[read] == b'\n' {
                 read += 1;
             }
         }
+        base += WINDOW;
     }
     if read != write {
-        buf.copy_within(read..len, write);
+        space.copy_within(read..len, write);
     }
-    buf.truncate(write + (len - read));
+    write + (len - read)
 }
 
 const WINDOW: usize = 64;
@@ -210,9 +268,9 @@ mod tests {
         let mut offset = 0;
         let mut blocks = Vec::new();
         while let Some(block) = scanner
-            .next_block(|buf| {
+            .next_block(|tail| {
                 let end = (offset + chunk).min(input.len());
-                buf.extend_from_slice(&input[offset..end]);
+                tail.extend(&input[offset..end]);
                 offset = end;
                 Ok::<_, ()>(offset == input.len())
             })
@@ -253,28 +311,31 @@ mod tests {
         assert_eq!(split(b"$$$", 1), [("$$$".into(), "$$$\n$$$$\n".into())]);
     }
 
-    fn translated(input: &[u8], chunk: usize) -> Vec<u8> {
-        let mut buf = Vec::new();
+    fn translated(input: &[u8], chunk: usize, slack: usize) -> Vec<u8> {
+        let mut out = Vec::new();
         let mut pending_cr = false;
         for piece in input.chunks(chunk) {
-            let start = buf.len();
-            buf.extend_from_slice(piece);
-            translate_newlines(&mut buf, start, &mut pending_cr);
+            let mut space = piece.to_vec();
+            space.resize(piece.len() + slack, b'\r');
+            let len = translate_newlines(&mut space, piece.len(), &mut pending_cr);
+            out.extend_from_slice(&space[..len]);
         }
-        buf
+        out
     }
 
     #[test]
     fn translates_universal_newlines_across_chunks() {
         let input = b"a\r\nb\rc\n\r\r\nd\r";
         for chunk in 1..=input.len() {
-            assert_eq!(
-                translated(input, chunk),
-                b"a\nb\nc\n\n\nd\n",
-                "chunk {chunk}"
-            );
+            for slack in [0, TRANSLATE_SLACK] {
+                assert_eq!(
+                    translated(input, chunk, slack),
+                    b"a\nb\nc\n\n\nd\n",
+                    "chunk {chunk}"
+                );
+            }
         }
-        assert_eq!(translated(b"plain\n", 3), b"plain\n");
+        assert_eq!(translated(b"plain\n", 3, 0), b"plain\n");
     }
 
     #[test]
@@ -304,12 +365,14 @@ mod tests {
             state ^= state << 17;
             state
         };
-        for _ in 0..500 {
-            let len = (next() % 300) as usize;
+        for _ in 0..1000 {
+            // Dense and sparse line endings exercise short and multi-lane runs.
+            let sparseness = [4, 40][(next() % 2) as usize];
+            let len = (next() % 2000) as usize;
             let input: Vec<u8> = (0..len)
-                .map(|_| match next() % 8 {
-                    0 | 1 => b'\r',
-                    2 | 3 => b'\n',
+                .map(|_| match next() % sparseness {
+                    0 => b'\r',
+                    1 => b'\n',
                     _ => b'x',
                 })
                 .collect();
@@ -317,8 +380,11 @@ mod tests {
                 .unwrap()
                 .replace("\r\n", "\n")
                 .replace('\r', "\n");
-            let chunk = 1 + (next() % 130) as usize;
-            assert_eq!(translated(&input, chunk), expected.as_bytes(), "{input:?}");
+            let chunk = 1 + (next() % 700) as usize;
+            for slack in [0, TRANSLATE_SLACK] {
+                let output = translated(&input, chunk, slack);
+                assert_eq!(output, expected.as_bytes(), "{input:?}");
+            }
         }
     }
 }
