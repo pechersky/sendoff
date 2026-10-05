@@ -294,7 +294,7 @@ mod tests {
             [
                 ("a".into(), "a\nM  END\n> <X>\n1\n\n$$$$\n".into()),
                 ("$$$$x".into(), "$$$$x\n$$$$\n".into()),
-                ("b".into(), "b\nc\n$$$$\n$$$$\n".into()),
+                ("b".into(), "b\nc\n$$$$\n".into()),
                 ("d".into(), "d\nM  END\n$$$$\n".into()),
             ]
         );

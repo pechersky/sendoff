@@ -199,10 +199,11 @@ pub struct Block {
 impl Block {
     /// Build a block from its raw lines.
     ///
-    /// `delimiter` is the offset of a trailing `$$$$` line, if any. Like the
-    /// Python reference, the MDL runs through the first `M  END` line and the
-    /// SD data runs to the delimiter; without `M  END`, the MDL swallows the
-    /// delimiter line and there is no SD data.
+    /// `delimiter` is the offset of a trailing `$$$$` line, if any. The MDL
+    /// runs through the first `M  END` line and the SD data runs to the
+    /// delimiter; without `M  END`, the MDL runs to the delimiter and there is
+    /// no SD data. (sendoff < 1.0 kept the delimiter line in that MDL, so each
+    /// write added a `$$$$` line that read back as a spurious block.)
     pub fn new(mut data: Vec<u8>, delimiter: Option<usize>) -> Self {
         if data.last() != Some(&b'\n') {
             data.push(b'\n');
@@ -220,7 +221,7 @@ impl Block {
                 next_line(&data, &mut mdl_end);
                 (mdl_end, body_end)
             }
-            None => (data.len(), data.len()),
+            None => (body_end, body_end),
         };
         if data[body_end..] != *TRAILER {
             data.truncate(body_end);
@@ -520,11 +521,14 @@ mod tests {
     }
 
     #[test]
-    fn without_mend_the_mdl_swallows_the_delimiter() {
+    fn without_mend_the_mdl_runs_to_the_delimiter() {
         let block = block("t\nx\n$$$$ tail\n", true);
-        assert_eq!(block.mdl(), b"x\n$$$$ tail\n");
+        assert_eq!(block.mdl(), b"x\n");
         assert_eq!(block.metadata(), b"");
-        assert_eq!(written(&block), "t\nx\n$$$$ tail\n$$$$\n");
+        assert_eq!(written(&block), "t\nx\n$$$$\n");
+        let undelimited = self::block("t\nx\n", false);
+        assert_eq!(undelimited.mdl(), b"x\n");
+        assert_eq!(written(&undelimited), "t\nx\n$$$$\n");
     }
 
     #[test]

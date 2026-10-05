@@ -336,6 +336,23 @@ def test_bytes_block_requires_binary_append_values() -> None:
     assert block.records() == [(b"field", b"value")]
 
 
+def test_block_without_mend_round_trips() -> None:
+    """A block without M  END writes one delimiter, so rereading is stable."""
+    text = "broken\nx\n$$$$\nt2\nM  END\n> <A>\n1\n\n$$$$\n"
+    for _ in range(2):
+        blocks = list(SDBlock.from_lines(io.StringIO(text)))
+        assert [(b.title, b.records()) for b in blocks] == [
+            ("broken", []),
+            ("t2", [("A", "1")]),
+        ]
+        assert blocks[0].molblock == "broken\nx\n"
+        out = io.StringIO()
+        for block in blocks:
+            block.write(out)
+        assert out.getvalue() == text
+        text = out.getvalue()
+
+
 def test_titled_mol_read(single_titled_mol_sdf: Pathy) -> None:
     """An sdf of a single titled molecule contains it with the expected title.
 

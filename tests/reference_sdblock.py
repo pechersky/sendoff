@@ -2,7 +2,8 @@
 
 This mirrors ``sendoff/sdblock.py`` from the 0.1.x pure-Python release and is
 the oracle for the differential tests. It encodes the accepted 1.0 behavior
-change that an unterminated final block is still yielded. Divergences that are
+changes that an unterminated final block is still yielded and that a block
+without ``M  END`` does not keep its ``$$$$`` line as MDL. Divergences that are
 accepted but not modeled here are kept out of the generated inputs instead.
 """
 
@@ -53,6 +54,8 @@ class RefBlock(Generic[AnyStr]):
         mend, delimiter = _lit(first, "M  END"), _lit(first, "$$$$")
         mdl: list[AnyStr] = []
         for line in iterlines:
+            if line.startswith(delimiter):
+                break  # 1.0: main appended it, so write() doubled the delimiter
             mdl.append(line)
             if line.startswith(mend):
                 break
