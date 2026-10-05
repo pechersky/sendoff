@@ -14,7 +14,7 @@ from __future__ import annotations
 import io
 import os
 import tempfile
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Union
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -146,6 +146,38 @@ def assert_blocks_match(
         ), context
 
 
+class ChunkedReader:
+    """A file-like source whose ``read`` returns a few items at a time."""
+
+    def __init__(self, data: Union[str, bytes], sizes: list[int]) -> None:
+        """Serve ``data`` in chunks cycling through ``sizes``.
+
+        Args:
+            data: the whole str or bytes content
+            sizes: chunk sizes to cycle through
+        """
+        self.data = data
+        self.sizes = sizes
+        self.pos = 0
+        self.calls = 0
+
+    def read(self, size: int) -> Union[str, bytes]:
+        """Return at most ``size`` items, and an empty chunk at the end.
+
+        Args:
+            size: the most items the caller wants
+
+        Returns:
+            The next chunk.
+        """
+        step = min(size, self.sizes[self.calls % len(self.sizes)])
+        self.calls += 1
+        start, end = self.pos, self.pos + step
+        chunk = self.data[start:end]
+        self.pos = end
+        return chunk
+
+
 examples = settings(
     max_examples=int(os.environ.get("SENDOFF_ORACLE_EXAMPLES", "300")),
     deadline=None,
@@ -192,6 +224,27 @@ def test_from_splitlines_matches_reference(lines: list[str]) -> None:
     assert_blocks_match(
         SDBlock.from_lines(stripped), list(ref_from_lines(stripped)), text=True
     )
+
+
+@examples
+@given(sdf_lines(), st.lists(st.integers(1, 9), min_size=1, max_size=5))
+def test_file_objects_match_reference(lines: list[str], sizes: list[int]) -> None:
+    """File objects are read in chunks of any size and parse like their lines.
+
+    Args:
+        lines: generated lines with endings
+        sizes: chunk sizes for the reader to cycle through
+    """
+    text = "".join(lines)
+    data = text.encode()
+    text_sources: list[Any] = [ChunkedReader(text, sizes), io.StringIO(text)]
+    for text_source in text_sources:
+        text_reference = list(ref_from_lines(io.StringIO(text)))
+        assert_blocks_match(SDBlock.from_lines(text_source), text_reference, True)
+    bytes_sources: list[Any] = [ChunkedReader(data, sizes), io.BytesIO(data)]
+    for bytes_source in bytes_sources:
+        bytes_reference = list(ref_from_lines(io.BytesIO(data)))
+        assert_blocks_match(SDBlock.from_lines(bytes_source), bytes_reference, False)
 
 
 @examples

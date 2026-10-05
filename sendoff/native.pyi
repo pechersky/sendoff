@@ -10,6 +10,11 @@ class SupportsTextWrite(Protocol):
 
     def write(self, data: str, /) -> object: ...
 
+class SupportsRead(Protocol):
+    """A text or binary file-like handle read in chunks."""
+
+    def read(self, size: int, /) -> str | bytes: ...
+
 class SupportsBytesWrite(Protocol):
     """A binary file-like handle accepting bytes payloads."""
 
@@ -152,12 +157,19 @@ class SDBlock:
         """
 
     @staticmethod
-    def from_lines(lines: Iterable[str] | Iterable[bytes]) -> Iterator[SDBlock]:
+    def from_lines(
+        lines: Iterable[str] | Iterable[bytes] | SupportsRead,
+    ) -> Iterator[SDBlock]:
         """
-        Parse in SDBlocks from a sequence of lines.
+        Parse in SDBlocks from a sequence of lines or a file object.
+
+        File objects (anything with ``read1`` or ``read``) are read in 1 MiB
+        chunks, so the handle's position runs ahead of the blocks produced.
+        Line iterables are consumed only up to each block's $$$$ line.
 
         Args:
-            lines: homogeneous str or bytes lines separated by the $$$$ delimiter
+            lines: homogeneous str or bytes lines separated by the $$$$
+                delimiter, or a text or binary file object
 
         Returns:
             A lazy iterator of SDBlocks whose values have the same type as the input

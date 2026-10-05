@@ -7,6 +7,9 @@ use crate::core::block::{self, Block, Record};
 use crate::core::scan::Scanner;
 use crate::python::ctable::{PyCTable, error_to_py};
 
+/// Characters or bytes requested per `read` call on file objects.
+const CHUNK: usize = 1 << 20;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Text,
@@ -48,6 +51,8 @@ fn set_kind(kind: &mut Option<Kind>, found: Kind) -> PyResult<()> {
 enum Source {
     /// A Python iterable of str or bytes lines.
     Lines(Py<PyIterator>),
+    /// A file object's bound `read1` or `read` method.
+    Reader(Py<PyAny>),
     Closed,
 }
 
@@ -82,6 +87,20 @@ impl Source {
                         return Ok(false);
                     }
                 }
+            }
+            Source::Reader(read) => {
+                let chunk = read.bind(py).call1((CHUNK,))?;
+                let Some((found, bytes)) = bytes_of(&chunk)? else {
+                    return Err(PyTypeError::new_err(
+                        "SDBlock.from_lines file objects must read str or bytes",
+                    ));
+                };
+                if bytes.is_empty() {
+                    return Ok(true);
+                }
+                set_kind(kind, found)?;
+                buf.extend_from_slice(bytes);
+                Ok(false)
             }
             Source::Closed => Ok(true),
         }
@@ -207,15 +226,25 @@ fn decode<'a>(py: Python<'_>, bytes: &'a [u8]) -> PyResult<&'a str> {
 
 #[pymethods]
 impl PySDBlock {
-    /// Parse SDBlocks from homogeneous str or bytes lines.
+    /// Parse SDBlocks from homogeneous str or bytes lines or a file object.
+    ///
+    /// File objects are read in large chunks with `read1`, when available,
+    /// or `read`, instead of line by line.
     ///
     /// Args:
-    ///     lines: an Iterable of str or bytes lines separated by the $$$$ delimiter
+    ///     lines: an Iterable of str or bytes lines separated by the $$$$
+    ///         delimiter, or a text or binary file object
     ///
     /// Returns:
-    ///     An iterator that produces owned SDBlocks as lines are consumed
+    ///     An iterator that produces owned SDBlocks as input is consumed
     #[staticmethod]
     fn from_lines(lines: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
+        let py = lines.py();
+        for method in [intern!(py, "read1"), intern!(py, "read")] {
+            if let Ok(read) = lines.getattr(method) {
+                return Ok(PySDBlockIterator::new(Source::Reader(read.unbind())));
+            }
+        }
         Ok(PySDBlockIterator::new(Source::Lines(
             lines.try_iter()?.unbind(),
         )))

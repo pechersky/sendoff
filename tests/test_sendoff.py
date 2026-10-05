@@ -231,10 +231,44 @@ def test_parse_sdf_closes_owned_file_when_iterator_closes(
     blocks = parse_sdf("unused.sdf")
 
     assert next(blocks).title == "First"
-    assert stream.tell() == len(first_record)
     assert not stream.closed
     blocks.close()
     assert stream.closed
+
+
+def test_from_lines_reads_file_objects_in_chunks() -> None:
+    """File objects are read with read1 or read rather than line iteration."""
+
+    class Reader:
+        def __init__(self, data: bytes) -> None:
+            self.data = data
+            self.sizes: list[int] = []
+
+        def read1(self, size: int) -> bytes:
+            self.sizes.append(size)
+            chunk, self.data = self.data[:size], self.data[size:]
+            return chunk
+
+        def __iter__(self) -> Iterator[bytes]:
+            raise AssertionError("file objects are not iterated by line")
+
+    reader = Reader(b"First\n\nM  END\n$$$$\nSecond\n\nM  END\n$$$$\n")
+    assert [block.title for block in SDBlock.from_lines(reader)] == [
+        b"First",
+        b"Second",
+    ]
+    assert reader.sizes and min(reader.sizes) >= 1 << 16
+
+
+def test_from_lines_rejects_non_string_reads() -> None:
+    """A read method returning neither str nor bytes is a TypeError."""
+
+    class Reader:
+        def read(self, size: int) -> list[str]:
+            return ["First\n"]
+
+    with pytest.raises(TypeError, match="must read str or bytes"):
+        next(SDBlock.from_lines(Reader()))  # type: ignore[arg-type]
 
 
 def test_bytes_block_requires_binary_append_values() -> None:
