@@ -558,6 +558,56 @@ def test_record_mutators_check_types_and_headers() -> None:
     assert bad.records() == [("A", "1")]
 
 
+def test_mdl_is_the_ctab_lines_without_endings() -> None:
+    """The mdl property is the CTAB lines through M  END, without the title."""
+    text = "title\r\n  prog\r\n\r\nM  END\r\n> <A>\r\n1\r\n"
+    block = next(SDBlock.from_lines(io.StringIO(text, newline=None)))
+    byte_block = next(SDBlock.from_lines(io.BytesIO(text.encode())))
+
+    assert block.mdl == ("  prog", "", "M  END")
+    ctab = "\n".join(cast("tuple[str, ...]", block.mdl)) + "\n"
+    assert ctab == cast(str, block.molblock).partition("\n")[2]
+    assert byte_block.mdl == (b"  prog\r", b"\r", b"M  END\r")
+    assert next(SDBlock.from_lines(["t\n", "M  END\n"])).mdl == ("M  END",)
+    assert next(SDBlock.from_lines(["t\n"])).mdl == ()
+
+    assert block.mdl_contains("prog\n\nM  END")
+    assert not block.mdl_contains("title")
+    assert not block.mdl_contains("M  END\n")
+    assert byte_block.mdl_contains(b"prog\r")
+    with pytest.raises(TypeError, match="needles must be bytes"):
+        byte_block.mdl_contains("prog")
+
+
+def test_molblock_setter_replaces_the_structure_only() -> None:
+    """Setting molblock swaps title and CTAB and keeps every record line."""
+    text = "old\nsrc\nM  END\n> <A>  (1)\n1\n\nnote\n\n$$$$\n"
+    block = next(SDBlock.from_lines(io.StringIO(text)))
+
+    block.molblock = "new\r\n  prog\r\n\r\nM  END\r\n\r\n"
+    assert block.title == "new"
+    assert block.molblock == "new\n  prog\n\nM  END\n"
+    out = io.StringIO()
+    block.write(out)
+    assert out.getvalue() == ("new\n  prog\n\nM  END\n> <A>  (1)\n1\n\nnote\n\n$$$$\n")
+    for bad, message in [
+        ("t\nx\n", "no M  END"),
+        ("t\nM  END\n> <A>\n1\n", "after its M  END"),
+        ("t\n$$$$\nM  END\n", r"\$\$\$\$ line"),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            block.molblock = bad
+    with pytest.raises(TypeError, match="molblocks must be str"):
+        block.molblock = b"t\nM  END\n"
+    assert block.molblock == "new\n  prog\n\nM  END\n"
+
+    byte_block = next(SDBlock.from_lines([b"t\n", b"M  END\n", b"> <A>\n", b"1\n"]))
+    byte_block.molblock = b"b\r\nM  END\r\n"
+    assert byte_block.molblock == b"b\nM  END\r\n"  # the title is stripped
+    assert byte_block.title == b"b"
+    assert byte_block.to_dict() == {b"A": b"1"}
+
+
 def test_title_setter_replaces_only_the_title() -> None:
     """Setting the title keeps the CTAB and records and rejects line breaks."""
     block = next(SDBlock.from_lines(["old\n", "src\n", "M  END\n", "> <A>\n", "1\n"]))

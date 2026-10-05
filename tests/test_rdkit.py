@@ -1,6 +1,7 @@
 """Test rdkit parsing of metadata on generated SDFs."""
 
 import os
+from pathlib import Path
 
 from rdkit import Chem
 
@@ -408,3 +409,26 @@ def test_molblock_round_trips_through_rdkit(double_mol_sdf: Pathy) -> None:
             for block in parse_sdf(path)
         ]
         assert smiles == expected
+
+
+def test_molblock_setter_swaps_structures_from_rdkit(
+    double_mol_sdf: Pathy, tmp_path: Path
+) -> None:
+    """Assigning an RDKit molblock keeps records, and RDKit reads the result.
+
+    Args:
+        double_mol_sdf: pytest fixture of a Path to the sdf
+        tmp_path: pytest fixture for writing files to a temp directory
+    """
+    outpath = tmp_path / "swapped.sdf"
+    with open(outpath, "w") as handle:
+        for block in parse_sdf(str(double_mol_sdf)):
+            mol = Chem.MolFromSmiles("CCO")
+            mol.SetProp("_Name", f"{block.title!s}-swapped")
+            block.molblock = Chem.MolToMolBlock(mol)
+            block.set_record("Original", block.title)
+            block.write(handle)
+    swapped = list(Chem.SDMolSupplier(str(outpath)))
+    assert [Chem.MolToSmiles(mol) for mol in swapped] == ["CCO", "CCO"]
+    assert all(mol.GetProp("_Name").endswith("-swapped") for mol in swapped)
+    assert all(mol.GetProp("Original") == mol.GetProp("_Name") for mol in swapped)

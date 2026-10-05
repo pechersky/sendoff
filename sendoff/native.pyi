@@ -328,6 +328,43 @@ class SDBlock:
         `OEReadMolFromBytes`.
         """
 
+    @molblock.setter
+    def molblock(self, /, molblock: str | bytes) -> None:
+        """
+        Replace the title line and CTAB, keeping the SD data.
+
+        For example, `block.molblock = Chem.MolToMolBlock(mol)`. Text
+        molblocks have CRLF and CR line endings translated to LF.
+
+        Raises:
+            ValueError: if the molblock has no `M  END` line, has more than
+                whitespace after it, or has a line starting with `$$$$`
+            TypeError: if the molblock is not the block's type
+        """
+
+    def mdl_contains(self, /, needle: str | bytes) -> bool:
+        """
+        Return whether `needle` occurs in the CTAB text after the title.
+
+        Equivalent to `needle in "\\n".join(block.mdl)` without building the
+        lines; text blocks are searched as UTF-8 without being decoded.
+
+        Args:
+            needle: substring in the block's type
+
+        Raises:
+            TypeError: if `needle` is not the block's type
+        """
+
+    @property
+    def mdl(self, /) -> tuple[str, ...] | tuple[bytes, ...]:
+        """
+        Return the CTAB lines after the title, through `M  END`.
+
+        Lines have no line endings, like `str.splitlines()`, so
+        `"\\n".join(block.mdl)` is the CTAB; `block.molblock` adds the title.
+        """
+
     def write(self, /, outh: SupportsTextWrite | SupportsBytesWrite) -> None:
         """
         Write an SDBlock, ending with "$$$$", to a file-like handle.

@@ -368,6 +368,49 @@ impl PySDBlock {
         self.kind.value(py, &self.block.molblock(self.kind.strip()))
     }
 
+    /// Replace the title line and CTAB, keeping the SD data.
+    #[setter(molblock)]
+    fn set_molblock(&mut self, molblock: &Bound<'_, PyAny>) -> PyResult<()> {
+        let molblock = self.arg_bytes(molblock, "molblocks")?;
+        let translated;
+        let molblock = if self.kind == Kind::Text && memchr::memchr(b'\r', molblock).is_some() {
+            let mut buffer = molblock.to_vec();
+            let len = translate_newlines(&mut buffer, molblock.len(), &mut false);
+            buffer.truncate(len);
+            translated = buffer;
+            &translated[..]
+        } else {
+            molblock
+        };
+        self.block
+            .set_molblock(molblock)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    /// Return whether `needle` occurs in the CTAB text after the title.
+    ///
+    /// Like `needle in "\\n".join(block.mdl)` without building the lines;
+    /// text blocks are searched as UTF-8 without being decoded.
+    ///
+    /// Args:
+    ///     needle: substring in the block's type
+    fn mdl_contains(&self, needle: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let needle = self.arg_bytes(needle, "needles")?;
+        let mdl = self.block.mdl();
+        let mdl = mdl.strip_suffix(b"\n").unwrap_or(mdl);
+        Ok(memchr::memmem::find(mdl, needle).is_some())
+    }
+
+    /// Return the CTAB lines after the title, through `M  END`, without
+    /// line endings.
+    #[getter]
+    fn mdl<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let lines = block::lines(self.block.mdl())
+            .map(|line| self.kind.value(py, line))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, lines)
+    }
+
     /// Return all SD data records.
     ///
     /// Returns:

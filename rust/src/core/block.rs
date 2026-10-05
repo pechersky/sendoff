@@ -172,6 +172,36 @@ pub struct Record<'a> {
     pub start: usize,
 }
 
+/// The end of the first `M  END` line in `data[title_end..body_end]`.
+fn mdl_end(data: &[u8], title_end: usize, body_end: usize) -> Option<usize> {
+    let body = &data[title_end..body_end];
+    let mut end = if body.starts_with(b"M  END") {
+        title_end
+    } else {
+        title_end + MEND.find(body)? + 1
+    };
+    next_line(data, &mut end);
+    Some(end)
+}
+
+/// Why a value cannot replace a block's title and MDL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidMolblock {
+    MissingEnd,
+    TrailingData,
+    Delimiter,
+}
+
+impl fmt::Display for InvalidMolblock {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::MissingEnd => "molblock has no M  END line",
+            Self::TrailingData => "molblock has data after its M  END line",
+            Self::Delimiter => "molblock has a $$$$ line, which would end the block",
+        })
+    }
+}
+
 /// Append `> <name>`, the value line, and a blank line.
 fn push_record(data: &mut Vec<u8>, name: &[u8], value: &[u8]) {
     data.reserve(name.len() + value.len() + 7);
@@ -210,19 +240,7 @@ impl Block {
         }
         let title_end = memchr(b'\n', &data).map_or(data.len(), |index| index + 1);
         let body_end = delimiter.map_or(data.len(), |offset| offset.max(title_end));
-        let body = &data[title_end..body_end];
-        let mend = if body.starts_with(b"M  END") {
-            Some(title_end)
-        } else {
-            MEND.find(body).map(|index| title_end + index + 1)
-        };
-        let (mdl_end, body_end) = match mend {
-            Some(mut mdl_end) => {
-                next_line(&data, &mut mdl_end);
-                (mdl_end, body_end)
-            }
-            None => (body_end, body_end),
-        };
+        let mdl_end = mdl_end(&data, title_end, body_end).unwrap_or(body_end);
         if data[body_end..] != *TRAILER {
             data.truncate(body_end);
             data.extend_from_slice(TRAILER);
@@ -304,6 +322,34 @@ impl Block {
         self.data.splice(..old_end, line);
         self.title_end = title.len() + 1;
         self.mdl_end = self.mdl_end - old_end + self.title_end;
+    }
+
+    /// Replace the title line and MDL with `molblock`, keeping the SD data.
+    ///
+    /// `molblock` must run through an `M  END` line followed only by
+    /// whitespace, with no `$$$$` line after the title.
+    pub fn set_molblock(&mut self, molblock: &[u8]) -> Result<(), InvalidMolblock> {
+        let title_end = memchr(b'\n', molblock).map_or(molblock.len(), |index| index + 1);
+        let mdl_end =
+            mdl_end(molblock, title_end, molblock.len()).ok_or(InvalidMolblock::MissingEnd)?;
+        if !molblock[mdl_end..].iter().all(u8::is_ascii_whitespace) {
+            return Err(InvalidMolblock::TrailingData);
+        }
+        if lines(&molblock[title_end..mdl_end]).any(|line| line.starts_with(b"$$$$")) {
+            return Err(InvalidMolblock::Delimiter);
+        }
+        let metadata = &self.data[self.mdl_end..];
+        let mut data = Vec::with_capacity(mdl_end + 1 + metadata.len());
+        data.extend_from_slice(&molblock[..mdl_end]);
+        if !data.ends_with(b"\n") {
+            data.push(b'\n');
+        }
+        let new_mdl_end = data.len();
+        data.extend_from_slice(metadata);
+        self.data = data;
+        self.title_end = title_end;
+        self.mdl_end = new_mdl_end;
+        Ok(())
     }
 
     /// Give the first record named `name` the single-line `value` and
@@ -567,6 +613,28 @@ mod tests {
             [("A".into(), "a".into()), ("B".into(), "b".into())]
         );
         assert_eq!(written(&block), "t\nM  END\n> <A>\na\n\n> <B>\nb\n\n$$$$\n");
+    }
+
+    #[test]
+    fn set_molblock_replaces_title_and_mdl_only() {
+        let mut block = block(" old \nsrc\nM  END\n> <A>\na\n\n$$$$\n", true);
+        block.set_molblock(b"new\n  prog\n\nM  END").unwrap();
+        assert_eq!(block.title(Strip::Bytes), b"new");
+        assert_eq!(block.mdl(), b"  prog\n\nM  END\n");
+        assert_eq!(written(&block), "new\n  prog\n\nM  END\n> <A>\na\n\n$$$$\n");
+        block.set_molblock(b"M  END\nM  END\n \n\t\n").unwrap();
+        assert_eq!(block.title(Strip::Bytes), b"M  END");
+        assert_eq!(block.mdl(), b"M  END\n");
+        assert_eq!(records(&block).unwrap(), [("A".into(), "a".into())]);
+        for (bad, error) in [
+            (&b"t\nx\n"[..], InvalidMolblock::MissingEnd),
+            (b"M  END\n", InvalidMolblock::MissingEnd),
+            (b"t\nM  END\n> <A>\n", InvalidMolblock::TrailingData),
+            (b"t\n$$$$\nM  END\n", InvalidMolblock::Delimiter),
+        ] {
+            assert_eq!(block.set_molblock(bad), Err(error));
+        }
+        assert_eq!(block.title(Strip::Bytes), b"M  END");
     }
 
     #[test]

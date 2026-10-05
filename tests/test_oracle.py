@@ -140,6 +140,12 @@ def assert_blocks_match(
         ), context
         assert serialized(block, text) == expected.serialize(), context
         assert block.molblock == expected.molblock(), context
+        newline: Any = "\n" if text else b"\n"
+        assert block.mdl == tuple(expected.molblock().split(newline)[1:-1]), context
+        ctab = newline.join(block.mdl)
+        for needle in ["M  END", "END\n", "a", "\u3000", "", "\n"]:
+            key = needle if text else needle.encode()
+            assert block.mdl_contains(key) == (key in ctab), context
         expected_dict = outcome(lambda: dict(expected.records()))
         assert outcome(block.to_dict) == expected_dict, context
         for field in ["A", "B", " spaced name ", "missing"]:
