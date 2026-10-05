@@ -30,3 +30,7 @@ stubgen = ["pyo3/experimental-inspect"]
 [dependencies]
 memchr = "2"
 pyo3 = { version = "=0.29.3", features = ["abi3-py311"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
