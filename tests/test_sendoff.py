@@ -389,8 +389,12 @@ def test_iter_records_preserves_bytes_and_owns_its_block() -> None:
     assert list(iterator) == [(b"Record", b"third")]
 
 
-def test_string_and_bytes_whitespace_follow_their_input_rules() -> None:
-    """Text uses Unicode trim while bytes preserve non-ASCII whitespace."""
+def test_string_and_bytes_strip_only_ascii_whitespace() -> None:
+    """Text and bytes both strip Python's bytes.strip() whitespace set.
+
+    Unicode whitespace such as an em space is kept in titles, names, and
+    values; this deliberately diverges from str.strip() in sendoff < 1.0.
+    """
     text_block = next(
         SDBlock.from_lines(
             [
@@ -418,8 +422,8 @@ def test_string_and_bytes_whitespace_follow_their_input_rules() -> None:
         )
     )
 
-    assert text_block.title == "Title"
-    assert text_block.records() == [("Record", "Text")]
+    assert text_block.title == "\u2003Title\u2003"
+    assert text_block.records() == [("Record", "\u2003Text\u2003")]
     assert byte_block.title == b"\xc2\xa0Title\xc2\xa0"
     assert byte_block.records() == [(b"Record", b"\xc2\xa0Bytes\xc2\xa0")]
 
@@ -503,21 +507,6 @@ def test_single_mol_newline_write_splitlines(single_mol_sdf: Pathy) -> None:
     for mol in mols:
         mol.write(buffer)
     assert len(buffer.getvalue().splitlines()) == len(
-        open(single_mol_sdf).read().splitlines()
-    )
-
-
-def test_single_mol_newline_write_splitlines_no_trailing(single_mol_sdf: Pathy) -> None:
-    """An sdf block written with no trailing newlines has fewer lines than input.
-
-    Args:
-        single_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mols = list(SDBlock.from_lines(open(single_mol_sdf).read().splitlines()))
-    buffer = io.StringIO()
-    for mol in mols:
-        mol.write(buffer, with_newlines=False)
-    assert len(buffer.getvalue().splitlines()) < len(
         open(single_mol_sdf).read().splitlines()
     )
 

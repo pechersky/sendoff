@@ -139,14 +139,6 @@ impl PyCTable {
         Ok(Self { inner })
     }
 
-    pub(crate) fn num_atoms_value(&self) -> i64 {
-        self.inner.num_atoms
-    }
-
-    pub(crate) fn num_bonds_value(&self) -> i64 {
-        self.inner.num_bonds
-    }
-
     pub(crate) fn lines_after_title(&self) -> Vec<String> {
         self.inner.lines[1..].to_vec()
     }

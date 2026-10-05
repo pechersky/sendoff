@@ -174,9 +174,6 @@ class SDBlock:
 
         Returns:
             The number of atoms parsed from the counts line.
-
-        Raises:
-            NotImplementedError: for byte-backed SDBlocks
         """
 
     def num_bonds(self, /) -> int:
@@ -188,9 +185,6 @@ class SDBlock:
 
         Returns:
             The number of bonds parsed from the counts line.
-
-        Raises:
-            NotImplementedError: for byte-backed SDBlocks
         """
 
     def records(self, /) -> list[tuple[str, str]] | list[tuple[bytes, bytes]]:
@@ -221,20 +215,19 @@ class SDBlock:
     @property
     def title(self, /) -> str | bytes:
         """
-        Return the parsed molecule title in the input type.
+        Return the molecule title in the input type.
+
+        Titles, record names, and record values are stripped of the ASCII
+        whitespace that bytes.strip() removes, for both str and bytes blocks.
         """
 
-    def write(
-        self,
-        /,
-        outh: SupportsTextWrite | SupportsBytesWrite,
-        with_newlines: bool = True,
-    ) -> None:
+    def write(self, /, outh: SupportsTextWrite | SupportsBytesWrite) -> None:
         """
-        Write an SDBlock to a file-like handle.
+        Write an SDBlock, ending with "$$$$", to a file-like handle.
+
+        Every line is terminated with "\\n" and the block is written in a
+        single call.
 
         Args:
             outh: text or binary file-like handle matching the input type
-            with_newlines: each line is written with a trailing "\\n".
-                The newline character is appended only if it was not in the line.
         """

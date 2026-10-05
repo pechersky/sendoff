@@ -1,50 +1,109 @@
+use pyo3::exceptions::{PyNotImplementedError, PyTypeError, PyUnicodeDecodeError, PyValueError};
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyIterator, PyList, PyString, PyTuple};
 
-use crate::core::sdblock;
-use crate::python::ctable::PyCTable;
+use crate::core::block::{self, Block, Record};
+use crate::core::scan::Scanner;
+use crate::python::ctable::{PyCTable, error_to_py};
 
-/// Handle a single molecule block from an SD file.
-#[pyclass(name = "SDBlock", module = "sendoff.native")]
-pub(crate) struct PySDBlock {
-    inner: SDBlockInner,
-}
-
-enum SDBlockInner {
-    Text(sdblock::SDBlock),
-    Bytes(sdblock::BytesSDBlock),
-}
-
-enum SDRecord {
-    Text(String, String),
-    Bytes(Vec<u8>, Vec<u8>),
-}
-
-#[derive(Clone, Copy)]
-enum InputKind {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
     Text,
     Bytes,
 }
 
-enum BufferedBlock {
-    Empty,
-    Text(Vec<String>),
-    Bytes(Vec<Vec<u8>>),
+impl Kind {
+    fn value<'py>(self, py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+        match self {
+            Kind::Text => PyString::from_bytes(py, bytes).map(Bound::into_any),
+            Kind::Bytes => Ok(PyBytes::new(py, bytes).into_any()),
+        }
+    }
 }
 
+/// Return the kind and UTF-8 or raw bytes of a str or bytes object.
+fn bytes_of<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<Option<(Kind, &'a [u8])>> {
+    if let Ok(text) = value.cast::<PyString>() {
+        Ok(Some((Kind::Text, text.to_str()?.as_bytes())))
+    } else if let Ok(bytes) = value.cast::<PyBytes>() {
+        Ok(Some((Kind::Bytes, bytes.as_bytes())))
+    } else {
+        Ok(None)
+    }
+}
+
+fn set_kind(kind: &mut Option<Kind>, found: Kind) -> PyResult<()> {
+    match kind {
+        Some(existing) if *existing != found => Err(PyTypeError::new_err(
+            "SDBlock.from_lines does not accept mixed str and bytes lines",
+        )),
+        _ => {
+            *kind = Some(found);
+            Ok(())
+        }
+    }
+}
+
+enum Source {
+    /// A Python iterable of str or bytes lines.
+    Lines(Py<PyIterator>),
+    Closed,
+}
+
+impl Source {
+    /// Append input to `buf`, returning `true` at end of input.
+    fn fill(
+        &mut self,
+        py: Python<'_>,
+        kind: &mut Option<Kind>,
+        buf: &mut Vec<u8>,
+    ) -> PyResult<bool> {
+        match self {
+            Source::Lines(lines) => {
+                let mut lines = lines.bind(py).clone();
+                loop {
+                    let Some(line) = lines.next() else {
+                        return Ok(true);
+                    };
+                    let line = line?;
+                    let Some((found, bytes)) = bytes_of(&line)? else {
+                        return Err(PyTypeError::new_err(
+                            "SDBlock.from_lines lines must be str or bytes",
+                        ));
+                    };
+                    set_kind(kind, found)?;
+                    buf.extend_from_slice(bytes);
+                    if !bytes.ends_with(b"\n") {
+                        buf.push(b'\n');
+                    }
+                    // Stop at a delimiter so blocks are produced as lines arrive.
+                    if bytes.starts_with(b"$$$$") {
+                        return Ok(false);
+                    }
+                }
+            }
+            Source::Closed => Ok(true),
+        }
+    }
+}
+
+/// Lazily parse SDBlocks from an input source.
 #[pyclass(name = "_SDBlockIterator", module = "sendoff.native")]
 pub(crate) struct PySDBlockIterator {
-    lines: Py<PyIterator>,
-    kind: Option<InputKind>,
-    block_lines: BufferedBlock,
-    finished: bool,
+    source: Source,
+    kind: Option<Kind>,
+    scanner: Scanner,
 }
 
-#[pyclass(name = "_SDRecordIterator", module = "sendoff.native")]
-pub(crate) struct PySDRecordIterator {
-    block: Py<PySDBlock>,
-    index: usize,
-    finished: bool,
+impl PySDBlockIterator {
+    fn new(source: Source) -> Self {
+        Self {
+            source,
+            kind: None,
+            scanner: Scanner::default(),
+        }
+    }
 }
 
 #[pymethods]
@@ -53,52 +112,41 @@ impl PySDBlockIterator {
         slf
     }
 
-    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PySDBlock>>> {
-        if self.finished {
-            return Ok(None);
-        }
-
-        loop {
-            let mut lines = self.lines.bind(py).clone();
-            let line = match lines.next() {
-                Some(Ok(line)) => line,
-                Some(Err(error)) => {
-                    self.finish();
-                    return Err(error);
-                }
-                None => return self.final_block(py),
-            };
-
-            let block = if line.is_instance_of::<PyString>() {
-                let text = match line.extract::<String>() {
-                    Ok(text) => text,
-                    Err(error) => {
-                        self.finish();
-                        return Err(error);
-                    }
-                };
-                self.push_text_line(text)?
-            } else if line.is_instance_of::<PyBytes>() {
-                let bytes = match line.extract::<Vec<u8>>() {
-                    Ok(bytes) => bytes,
-                    Err(error) => {
-                        self.finish();
-                        return Err(error);
-                    }
-                };
-                self.push_bytes_line(bytes)?
-            } else {
-                self.finish();
-                return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "SDBlock.from_lines lines must be str or bytes",
-                ));
-            };
-
-            if let Some(block) = block {
-                return Py::new(py, block).map(Some);
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<PySDBlock>> {
+        let Self {
+            source,
+            kind,
+            scanner,
+        } = self;
+        match scanner.next_block(|buf| source.fill(py, kind, buf)) {
+            Ok(Some(block)) => Ok(Some(PySDBlock {
+                block,
+                kind: kind.unwrap_or(Kind::Text),
+            })),
+            Ok(None) => {
+                self.close();
+                Ok(None)
+            }
+            Err(error) => {
+                self.close();
+                Err(error)
             }
         }
     }
+
+    /// Stop iterating and release the input source.
+    fn close(&mut self) {
+        self.source = Source::Closed;
+        self.scanner = Scanner::default();
+    }
+}
+
+/// Lazily iterate over one block's SD data records.
+#[pyclass(name = "_SDRecordIterator", module = "sendoff.native")]
+pub(crate) struct PySDRecordIterator {
+    block: Py<PySDBlock>,
+    pos: usize,
+    finished: bool,
 }
 
 #[pymethods]
@@ -107,159 +155,54 @@ impl PySDRecordIterator {
         slf
     }
 
-    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+    fn __next__<'py>(&mut self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyTuple>>> {
         if self.finished {
             return Ok(None);
         }
-
-        let mut index = self.index;
-        let record = {
-            let block = self.block.borrow(py);
-            match &block.inner {
-                SDBlockInner::Text(block) => {
-                    crate::core::sddata::next_record(&block.metadata, &mut index)
-                        .map(|record| record.map(|(name, value)| SDRecord::Text(name, value)))
-                }
-                SDBlockInner::Bytes(block) => {
-                    crate::core::sddata::next_record(&block.metadata, &mut index)
-                        .map(|record| record.map(|(name, value)| SDRecord::Bytes(name, value)))
-                }
-            }
+        let block = self.block.borrow(py);
+        let result = match block.block.next_record(&mut self.pos) {
+            Ok(Some(record)) => block.record(py, record).map(Some),
+            Ok(None) => Ok(None),
+            Err(error) => Err(PyValueError::new_err(error.to_string())),
         };
-        self.index = index;
+        if !matches!(result, Ok(Some(_))) {
+            self.finished = true;
+        }
+        result
+    }
+}
 
-        match record {
-            Ok(Some(record)) => {
-                let tuple = match record {
-                    SDRecord::Text(name, value) => PyTuple::new(
-                        py,
-                        [
-                            PyString::new(py, &name).into_any(),
-                            PyString::new(py, &value).into_any(),
-                        ],
-                    )?,
-                    SDRecord::Bytes(name, value) => PyTuple::new(
-                        py,
-                        [
-                            PyBytes::new(py, &name).into_any(),
-                            PyBytes::new(py, &value).into_any(),
-                        ],
-                    )?,
-                };
-                Ok(Some(tuple.into_any().unbind()))
-            }
-            Ok(None) => {
-                self.finished = true;
-                Ok(None)
-            }
-            Err(error) => {
-                self.finished = true;
-                Err(pyo3::exceptions::PyValueError::new_err(error.to_string()))
-            }
+/// Handle a single molecule block from an SD file.
+#[pyclass(name = "SDBlock", module = "sendoff.native")]
+pub(crate) struct PySDBlock {
+    block: Block,
+    kind: Kind,
+}
+
+impl PySDBlock {
+    fn record<'py>(&self, py: Python<'py>, record: Record<'_>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            [
+                self.kind.value(py, record.name)?,
+                self.kind.value(py, &record.value)?,
+            ],
+        )
+    }
+
+    fn require_text(&self) -> PyResult<()> {
+        match self.kind {
+            Kind::Text => Ok(()),
+            Kind::Bytes => Err(PyNotImplementedError::new_err(
+                "ctable operations are not supported for byte-backed SDBlocks",
+            )),
         }
     }
 }
 
-impl PySDBlockIterator {
-    fn push_text_line(&mut self, line: String) -> PyResult<Option<PySDBlock>> {
-        if matches!(self.kind, Some(InputKind::Bytes)) {
-            self.finish();
-            return Err(pyo3::exceptions::PyTypeError::new_err(
-                "SDBlock.from_lines does not accept mixed str and bytes lines",
-            ));
-        }
-        self.kind = Some(InputKind::Text);
-
-        let is_end = line.starts_with("$$$$");
-        self.block_lines = match std::mem::replace(&mut self.block_lines, BufferedBlock::Empty) {
-            BufferedBlock::Empty => BufferedBlock::Text(vec![line]),
-            BufferedBlock::Text(mut lines) => {
-                lines.push(line);
-                BufferedBlock::Text(lines)
-            }
-            BufferedBlock::Bytes(_) => {
-                self.finish();
-                return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "SDBlock line buffer does not match its input type",
-                ));
-            }
-        };
-        if !is_end {
-            return Ok(None);
-        }
-
-        match std::mem::replace(&mut self.block_lines, BufferedBlock::Empty) {
-            BufferedBlock::Text(lines) => Ok(Some(PySDBlock {
-                inner: SDBlockInner::Text(sdblock::SDBlock::from_block_lines(lines)),
-            })),
-            BufferedBlock::Empty | BufferedBlock::Bytes(_) => {
-                self.finish();
-                Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "SDBlock line buffer does not match its input type",
-                ))
-            }
-        }
-    }
-
-    fn push_bytes_line(&mut self, line: Vec<u8>) -> PyResult<Option<PySDBlock>> {
-        if matches!(self.kind, Some(InputKind::Text)) {
-            self.finish();
-            return Err(pyo3::exceptions::PyTypeError::new_err(
-                "SDBlock.from_lines does not accept mixed str and bytes lines",
-            ));
-        }
-        self.kind = Some(InputKind::Bytes);
-
-        let is_end = line.starts_with(b"$$$$");
-        self.block_lines = match std::mem::replace(&mut self.block_lines, BufferedBlock::Empty) {
-            BufferedBlock::Empty => BufferedBlock::Bytes(vec![line]),
-            BufferedBlock::Bytes(mut lines) => {
-                lines.push(line);
-                BufferedBlock::Bytes(lines)
-            }
-            BufferedBlock::Text(_) => {
-                self.finish();
-                return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "SDBlock line buffer does not match its input type",
-                ));
-            }
-        };
-        if !is_end {
-            return Ok(None);
-        }
-
-        match std::mem::replace(&mut self.block_lines, BufferedBlock::Empty) {
-            BufferedBlock::Bytes(lines) => Ok(Some(PySDBlock {
-                inner: SDBlockInner::Bytes(sdblock::BytesSDBlock::from_block_lines(lines)),
-            })),
-            BufferedBlock::Empty | BufferedBlock::Text(_) => {
-                self.finish();
-                Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "SDBlock line buffer does not match its input type",
-                ))
-            }
-        }
-    }
-
-    fn final_block(&mut self, py: Python<'_>) -> PyResult<Option<Py<PySDBlock>>> {
-        self.finished = true;
-        let block = match std::mem::replace(&mut self.block_lines, BufferedBlock::Empty) {
-            BufferedBlock::Empty => return Ok(None),
-            BufferedBlock::Text(lines) if !lines.is_empty() => PySDBlock {
-                inner: SDBlockInner::Text(sdblock::SDBlock::from_block_lines(lines)),
-            },
-            BufferedBlock::Bytes(lines) if !lines.is_empty() => PySDBlock {
-                inner: SDBlockInner::Bytes(sdblock::BytesSDBlock::from_block_lines(lines)),
-            },
-            BufferedBlock::Text(_) | BufferedBlock::Bytes(_) => return Ok(None),
-        };
-        Py::new(py, block).map(Some)
-    }
-
-    fn finish(&mut self) {
-        self.finished = true;
-        self.block_lines = BufferedBlock::Empty;
-    }
+fn decode<'a>(py: Python<'_>, bytes: &'a [u8]) -> PyResult<&'a str> {
+    std::str::from_utf8(bytes)
+        .map_err(|error| PyUnicodeDecodeError::new_err_from_utf8(py, bytes, error))
 }
 
 #[pymethods]
@@ -272,97 +215,53 @@ impl PySDBlock {
     /// Returns:
     ///     An iterator that produces owned SDBlocks as lines are consumed
     #[staticmethod]
-    fn from_lines(py: Python<'_>, lines: &Bound<'_, PyAny>) -> PyResult<Py<PySDBlockIterator>> {
-        Py::new(
-            py,
-            PySDBlockIterator {
-                lines: lines.try_iter()?.unbind(),
-                kind: None,
-                block_lines: BufferedBlock::Empty,
-                finished: false,
-            },
-        )
+    fn from_lines(lines: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
+        Ok(PySDBlockIterator::new(Source::Lines(
+            lines.try_iter()?.unbind(),
+        )))
     }
 
-    /// Return the parsed molecule title without changing its input type.
+    /// Return the stripped molecule title in the input type.
     #[getter]
-    fn title<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
-        match &self.inner {
-            SDBlockInner::Text(block) => PyString::new(py, &block.title).into_any(),
-            SDBlockInner::Bytes(block) => PyBytes::new(py, &block.title).into_any(),
-        }
+    fn title<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.kind.value(py, self.block.title())
     }
 
-    /// Generate SD metadata records.
+    /// Return all SD data records.
     ///
     /// Returns:
     ///     Tuples of record name and value in the input type
     fn records<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
-        let records = match &self.inner {
-            SDBlockInner::Text(block) => block
-                .records()
-                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?
-                .into_iter()
-                .map(|(name, value)| {
-                    let tuple = PyTuple::new(
-                        py,
-                        [
-                            PyString::new(py, &name).into_any(),
-                            PyString::new(py, &value).into_any(),
-                        ],
-                    )?;
-                    Ok(tuple.into_any().unbind())
-                })
-                .collect::<PyResult<Vec<_>>>()?,
-            SDBlockInner::Bytes(block) => block
-                .records()
-                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?
-                .into_iter()
-                .map(|(name, value)| {
-                    let tuple = PyTuple::new(
-                        py,
-                        [
-                            PyBytes::new(py, &name).into_any(),
-                            PyBytes::new(py, &value).into_any(),
-                        ],
-                    )?;
-                    Ok(tuple.into_any().unbind())
-                })
-                .collect::<PyResult<Vec<_>>>()?,
-        };
-        PyList::new(py, records)
+        let list = PyList::empty(py);
+        let mut pos = 0;
+        while let Some(record) = self
+            .block
+            .next_record(&mut pos)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+        {
+            list.append(self.record(py, record)?)?;
+        }
+        Ok(list)
     }
 
-    /// Lazily iterate over the SD metadata records.
-    ///
-    /// Returned names and values are owned and have the same type as the block.
-    fn iter_records(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PySDRecordIterator>> {
-        Py::new(
-            py,
-            PySDRecordIterator {
-                block: slf.clone().unbind(),
-                index: 0,
-                finished: false,
-            },
-        )
+    /// Lazily iterate over the SD data records.
+    fn iter_records(slf: Bound<'_, Self>) -> PySDRecordIterator {
+        PySDRecordIterator {
+            block: slf.unbind(),
+            pos: 0,
+            finished: false,
+        }
     }
 
-    /// Write an SDBlock to a file-like handle.
+    /// Write the block, ending with $$$$, to a file-like handle.
     ///
     /// Args:
     ///     outh: a text or binary file-like handle matching the input type
-    ///     with_newlines: each line is written with a trailing newline when absent
-    #[pyo3(signature = (outh, with_newlines = true))]
-    fn write(&self, outh: &Bound<'_, PyAny>, with_newlines: bool) -> PyResult<()> {
-        match &self.inner {
-            SDBlockInner::Text(block) => {
-                outh.call_method1("write", (block.serialize(with_newlines),))?;
-            }
-            SDBlockInner::Bytes(block) => {
-                let output = block.serialize(with_newlines);
-                outh.call_method1("write", (PyBytes::new(outh.py(), &output),))?;
-            }
-        }
+    fn write(&self, outh: &Bound<'_, PyAny>) -> PyResult<()> {
+        let py = outh.py();
+        let mut output = Vec::with_capacity(self.block.serialized_len());
+        self.block.serialize_into(&mut output);
+        outh.call_method1(intern!(py, "write"), (self.kind.value(py, &output)?,))?;
         Ok(())
     }
 
@@ -376,73 +275,52 @@ impl PySDBlock {
         record_name: &Bound<'_, PyAny>,
         value: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        match &mut self.inner {
-            SDBlockInner::Text(block) => {
-                if !record_name.is_instance_of::<PyString>() || !value.is_instance_of::<PyString>()
-                {
-                    return Err(pyo3::exceptions::PyTypeError::new_err(
-                        "text SDBlock values must be appended as str",
-                    ));
-                }
-                block.append_record(
-                    &record_name.extract::<String>()?,
-                    &value.extract::<String>()?,
-                );
+        match (bytes_of(record_name)?, bytes_of(value)?) {
+            (Some((name_kind, name)), Some((value_kind, value)))
+                if name_kind == self.kind && value_kind == self.kind =>
+            {
+                self.block.append_record(name, value);
+                Ok(())
             }
-            SDBlockInner::Bytes(block) => {
-                if !record_name.is_instance_of::<PyBytes>() || !value.is_instance_of::<PyBytes>() {
-                    return Err(pyo3::exceptions::PyTypeError::new_err(
-                        "byte-backed SDBlock values must be appended as bytes",
-                    ));
-                }
-                let record_name = record_name.extract::<Vec<u8>>()?;
-                let value = value.extract::<Vec<u8>>()?;
-                block.append_record(&record_name, &value);
-            }
+            _ => Err(PyTypeError::new_err(match self.kind {
+                Kind::Text => "text SDBlock values must be appended as str",
+                Kind::Bytes => "byte-backed SDBlock values must be appended as bytes",
+            })),
         }
-        Ok(())
     }
 
     /// Parse out the underlying CTable object from a text SDBlock.
     ///
     /// Byte-backed SDBlocks cannot be converted without decoding their title.
-    fn ctable(&self) -> PyResult<PyCTable> {
-        match &self.inner {
-            SDBlockInner::Text(block) => PyCTable::from_lines(block.ctable_lines()),
-            SDBlockInner::Bytes(_) => Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                "ctable operations are not supported for byte-backed SDBlocks",
-            )),
+    fn ctable(&self, py: Python<'_>) -> PyResult<PyCTable> {
+        self.require_text()?;
+        let mut lines = vec![decode(py, self.block.title())?.to_owned()];
+        for line in block::lines(self.block.mdl()) {
+            lines.push(decode(py, line)?.to_owned());
         }
+        PyCTable::from_lines(lines)
     }
 
-    /// Get the number of atoms as indicated in the MDL block.
-    ///
-    /// Byte-backed blocks raise `NotImplementedError`.
+    /// Get the number of atoms declared by the counts line.
     fn num_atoms(&self) -> PyResult<i64> {
-        Ok(self.ctable()?.num_atoms_value())
+        let (_, atoms, _) = self.block.counts().map_err(error_to_py)?;
+        Ok(atoms)
     }
 
-    /// Get the number of bonds as indicated in the MDL block.
-    ///
-    /// Byte-backed blocks raise `NotImplementedError`.
+    /// Get the number of bonds declared by the counts line.
     fn num_bonds(&self) -> PyResult<i64> {
-        Ok(self.ctable()?.num_bonds_value())
+        let (_, _, bonds) = self.block.counts().map_err(error_to_py)?;
+        Ok(bonds)
     }
 
     /// Renumber atom and bond indices to be 1-indexed and in order.
     ///
     /// Byte-backed blocks raise `NotImplementedError`.
     fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
-        if matches!(&self.inner, SDBlockInner::Bytes(_)) {
-            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                "ctable operations are not supported for byte-backed SDBlocks",
-            ));
-        }
-        let mut ctable = self.ctable()?;
+        let mut ctable = self.ctable(py)?;
         ctable.renumber_indices_for_block(py)?;
-        if let SDBlockInner::Text(block) = &mut self.inner {
-            block.mdl = ctable.lines_after_title();
-        }
+        let lines = ctable.lines_after_title();
+        self.block.replace_mdl(lines.iter().map(String::as_bytes));
         Ok(())
     }
 }
