@@ -10,15 +10,51 @@ pub enum CTableFormat {
     V3000,
 }
 
-/// Errors raised while parsing a connection table.
-#[derive(Debug)]
-pub enum CTableParseError {
-    /// The final token does not name a supported CTable format.
+/// Errors from parsing, validating, or renumbering a connection table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CTableError {
+    /// The table has fewer lines than its header needs.
+    Truncated { needed: usize, found: usize },
+    /// A line lacks a required whitespace-delimited field.
+    MissingField(&'static str),
+    /// A field that must be an integer is not one.
+    InvalidInteger(String),
+    /// The final counts-line token does not name a supported format.
     UnknownFormat(String),
-    /// A V2000 atom or bond count could not be parsed.
-    InvalidV2000Counts(ParseIntError),
-    /// A V3000 atom or bond count could not be parsed.
-    InvalidV3000Counts,
+    /// The operation only supports V3000 tables.
+    NotImplemented,
+    /// Strict validation found an index out of one-based order.
+    OutOfOrder,
+    /// An index occurs twice, or a bond references a duplicated atom index.
+    Duplicate,
+    /// There are fewer unique indices than the counts line declares.
+    Fewer,
+    /// There are more unique indices than the counts line declares.
+    More,
+}
+
+impl From<ParseIntError> for CTableError {
+    fn from(error: ParseIntError) -> Self {
+        Self::InvalidInteger(error.to_string())
+    }
+}
+
+fn line_at(lines: &[String], index: usize) -> Result<&String, CTableError> {
+    lines.get(index).ok_or(CTableError::Truncated {
+        needed: index + 1,
+        found: lines.len(),
+    })
+}
+
+fn field<'a>(fields: &[&'a str], index: usize, name: &'static str) -> Result<&'a str, CTableError> {
+    fields
+        .get(index)
+        .copied()
+        .ok_or(CTableError::MissingField(name))
+}
+
+fn integer(text: &str) -> Result<i64, CTableError> {
+    Ok(text.parse()?)
 }
 
 /// A parsed connection table with its original source lines and parsed header.
@@ -50,29 +86,24 @@ impl CTable {
     /// following line, matching the Python API's existing behavior. The
     /// stored atom and bond counts come from the counts line, not from counting
     /// the raw atom and bond lines later in the table.
-    pub fn parse(lines: Vec<String>) -> Result<Self, CTableParseError> {
-        let title = lines[0].trim().to_owned();
-        let source = lines[1].clone();
-        let comment = lines[2].clone();
-        let first_counts = lines[3].clone();
-        let format_token =
-            parse_format(&first_counts).expect("expected a final CTable format token");
-        let format = match format_token {
-            "V2000" => CTableFormat::V2000,
-            "V3000" => CTableFormat::V3000,
-            other => return Err(CTableParseError::UnknownFormat(other.to_owned())),
+    pub fn parse(lines: Vec<String>) -> Result<Self, CTableError> {
+        let title = line_at(&lines, 0)?.trim().to_owned();
+        let source = line_at(&lines, 1)?.clone();
+        let comment = line_at(&lines, 2)?.clone();
+        let first_counts = line_at(&lines, 3)?.clone();
+        let format = match parse_format(&first_counts) {
+            Some("V2000") => CTableFormat::V2000,
+            Some("V3000") => CTableFormat::V3000,
+            Some(other) => return Err(CTableError::UnknownFormat(other.to_owned())),
+            None => return Err(CTableError::MissingField("format")),
         };
         let counts = match format {
             CTableFormat::V2000 => first_counts,
-            CTableFormat::V3000 => lines[5].trim().to_owned(),
+            CTableFormat::V3000 => line_at(&lines, 5)?.trim().to_owned(),
         };
         let (num_atoms, num_bonds) = match format {
-            CTableFormat::V2000 => {
-                parse_v2000_counts(&counts).map_err(CTableParseError::InvalidV2000Counts)?
-            }
-            CTableFormat::V3000 => {
-                parse_v3000_counts(&counts).ok_or(CTableParseError::InvalidV3000Counts)?
-            }
+            CTableFormat::V2000 => parse_v2000_counts(&counts)?,
+            CTableFormat::V3000 => parse_v3000_counts(&counts)?,
         };
 
         Ok(Self {
@@ -94,9 +125,9 @@ impl CTable {
     /// out-of-order and duplicate indices, and fewer or more lines than the
     /// count line. Lines are selected using the raw V3000 atom-section
     /// boundaries.
-    pub fn valid_atom_indices(&self, strict: bool) -> Result<(), &'static str> {
+    pub fn valid_atom_indices(&self, strict: bool) -> Result<(), CTableError> {
         if self.format != CTableFormat::V3000 {
-            return Err("not_implemented");
+            return Err(CTableError::NotImplemented);
         }
         validate_atom_indices(&self.lines, self.num_atoms as usize, strict)
     }
@@ -108,9 +139,9 @@ impl CTable {
     /// out-of-order and duplicate indices, and fewer or more lines than the
     /// count line. Lines are selected using the raw V3000 bond-section
     /// boundaries.
-    pub fn valid_bond_indices(&self, strict: bool) -> Result<(), &'static str> {
+    pub fn valid_bond_indices(&self, strict: bool) -> Result<(), CTableError> {
         if self.format != CTableFormat::V3000 {
-            return Err("not_implemented");
+            return Err(CTableError::NotImplemented);
         }
         validate_bond_indices(&self.lines, self.num_bonds as usize, strict)
     }
@@ -119,17 +150,13 @@ impl CTable {
     ///
     /// Only V3000 tables are supported. Atom and bond lines are numbered in
     /// their current order, bond atom references are remapped, and the
-    /// rewritten counts line reflects the number of table lines. Return
-    /// `"duplicate"` when a duplicate atom index makes a bond reference
-    /// ambiguous, or `"not_implemented"` for V2000 input.
-    pub fn renumber_indices(&mut self) -> Result<(), &'static str> {
+    /// rewritten counts line reflects the number of table lines. Lines are
+    /// only replaced on success.
+    pub fn renumber_indices(&mut self) -> Result<(), CTableError> {
         if self.format != CTableFormat::V3000 {
-            return Err("not_implemented");
+            return Err(CTableError::NotImplemented);
         }
-        let Some(lines) = renumber_indices(&self.lines, &self.counts) else {
-            return Err("duplicate");
-        };
-        self.lines = lines;
+        self.lines = renumber_indices(&self.lines, &self.counts)?;
         Ok(())
     }
 }
@@ -150,16 +177,20 @@ pub fn parse_v2000_counts(line: &str) -> Result<(i64, i64), ParseIntError> {
 /// Parse atom and bond counts from the V3000 `COUNTS` line.
 ///
 /// The atom and bond values are the fourth and fifth whitespace-delimited
-/// fields. Return `None` if either field is absent or is not an integer.
-pub fn parse_v3000_counts(line: &str) -> Option<(i64, i64)> {
+/// fields.
+pub fn parse_v3000_counts(line: &str) -> Result<(i64, i64), CTableError> {
     let mut fields = line
         .split(|character: char| {
             character.is_ascii_whitespace() || ('\u{1c}'..='\u{1f}').contains(&character)
         })
         .filter(|field| !field.is_empty());
-    let atoms = fields.nth(3)?.parse().ok()?;
-    let bonds = fields.next()?.parse().ok()?;
-    Some((atoms, bonds))
+    let atoms = fields
+        .nth(3)
+        .ok_or(CTableError::MissingField("atom count"))?;
+    let bonds = fields
+        .next()
+        .ok_or(CTableError::MissingField("bond count"))?;
+    Ok((integer(atoms)?, integer(bonds)?))
 }
 
 /// Return the final whitespace-delimited token from a counts line.
@@ -216,7 +247,7 @@ pub fn validate_atom_indices(
     lines: &[String],
     num_atoms: usize,
     strict: bool,
-) -> Result<(), &'static str> {
+) -> Result<(), CTableError> {
     let (start, end) = atom_line_range(lines);
     validate_indices(&lines[start..end], num_atoms, strict)
 }
@@ -229,7 +260,7 @@ pub fn validate_bond_indices(
     lines: &[String],
     num_bonds: usize,
     strict: bool,
-) -> Result<(), &'static str> {
+) -> Result<(), CTableError> {
     let (start, end) = bond_line_range(lines);
     validate_indices(&lines[start..end], num_bonds, strict)
 }
@@ -238,27 +269,26 @@ fn validate_indices(
     lines: &[String],
     expected_count: usize,
     strict: bool,
-) -> Result<(), &'static str> {
+) -> Result<(), CTableError> {
     let mut seen_indices = HashSet::new();
     for (line_index, line) in lines.iter().enumerate() {
-        let index = line
-            .split_whitespace()
-            .nth(2)
-            .expect("index line has no index")
-            .parse::<i64>()
-            .expect("index is not an integer");
+        let index = integer(
+            line.split_whitespace()
+                .nth(2)
+                .ok_or(CTableError::MissingField("index"))?,
+        )?;
         if strict && (line_index + 1) as i64 != index {
-            return Err("out_of_order");
+            return Err(CTableError::OutOfOrder);
         }
         if !seen_indices.insert(index) {
-            return Err("duplicate");
+            return Err(CTableError::Duplicate);
         }
     }
     if seen_indices.len() < expected_count {
-        return Err("fewer");
+        return Err(CTableError::Fewer);
     }
     if seen_indices.len() > expected_count {
-        return Err("more");
+        return Err(CTableError::More);
     }
     Ok(())
 }
@@ -267,9 +297,10 @@ fn validate_indices(
 ///
 /// Atom and bond lines are numbered from one in their existing order, and
 /// bond atom references are remapped through the atom-index map. The counts
-/// line is updated to reflect the number of raw atom and bond lines. Return
-/// `None` when duplicate atom indices make a bond's atom mapping ambiguous.
-pub fn renumber_indices(lines: &[String], counts: &str) -> Option<Vec<String>> {
+/// line is updated to reflect the number of raw atom and bond lines. Fail with
+/// `Duplicate` when duplicate atom indices make a bond's atom mapping
+/// ambiguous, and with `MissingField` when a bond references an absent atom.
+pub fn renumber_indices(lines: &[String], counts: &str) -> Result<Vec<String>, CTableError> {
     let prefix = "M  V30 ";
     let (atom_start, atom_end) = atom_line_range(lines);
     let atom_lines = &lines[atom_start..atom_end];
@@ -277,21 +308,20 @@ pub fn renumber_indices(lines: &[String], counts: &str) -> Option<Vec<String>> {
     let mut new_atom_lines = Vec::new();
     for (line_index, line) in atom_lines.iter().enumerate() {
         let fields: Vec<_> = line.split_whitespace().collect();
-        let old_index = fields[2]
-            .parse::<i64>()
-            .expect("atom index is not an integer");
+        let old_field = field(&fields, 2, "atom index")?;
+        let old_index = integer(old_field)?;
         let new_index = line_index + 1;
         atom_index_mapping
             .entry(old_index)
             .or_default()
             .push(new_index);
-        let skip_chars = prefix.len() + fields[2].len();
-        let mut new_line = format!("{prefix}{new_index}");
-        new_line.push_str(
-            line.get(skip_chars..)
-                .expect("atom index offset is not a character boundary"),
-        );
-        new_atom_lines.push(new_line);
+        // Like the Python slice line[n:], skip characters, not bytes.
+        let skip_chars = prefix.chars().count() + old_field.chars().count();
+        let rest = line
+            .char_indices()
+            .nth(skip_chars)
+            .map_or("", |(offset, _)| &line[offset..]);
+        new_atom_lines.push(format!("{prefix}{new_index}{rest}"));
     }
 
     let (bond_start, bond_end) = bond_line_range(lines);
@@ -299,28 +329,25 @@ pub fn renumber_indices(lines: &[String], counts: &str) -> Option<Vec<String>> {
     let mut new_bond_lines = Vec::new();
     for (line_index, line) in bond_lines.iter().enumerate() {
         let fields: Vec<_> = line.split_whitespace().collect();
-        let from_index = fields[4]
-            .parse::<i64>()
-            .expect("bond atom index is not an integer");
-        let to_index = fields[5]
-            .parse::<i64>()
-            .expect("bond atom index is not an integer");
+        let from_index = integer(field(&fields, 4, "bond atom index")?)?;
+        let to_index = integer(field(&fields, 5, "bond atom index")?)?;
         let from_mapping = atom_index_mapping
             .get(&from_index)
-            .expect("bond references a missing atom index");
+            .map_or(&[][..], Vec::as_slice);
         let to_mapping = atom_index_mapping
             .get(&to_index)
-            .expect("bond references a missing atom index");
+            .map_or(&[][..], Vec::as_slice);
         if from_mapping.len() > 1 || to_mapping.len() > 1 {
-            return None;
+            return Err(CTableError::Duplicate);
         }
+        let (Some(new_from), Some(new_to)) = (from_mapping.first(), to_mapping.first()) else {
+            return Err(CTableError::MissingField("bonded atom"));
+        };
         let trailing = if line.ends_with('\n') { "\n" } else { "" };
         new_bond_lines.push(format!(
-            "{prefix}{} {} {} {}{trailing}",
+            "{prefix}{} {} {new_from} {new_to}{trailing}",
             line_index + 1,
-            fields[3],
-            from_mapping[0],
-            to_mapping[0]
+            field(&fields, 3, "bond type")?,
         ));
     }
 
@@ -364,5 +391,5 @@ pub fn renumber_indices(lines: &[String], counts: &str) -> Option<Vec<String>> {
             new_lines.push(line.clone());
         }
     }
-    Some(new_lines)
+    Ok(new_lines)
 }

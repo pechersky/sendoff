@@ -70,25 +70,10 @@ impl PyCTable {
     ///     If all the checks pass, return True.
     #[pyo3(signature = (strict: "bool" = false))]
     fn valid_atom_indices(&self, py: Python<'_>, strict: bool) -> PyResult<bool> {
-        match self.inner.valid_atom_indices(strict) {
-            Ok(()) => Ok(true),
-            Err("not_implemented") => Err(pyo3::exceptions::PyNotImplementedError::new_err(())),
-            Err("out_of_order") => Err(custom_error(py, "IndicesOutOfOrderError", "atoms")?),
-            Err("duplicate") => Err(custom_error(py, "IndicesDuplicateError", "atoms")?),
-            Err("fewer") => Err(custom_error(
-                py,
-                "IndicesMismatchError",
-                "fewer atom lines than count line",
-            )?),
-            Err("more") => Err(custom_error(
-                py,
-                "IndicesMismatchError",
-                "more atom lines than count line",
-            )?),
-            Err(error) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "unknown atom index validation result: {error}"
-            ))),
-        }
+        self.inner
+            .valid_atom_indices(strict)
+            .map(|()| true)
+            .map_err(|error| index_error(py, error, "atom"))
     }
 
     /// Validate that the bond lines match the counts line.
@@ -110,25 +95,10 @@ impl PyCTable {
     ///     If all the checks pass, return True.
     #[pyo3(signature = (strict: "bool" = false))]
     fn valid_bond_indices(&self, py: Python<'_>, strict: bool) -> PyResult<bool> {
-        match self.inner.valid_bond_indices(strict) {
-            Ok(()) => Ok(true),
-            Err("not_implemented") => Err(pyo3::exceptions::PyNotImplementedError::new_err(())),
-            Err("out_of_order") => Err(custom_error(py, "IndicesOutOfOrderError", "bonds")?),
-            Err("duplicate") => Err(custom_error(py, "IndicesDuplicateError", "bonds")?),
-            Err("fewer") => Err(custom_error(
-                py,
-                "IndicesMismatchError",
-                "fewer bond lines than count line",
-            )?),
-            Err("more") => Err(custom_error(
-                py,
-                "IndicesMismatchError",
-                "more bond lines than count line",
-            )?),
-            Err(error) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "unknown bond index validation result: {error}"
-            ))),
-        }
+        self.inner
+            .valid_bond_indices(strict)
+            .map(|()| true)
+            .map_err(|error| index_error(py, error, "bond"))
     }
 
     /// Renumber the indices in the block, including changing counts line.
@@ -154,34 +124,18 @@ impl PyCTable {
     ///         original indices to use in the remapping.
     ///     NotImplementedError: if trying to renumber in a V2000 format table
     fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
-        match self.inner.renumber_indices() {
-            Ok(()) => Ok(()),
-            Err("not_implemented") => Err(pyo3::exceptions::PyNotImplementedError::new_err(())),
-            Err("duplicate") => Err(custom_error(
-                py,
-                "IndicesDuplicateError",
-                "atom index mapping in bond",
-            )?),
-            Err(error) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "unknown renumbering result: {error}"
-            ))),
-        }
+        self.inner.renumber_indices().map_err(|error| match error {
+            ctable::CTableError::Duplicate => {
+                custom_error(py, "IndicesDuplicateError", "atom index mapping in bond")
+            }
+            other => index_error(py, other, "atom"),
+        })
     }
 }
 
 impl PyCTable {
     pub(crate) fn from_lines(lines: Vec<String>) -> PyResult<Self> {
-        let inner = ctable::CTable::parse(lines).map_err(|error| match error {
-            ctable::CTableParseError::UnknownFormat(token) => {
-                pyo3::exceptions::PyKeyError::new_err(token)
-            }
-            ctable::CTableParseError::InvalidV2000Counts(error) => {
-                pyo3::exceptions::PyValueError::new_err(error.to_string())
-            }
-            ctable::CTableParseError::InvalidV3000Counts => {
-                pyo3::exceptions::PyValueError::new_err("invalid V3000 counts")
-            }
-        })?;
+        let inner = ctable::CTable::parse(lines).map_err(error_to_py)?;
         Ok(Self { inner })
     }
 
@@ -202,9 +156,51 @@ impl PyCTable {
     }
 }
 
-fn custom_error(py: Python<'_>, name: &str, message: &str) -> PyResult<PyErr> {
-    let instance = PyModule::import(py, "sendoff.ctable")?
-        .getattr(name)?
-        .call1((message,))?;
-    Ok(PyErr::from_value(instance))
+/// Map a structural CTable error to the exception main's Python raised.
+///
+/// Truncated tables raise ValueError rather than main's StopIteration, which
+/// PEP 479 would turn into RuntimeError inside generators.
+pub(crate) fn error_to_py(error: ctable::CTableError) -> PyErr {
+    use pyo3::exceptions::{PyIndexError, PyKeyError, PyNotImplementedError, PyValueError};
+    match error {
+        ctable::CTableError::Truncated { needed, found } => PyValueError::new_err(format!(
+            "truncated CTable: needs at least {needed} lines, found {found}"
+        )),
+        ctable::CTableError::MissingField(name) => {
+            PyIndexError::new_err(format!("CTable line has no {name} field"))
+        }
+        ctable::CTableError::InvalidInteger(message) => PyValueError::new_err(message),
+        ctable::CTableError::UnknownFormat(token) => PyKeyError::new_err(token),
+        ctable::CTableError::NotImplemented => PyNotImplementedError::new_err(()),
+        other => PyValueError::new_err(format!("{other:?}")),
+    }
+}
+
+fn index_error(py: Python<'_>, error: ctable::CTableError, noun: &str) -> PyErr {
+    match error {
+        ctable::CTableError::OutOfOrder => {
+            custom_error(py, "IndicesOutOfOrderError", &format!("{noun}s"))
+        }
+        ctable::CTableError::Duplicate => {
+            custom_error(py, "IndicesDuplicateError", &format!("{noun}s"))
+        }
+        ctable::CTableError::Fewer => custom_error(
+            py,
+            "IndicesMismatchError",
+            &format!("fewer {noun} lines than count line"),
+        ),
+        ctable::CTableError::More => custom_error(
+            py,
+            "IndicesMismatchError",
+            &format!("more {noun} lines than count line"),
+        ),
+        other => error_to_py(other),
+    }
+}
+
+fn custom_error(py: Python<'_>, name: &str, message: &str) -> PyErr {
+    PyModule::import(py, "sendoff.ctable")
+        .and_then(|module| module.getattr(name))
+        .and_then(|class| class.call1((message,)))
+        .map_or_else(|error| error, PyErr::from_value)
 }

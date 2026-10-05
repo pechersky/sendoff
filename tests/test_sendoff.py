@@ -1073,3 +1073,119 @@ def test_single_mol_v3000_sdf_idempotent_renumber_with_splitlines(
     buffer = io.StringIO()
     mol.write(buffer)
     assert buffer.getvalue() == open(single_mol_v3000_sdf).read()
+
+
+V3000_HEADER = "t\n  sendoff\n\n  0  0  0     0  0            999 V3000\n"
+
+
+def v3000_block(
+    atom: str = "M  V30 1 C 0 0 0 0",
+    bond: str = "M  V30 1 1 1 2",
+    counts: str = "M  V30 COUNTS 2 1 0 0 0",
+) -> SDBlock:
+    """Build a two-atom V3000 block with one replaceable line of each kind.
+
+    Args:
+        atom: the first atom line
+        bond: the only bond line
+        counts: the V3000 counts line
+
+    Returns:
+        The parsed block.
+    """
+    text = (
+        V3000_HEADER
+        + f"M  V30 BEGIN CTAB\n{counts}\nM  V30 BEGIN ATOM\n{atom}\n"
+        + "M  V30 2 O 0 0 0 0\nM  V30 END ATOM\nM  V30 BEGIN BOND\n"
+        + f"{bond}\nM  V30 END BOND\nM  V30 END CTAB\nM  END\n$$$$\n"
+    )
+    return next(SDBlock.from_lines(text.splitlines()))
+
+
+@pytest.mark.parametrize(
+    "text, error",
+    [
+        ("t\nM  END\n$$$$\n", ValueError),
+        (V3000_HEADER + "M  END\n$$$$\n", ValueError),
+        ("t\n\n\n   \nM  END\n$$$$\n", IndexError),
+        ("t\n\n\n  0  0  0     0  0            999 V9\nM  END\n$$$$\n", KeyError),
+        ("t\n\n\n  x  0  0     0  0            999 V2000\nM  END\n$$$$\n", ValueError),
+    ],
+)
+def test_malformed_ctable_header_raises_exception(
+    text: str, error: type[Exception]
+) -> None:
+    """Malformed CTable headers raise ordinary exceptions, not Rust panics.
+
+    Args:
+        text: SDF text with a malformed CTable
+        error: the expected exception type
+    """
+    block = next(SDBlock.from_lines(text.splitlines()))
+    with pytest.raises(error):
+        block.num_atoms()
+
+
+def test_malformed_v3000_counts_raises_index_error() -> None:
+    """A V3000 counts line without atom and bond fields raises IndexError."""
+    with pytest.raises(IndexError):
+        v3000_block(counts="M  V30 COUNTS 1").num_atoms()
+
+
+@pytest.mark.parametrize(
+    "atom, bond, error",
+    [
+        ("M  V30", "M  V30 1 1 1 2", IndexError),
+        ("M  V30 x C 0 0 0 0", "M  V30 1 1 1 2", ValueError),
+        ("M  V30 1 C 0 0 0 0", "M  V30", IndexError),
+        ("M  V30 1 C 0 0 0 0", "M  V30 x 1 1 2", ValueError),
+    ],
+)
+def test_malformed_index_lines_raise_exception(
+    atom: str, bond: str, error: type[Exception]
+) -> None:
+    """Atom and bond lines without integer indices raise ordinary exceptions.
+
+    Args:
+        atom: the first atom line
+        bond: the only bond line
+        error: the expected exception type
+    """
+    ctable = v3000_block(atom=atom, bond=bond).ctable()
+    with pytest.raises(error):
+        ctable.valid_atom_indices()
+        ctable.valid_bond_indices()
+
+
+@pytest.mark.parametrize(
+    "atom, bond, error",
+    [
+        ("M  V30", "M  V30 1 1 1 2", IndexError),
+        ("M  V30 x C 0 0 0 0", "M  V30 1 1 1 2", ValueError),
+        ("M  V30 1 C 0 0 0 0", "M  V30 1 1 1", IndexError),
+        ("M  V30 1 C 0 0 0 0", "M  V30 1 1 1 x", ValueError),
+        ("M  V30 1 C 0 0 0 0", "M  V30 1 1 1 9", IndexError),
+    ],
+)
+def test_malformed_renumber_input_raises_exception(
+    atom: str, bond: str, error: type[Exception]
+) -> None:
+    """Renumbering malformed or dangling lines raises and leaves the block intact.
+
+    Args:
+        atom: the first atom line
+        bond: the only bond line
+        error: the expected exception type
+    """
+    block = v3000_block(atom=atom, bond=bond)
+    before = block.ctable().lines
+    with pytest.raises(error):
+        block.renumber_indices()
+    assert block.ctable().lines == before
+
+
+def test_renumber_slices_atom_lines_by_character() -> None:
+    """Renumbering skips characters like Python slicing, even mid-UTF-8."""
+    block = v3000_block(atom="a b 1 \u4e2d")
+    block.renumber_indices()
+    assert "M  V30 1" in block.ctable().lines
