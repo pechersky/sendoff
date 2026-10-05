@@ -631,6 +631,14 @@ impl PySDBlock {
         Ok(dict)
     }
 
+    /// Return the block as SDF text ending with $$$$, in the input type.
+    ///
+    /// The inverse of `SDBlock(sdf)`, and what `write` writes.
+    fn to_sdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.kind
+            .value(py, &self.block.serialized(self.kind.strip()))
+    }
+
     /// Write the block, ending with $$$$, to a file-like handle.
     ///
     /// Args:

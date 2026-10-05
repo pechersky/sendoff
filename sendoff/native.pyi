@@ -431,6 +431,16 @@ class SDBlock(Generic[AnyStr]):
         `"\\n".join(block.mdl)` is the CTAB; `block.molblock` adds the title.
         """
 
+    def to_sdf(self, /) -> AnyStr:
+        """
+        Return the block as SDF text ending with $$$$, in the input type.
+
+        The inverse of ``SDBlock(sdf)``, and what `write` writes.
+
+        Returns:
+            The serialized block
+        """
+
     def write(self, /, outh: _SupportsWrite[AnyStr]) -> None:
         """
         Write an SDBlock, ending with "$$$$", to a file-like handle.

@@ -588,26 +588,12 @@ def test_mdl_is_the_ctab_lines_without_endings() -> None:
         byte_block.mdl_contains("prog")  # type: ignore[arg-type]
 
 
-def serialized(block: SDBlock[typing.AnyStr]) -> typing.AnyStr:
-    """Return what ``block.write`` writes.
-
-    Args:
-        block: the block to write
-
-    Returns:
-        The written str or bytes.
-    """
-    handle: typing.Any = io.StringIO() if isinstance(block.title, str) else io.BytesIO()
-    block.write(handle)
-    return typing.cast(typing.AnyStr, handle.getvalue())
-
-
 def test_constructor_parses_one_block() -> None:
     """SDBlock(sdf) parses a molblock or one record and appends records."""
     molblock = "title\n  prog\n\nM  END\n"
     block = SDBlock(molblock)
     assert (block.title, block.molblock, block.records()) == ("title", molblock, [])
-    assert serialized(block) == molblock + "$$$$\n"
+    assert block.to_sdf() == molblock + "$$$$\n"
 
     with_data = SDBlock(molblock + "> <A>\n1\n\n$$$$\n\n", {"B": "2"})
     assert with_data.molblock == molblock
@@ -640,12 +626,12 @@ def test_from_sdf_parses_like_a_file(tmp_path: Path) -> None:
     path = tmp_path / "input.sdf"
     path.write_text(text, newline="")
     data = text.encode()
-    assert list(map(serialized, SDBlock.from_sdf(text))) == list(
-        map(serialized, parse_sdf(path))
-    )
-    assert list(map(serialized, SDBlock.from_sdf(data))) == list(
-        map(serialized, parse_sdf(os.fsencode(path)))
-    )
+    assert [b.to_sdf() for b in SDBlock.from_sdf(text)] == [
+        b.to_sdf() for b in parse_sdf(path)
+    ]
+    assert [b.to_sdf() for b in SDBlock.from_sdf(data)] == [
+        b.to_sdf() for b in parse_sdf(os.fsencode(path))
+    ]
     assert [b.records() for b in SDBlock.from_sdf(text)] == [[("A", "1")], []]
     assert list(SDBlock.from_sdf("")) == []
     with pytest.raises(TypeError, match="use SDBlock.from_sdf"):

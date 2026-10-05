@@ -140,6 +140,7 @@ def assert_blocks_match(
         ), context
         written = serialized(block, text)
         assert written == expected.serialize(), context
+        assert block.to_sdf() == written, context
         if not (
             block.title.startswith(cast_like(written, "$$$$"))  # reads as delimiter
             or cast_like(written, "\r") in written  # SDBlock() translates str \r
