@@ -176,6 +176,12 @@ class SDBlock:
         Returns:
             Tuples of input-typed name/value pairs; multiline values include newlines.
         """
+    def iter_records(self, /) -> Iterator[tuple[str, str] | tuple[bytes, bytes]]:
+        """
+        Lazily iterate over SD metadata records in input order.
+
+        Returned names and values are owned and have the same type as the block.
+        """
     def renumber_indices(self, /) -> None:
         """
         Renumber atom and bond indices to be 1-indexed and in order.

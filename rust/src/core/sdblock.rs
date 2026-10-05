@@ -52,7 +52,7 @@ impl SDBlock {
     /// Generate SD metadata records.
     ///
     /// Each value includes embedded newlines when it spans multiple lines.
-    pub fn records(&self) -> Vec<(String, String)> {
+    pub fn records(&self) -> Result<Vec<(String, String)>, crate::core::sddata::RecordParseError> {
         crate::core::sddata::records(&self.metadata)
     }
 
@@ -126,7 +126,9 @@ impl BytesSDBlock {
     }
 
     /// Generate SD metadata records without decoding their bytes.
-    pub fn records(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+    pub fn records(
+        &self,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, crate::core::sddata::RecordParseError> {
         crate::core::sddata::records_bytes(&self.metadata)
     }
 

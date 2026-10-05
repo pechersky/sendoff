@@ -15,6 +15,11 @@ enum SDBlockInner {
     Bytes(sdblock::BytesSDBlock),
 }
 
+enum SDRecord {
+    Text(String, String),
+    Bytes(Vec<u8>, Vec<u8>),
+}
+
 #[derive(Clone, Copy)]
 enum InputKind {
     Text,
@@ -32,6 +37,13 @@ pub(crate) struct PySDBlockIterator {
     lines: Py<PyIterator>,
     kind: Option<InputKind>,
     block_lines: BufferedBlock,
+    finished: bool,
+}
+
+#[pyclass(name = "_SDRecordIterator", module = "sendoff.native")]
+pub(crate) struct PySDRecordIterator {
+    block: Py<PySDBlock>,
+    index: usize,
     finished: bool,
 }
 
@@ -84,6 +96,65 @@ impl PySDBlockIterator {
 
             if let Some(block) = block {
                 return Py::new(py, block).map(Some);
+            }
+        }
+    }
+}
+
+#[pymethods]
+impl PySDRecordIterator {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        if self.finished {
+            return Ok(None);
+        }
+
+        let mut index = self.index;
+        let record = {
+            let block = self.block.borrow(py);
+            match &block.inner {
+                SDBlockInner::Text(block) => {
+                    crate::core::sddata::next_record(&block.metadata, &mut index)
+                        .map(|record| record.map(|(name, value)| SDRecord::Text(name, value)))
+                }
+                SDBlockInner::Bytes(block) => {
+                    crate::core::sddata::next_record_bytes(&block.metadata, &mut index)
+                        .map(|record| record.map(|(name, value)| SDRecord::Bytes(name, value)))
+                }
+            }
+        };
+        self.index = index;
+
+        match record {
+            Ok(Some(record)) => {
+                let tuple = match record {
+                    SDRecord::Text(name, value) => PyTuple::new(
+                        py,
+                        [
+                            PyString::new(py, &name).into_any(),
+                            PyString::new(py, &value).into_any(),
+                        ],
+                    )?,
+                    SDRecord::Bytes(name, value) => PyTuple::new(
+                        py,
+                        [
+                            PyBytes::new(py, &name).into_any(),
+                            PyBytes::new(py, &value).into_any(),
+                        ],
+                    )?,
+                };
+                Ok(Some(tuple.into_any().unbind()))
+            }
+            Ok(None) => {
+                self.finished = true;
+                Ok(None)
+            }
+            Err(error) => {
+                self.finished = true;
+                Err(pyo3::exceptions::PyValueError::new_err(error.to_string()))
             }
         }
     }
@@ -230,6 +301,7 @@ impl PySDBlock {
         let records = match &self.inner {
             SDBlockInner::Text(block) => block
                 .records()
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?
                 .into_iter()
                 .map(|(name, value)| {
                     let tuple = PyTuple::new(
@@ -244,6 +316,7 @@ impl PySDBlock {
                 .collect::<PyResult<Vec<_>>>()?,
             SDBlockInner::Bytes(block) => block
                 .records()
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?
                 .into_iter()
                 .map(|(name, value)| {
                     let tuple = PyTuple::new(
@@ -258,6 +331,20 @@ impl PySDBlock {
                 .collect::<PyResult<Vec<_>>>()?,
         };
         PyList::new(py, records)
+    }
+
+    /// Lazily iterate over the SD metadata records.
+    ///
+    /// Returned names and values are owned and have the same type as the block.
+    fn iter_records(slf: &Bound<'_, Self>, py: Python<'_>) -> PyResult<Py<PySDRecordIterator>> {
+        Py::new(
+            py,
+            PySDRecordIterator {
+                block: slf.clone().unbind(),
+                index: 0,
+                finished: false,
+            },
+        )
     }
 
     /// Write an SDBlock to a file-like handle.

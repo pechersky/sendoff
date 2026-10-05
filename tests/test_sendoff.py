@@ -284,6 +284,90 @@ def test_single_record_mol_read(single_record_mol_sdf: Pathy) -> None:
     assert ("Record", "Value") in records
 
 
+def test_iter_records_preserves_order_duplicates_and_multiline_values() -> None:
+    """Iterate records on demand without changing list-returning records()."""
+    block = next(
+        SDBlock.from_lines(
+            [
+                "Title\n",
+                "\n",
+                "M  END\n",
+                "> <Record>\n",
+                "first\n",
+                "second\n",
+                "\n",
+                "> <Record>\n",
+                "third\n",
+                "\n",
+                "$$$$\n",
+            ]
+        )
+    )
+    iterator = block.iter_records()
+    assert iter(iterator) is iterator
+    first = next(iterator)
+    second = next(iterator)
+
+    assert first == ("Record", "first\nsecond")
+    assert second == ("Record", "third")
+    assert first == ("Record", "first\nsecond")
+    records = block.records()
+    assert isinstance(records, list)
+    assert records == [first, second]
+
+
+def test_iter_records_defers_malformed_field_error() -> None:
+    """A later malformed record does not prevent reading earlier fields."""
+    block = next(
+        SDBlock.from_lines(
+            [
+                "Title\n",
+                "\n",
+                "M  END\n",
+                "> <Good>\n",
+                "value\n",
+                "\n",
+                "> missing name\n",
+                "other\n",
+                "\n",
+                "$$$$\n",
+            ]
+        )
+    )
+    iterator = block.iter_records()
+
+    assert next(iterator) == ("Good", "value")
+    with pytest.raises(ValueError, match="missing a name"):
+        next(iterator)
+    with pytest.raises(StopIteration):
+        next(iterator)
+    with pytest.raises(ValueError, match="missing a name"):
+        block.records()
+
+
+def test_iter_records_preserves_bytes_and_owns_its_block() -> None:
+    """Byte record iteration remains lazy and retains source data safely."""
+    block = next(
+        SDBlock.from_lines(
+            [
+                b"Title\n",
+                b"\n",
+                b"M  END\n",
+                b"> <Record>\n",
+                b"first\xfe\n",
+                b"\n",
+                b"$$$$\n",
+            ]
+        )
+    )
+    iterator = block.iter_records()
+    del block
+
+    record = next(iterator)
+
+    assert record == (b"Record", b"first\xfe")
+
+
 @pytest.mark.xfail  # sendoff does not support metadata vals starting with $$$$
 def test_delimiter_record_mol_read(
     single_delimiter_record_mol_sdf: Pathy,
