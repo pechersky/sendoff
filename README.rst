@@ -28,13 +28,9 @@ that have multiline record values, or a "$$$$" molecule title.
 Native typing stubs
 -------------------
 
-The PyO3 extension stubs are generated from Rust signatures and documentation. After
-changing the Python-facing Rust API, regenerate ``sendoff/native.pyi`` from the repository
-root with:
-
-.. code-block:: console
-
-   maturin develop --features stubgen --generate-stubs --locked
-   black sendoff/native.pyi
-
-Do not edit ``sendoff/native.pyi`` manually.
+``sendoff/native.pyi`` is written by hand, because ``SDBlock`` is generic over
+``str`` and ``bytes`` (``SDBlock[str]`` from text paths, ``SDBlock[bytes]`` from
+bytes paths), which generated stubs cannot express. ``tests/test_stubs.py`` runs
+``mypy.stubtest`` against the built extension, so a signature that drifts from
+the Rust API fails the test suite. Update the stub's signatures and docstrings
+with any Python-facing Rust change.
