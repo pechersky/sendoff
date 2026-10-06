@@ -239,9 +239,12 @@ impl Block {
         if data.last() != Some(&b'\n') {
             data.push(b'\n');
         }
-        let title_end = memchr(b'\n', &data).map_or(data.len(), |index| index + 1);
-        let body_end = delimiter.map_or(data.len(), |offset| offset.max(title_end));
-        let mdl_end = mdl_end(&data, title_end, body_end).unwrap_or(body_end);
+        let BlockView {
+            title_end,
+            mdl_end,
+            body_end,
+            ..
+        } = BlockView::new(&data, delimiter);
         if data[body_end..] != *TRAILER {
             data.truncate(body_end);
             data.extend_from_slice(TRAILER);
@@ -258,14 +261,24 @@ impl Block {
         self.data.len() - TRAILER.len()
     }
 
+    /// Read the block through a view.
+    pub fn view(&self) -> BlockView<'_> {
+        BlockView {
+            data: &self.data,
+            title_end: self.title_end,
+            mdl_end: self.mdl_end,
+            body_end: self.body_end(),
+        }
+    }
+
     /// The stripped title.
     pub fn title(&self, strip: Strip) -> &[u8] {
-        strip.trim(&self.data[..self.title_end])
+        self.view().title(strip)
     }
 
     /// The MDL lines after the title, through `M  END`, each ending in `\n`.
     pub fn mdl(&self) -> &[u8] {
-        &self.data[self.title_end..self.mdl_end]
+        self.view().mdl()
     }
 
     /// The stripped title line followed by the MDL lines: a mol block.
@@ -288,7 +301,7 @@ impl Block {
 
     /// The SD data lines, each ending in `\n`.
     pub fn metadata(&self) -> &[u8] {
-        &self.data[self.mdl_end..self.body_end()]
+        self.view().metadata()
     }
 
     /// The stripped title, the remaining lines, and `$$$$`.
@@ -445,7 +458,7 @@ impl Block {
         pos: &mut usize,
         strip: Strip,
     ) -> Result<Option<Record<'_>>, MissingFieldName> {
-        next_record(self.metadata(), pos, strip)
+        self.view().next_record(pos, strip)
     }
 
     /// Like `next_record`, but return only the name, skipping the value.
@@ -454,11 +467,7 @@ impl Block {
         pos: &mut usize,
         strip: Strip,
     ) -> Result<Option<&[u8]>, MissingFieldName> {
-        let found = match strip {
-            Strip::Bytes => next_record_by::<false>(self.metadata(), pos, trim),
-            Strip::Str => next_record_by::<false>(self.metadata(), pos, trim_str),
-        };
-        found.map(|record| record.map(|record| record.name))
+        self.view().next_record_name(pos, strip)
     }
 
     /// The format and atom and bond counts declared by the MDL header.
@@ -473,6 +482,71 @@ impl Block {
             .collect();
         let header: Vec<&str> = header.iter().map(AsRef::as_ref).collect();
         ctable::parse_header(&header).map(|(format, _, atoms, bonds)| (format, atoms, bonds))
+    }
+}
+
+/// A block read in place, from `Block::view` or a scanner's buffer.
+///
+/// `data` holds the title, MDL, and SD data lines, each ending in `\n`,
+/// then possibly the `$$$$` line.
+#[derive(Clone, Copy, Debug)]
+pub struct BlockView<'a> {
+    data: &'a [u8],
+    title_end: usize,
+    mdl_end: usize,
+    body_end: usize,
+}
+
+impl<'a> BlockView<'a> {
+    /// Find the title, MDL, and SD data in raw lines ending in `\n`, as
+    /// `Block::new` does; `delimiter` is the offset of a `$$$$` line.
+    pub fn new(data: &'a [u8], delimiter: Option<usize>) -> Self {
+        let title_end = memchr(b'\n', data).map_or(data.len(), |index| index + 1);
+        let body_end = delimiter.map_or(data.len(), |offset| offset.max(title_end));
+        let mdl_end = mdl_end(data, title_end, body_end).unwrap_or(body_end);
+        Self {
+            data,
+            title_end,
+            mdl_end,
+            body_end,
+        }
+    }
+
+    /// The stripped title.
+    pub fn title(&self, strip: Strip) -> &'a [u8] {
+        strip.trim(&self.data[..self.title_end])
+    }
+
+    /// The MDL lines after the title, through `M  END`, each ending in `\n`.
+    pub fn mdl(&self) -> &'a [u8] {
+        &self.data[self.title_end..self.mdl_end]
+    }
+
+    /// The SD data lines, each ending in `\n`.
+    pub fn metadata(&self) -> &'a [u8] {
+        &self.data[self.mdl_end..self.body_end]
+    }
+
+    /// Parse the next record at or after `*pos` in the SD data.
+    pub fn next_record(
+        &self,
+        pos: &mut usize,
+        strip: Strip,
+    ) -> Result<Option<Record<'a>>, MissingFieldName> {
+        next_record(self.metadata(), pos, strip)
+    }
+
+    /// Like `next_record`, but return only the name, skipping the value.
+    pub fn next_record_name(
+        &self,
+        pos: &mut usize,
+        strip: Strip,
+    ) -> Result<Option<&'a [u8]>, MissingFieldName> {
+        let found = match strip {
+            Strip::Bytes => next_record_by::<false>(self.metadata(), pos, trim),
+            Strip::Str => next_record_by::<false>(self.metadata(), pos, trim_str),
+        };
+        found.map(|record| record.map(|record| record.name))
     }
 }
 

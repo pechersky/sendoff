@@ -2,15 +2,17 @@
 //!
 //! The scanner owns a buffer that its caller refills on demand, so the same
 //! search serves file reads, Python `read()` chunks, and Python line
-//! iterables. Each block is copied out once into its own `Block`. The buffer
-//! stays initialized up to its high-water mark, so refills write into it
-//! without zero-filling first.
+//! iterables. Each block is copied out once into its own `Block`, or read in
+//! place as a `BlockView` by callers that keep nothing. The buffer stays
+//! initialized up to its high-water mark, so refills write into it without
+//! zero-filling first.
 
+use std::ops::Range;
 use std::sync::LazyLock;
 
 use memchr::{memchr, memmem};
 
-use crate::core::block::Block;
+use crate::core::block::{Block, BlockView};
 
 static DELIMITER: LazyLock<memmem::Finder<'static>> =
     LazyLock::new(|| memmem::Finder::new(b"\n$$$$"));
@@ -38,24 +40,56 @@ impl Scanner {
     /// be its first line; trailing input without a delimiter is a final block.
     pub fn next_block<E>(
         &mut self,
-        mut fill: impl FnMut(&mut Tail<'_>) -> Result<bool, E>,
+        fill: impl FnMut(&mut Tail<'_>) -> Result<bool, E>,
     ) -> Result<Option<Block>, E> {
+        Ok(self.next_span(fill)?.map(|span| self.block(span)))
+    }
+
+    /// Like `next_block`, but view the block in the scanner's buffer, valid
+    /// until the next call, instead of copying it.
+    pub fn next_view<E>(
+        &mut self,
+        fill: impl FnMut(&mut Tail<'_>) -> Result<bool, E>,
+    ) -> Result<Option<BlockView<'_>>, E> {
+        Ok(self.next_span(fill)?.map(|span| self.view(span)))
+    }
+
+    /// Return the next block's place in the buffer, filling as needed.
+    pub fn next_span<E>(
+        &mut self,
+        mut fill: impl FnMut(&mut Tail<'_>) -> Result<bool, E>,
+    ) -> Result<Option<Span>, E> {
         loop {
-            if let Some(block) = self.take_block() {
-                return Ok(Some(block));
+            if let Some(span) = self.take_span() {
+                return Ok(Some(span));
             }
             if self.eof {
                 return Ok(None);
             }
             self.compact();
-            self.eof = fill(&mut Tail {
+            let mut tail = Tail {
                 buf: &mut self.buf,
                 end: &mut self.end,
-            })?;
+            };
+            self.eof = fill(&mut tail)?;
+            if self.eof && *tail.end > 0 && tail.buf[*tail.end - 1] != b'\n' {
+                // Views see the newline `Block::new` gives unterminated input.
+                tail.extend(b"\n");
+            }
         }
     }
 
-    fn take_block(&mut self) -> Option<Block> {
+    /// View a block returned by the last `next_span` call.
+    pub fn view(&self, span: Span) -> BlockView<'_> {
+        BlockView::new(&self.buf[span.range], span.delimiter)
+    }
+
+    /// Copy a block returned by the last `next_span` call.
+    pub fn block(&self, span: Span) -> Block {
+        Block::new(self.buf[span.range].to_vec(), span.delimiter)
+    }
+
+    fn take_span(&mut self) -> Option<Span> {
         let buf = &self.buf[..self.end];
         let available = buf.len() - self.pos;
         if available == 0 || (available < 4 && !self.eof) {
@@ -82,13 +116,15 @@ impl Scanner {
         Some(self.emit(end, Some(start)))
     }
 
-    fn emit(&mut self, end: usize, delimiter: Option<usize>) -> Block {
-        let data = self.buf[self.pos..end].to_vec();
-        let delimiter = delimiter.map(|start| start - self.pos);
+    fn emit(&mut self, end: usize, delimiter: Option<usize>) -> Span {
+        let span = Span {
+            range: self.pos..end,
+            delimiter: delimiter.map(|start| start - self.pos),
+        };
         self.pos = end;
         self.search_from = end;
         self.delimiter = None;
-        Block::new(data, delimiter)
+        span
     }
 
     fn compact(&mut self) {
@@ -103,6 +139,14 @@ impl Scanner {
         }
         self.pos = 0;
     }
+}
+
+/// A block's bytes in the scanner's buffer and the offset of its `$$$$`
+/// line within them, valid until the scanner is next filled.
+#[derive(Clone, Debug)]
+pub struct Span {
+    range: Range<usize>,
+    delimiter: Option<usize>,
 }
 
 /// Parse `data` as one block ending at its first `$$$$` line, if any.
@@ -319,6 +363,45 @@ mod tests {
         );
         for chunk in 1..input.len() {
             assert_eq!(split(input, chunk), expected, "chunk {chunk}");
+        }
+    }
+
+    #[test]
+    fn views_read_what_blocks_copy() {
+        type Parts = (Vec<u8>, Vec<u8>, Vec<u8>, Vec<Vec<u8>>);
+        fn parts(view: BlockView<'_>) -> Parts {
+            let (mut pos, mut names) = (0, Vec::new());
+            while let Some(name) = view.next_record_name(&mut pos, Strip::Bytes).unwrap() {
+                names.push(name.to_vec());
+            }
+            let title = view.title(Strip::Bytes).to_vec();
+            (title, view.mdl().to_vec(), view.metadata().to_vec(), names)
+        }
+        let input = b"a\nM  END\n> <X>\n1\n\n$$$$\n$$$$x\nb\n> <Y>\n\n$$$$  \nd\nM  END\n> <Z>\n2";
+        for chunk in 1..=input.len() {
+            let feed = |offset: &mut usize, tail: &mut Tail<'_>| {
+                let end = (*offset + chunk).min(input.len());
+                tail.extend(&input[*offset..end]);
+                *offset = end;
+                Ok::<_, ()>(*offset == input.len())
+            };
+            let (mut views, mut blocks) = (Scanner::default(), Scanner::default());
+            let (mut view_offset, mut block_offset) = (0, 0);
+            loop {
+                let view = views
+                    .next_view(|tail| feed(&mut view_offset, tail))
+                    .unwrap();
+                let block = blocks
+                    .next_block(|tail| feed(&mut block_offset, tail))
+                    .unwrap();
+                match (view, block) {
+                    (Some(view), Some(block)) => {
+                        assert_eq!(parts(view), parts(block.view()), "chunk {chunk}");
+                    }
+                    (None, None) => break,
+                    _ => panic!("chunk {chunk}: block counts differ"),
+                }
+            }
         }
     }
 
