@@ -493,6 +493,9 @@ impl PySDRecordIterator {
 }
 
 /// Handle a single molecule block from an SD file.
+///
+/// `SDBlock[str]` blocks come from text input and `SDBlock[bytes]` blocks
+/// from binary input; names, values, and lines have the block's type.
 #[pyclass(name = "SDBlock", module = "sendoff.native")]
 pub(crate) struct PySDBlock {
     block: Block,
@@ -555,16 +558,24 @@ impl PySDBlock {
 
     /// Parse SDBlocks from homogeneous str or bytes lines or a file object.
     ///
-    /// File objects are read in large chunks with `read1`, when available,
-    /// or `read`, instead of line by line.
+    /// File objects are read in 1 MiB chunks with `read1`, when available,
+    /// or `read`, so the handle's position runs ahead of the blocks
+    /// produced. Line iterables are consumed only up to each block's `$$$$`
+    /// line, and the iterator does not close them.
     ///
     /// Args:
-    ///     lines: an Iterable of str or bytes lines separated by the $$$$
+    ///     lines: homogeneous str or bytes lines separated by the `$$$$`
     ///         delimiter, or a text or binary file object
     ///
     /// Returns:
     ///     An iterator that produces owned SDBlocks as input is consumed
+    ///
+    /// Raises:
+    ///     TypeError: for a str or bytes argument; use `from_sdf` for those
     #[staticmethod]
+    #[pyo3(signature = (
+        lines: "Iterable[str] | Iterable[bytes] | _SupportsRead[str] | _SupportsRead[bytes]",
+    ) -> "_SDBlockIterator[Any]")]
     fn from_lines(lines: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
         let py = lines.py();
         if lines.is_instance_of::<PyString>() || lines.is_instance_of::<PyBytes>() {
@@ -592,8 +603,15 @@ impl PySDBlock {
     ///     sdf: a molblock or one SDF record, as str or bytes
     ///     records: SD data to append after any in `sdf`, as a mapping or
     ///         an iterable of (name, value) tuples of the same type
+    ///
+    /// Raises:
+    ///     ValueError: if `sdf` holds more than one block
+    ///     TypeError: if `sdf` is not str or bytes, or a record is not its type
     #[new]
-    #[pyo3(signature = (sdf, records=None))]
+    #[pyo3(signature = (
+        sdf: "AnyStr",
+        records: "Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]] | None" = None,
+    ) -> "SDBlock[AnyStr]")]
     fn new(sdf: &Bound<'_, PyAny>, records: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
         let Some((kind, bytes)) = bytes_of(sdf)? else {
             return Err(PyTypeError::new_err(
@@ -631,7 +649,11 @@ impl PySDBlock {
     ///
     /// Returns:
     ///     An iterator of SDBlocks of the input type
+    ///
+    /// Raises:
+    ///     TypeError: if `sdf` is not str or bytes
     #[staticmethod]
+    #[pyo3(signature = (sdf: "str | bytes") -> "_SDBlockIterator[Any]")]
     fn from_sdf(sdf: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
         let Some((kind, _)) = bytes_of(sdf)? else {
             return Err(PyTypeError::new_err(
@@ -649,13 +671,20 @@ impl PySDBlock {
         ))
     }
 
-    /// Return the stripped molecule title in the input type.
+    /// Return the molecule title in the input type.
+    ///
+    /// Titles, record names, and record values are stripped as `str.strip()`
+    /// does for str blocks and as `bytes.strip()` does for bytes blocks.
     #[getter]
     fn title<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.kind.value(py, self.block.title(self.kind.strip()))
     }
 
     /// Replace the title line.
+    ///
+    /// Raises:
+    ///     ValueError: if the title contains a line break
+    ///     TypeError: if the title is not the block's type
     #[setter(title)]
     fn set_title(&mut self, title: &Bound<'_, PyAny>) -> PyResult<()> {
         let title = self.arg_bytes(title, "titles")?;
@@ -678,6 +707,14 @@ impl PySDBlock {
     }
 
     /// Replace the title line and CTAB, keeping the SD data.
+    ///
+    /// For example, `block.molblock = Chem.MolToMolBlock(mol)`. Text
+    /// molblocks have CRLF and CR line endings translated to LF.
+    ///
+    /// Raises:
+    ///     ValueError: if the molblock has no `M  END` line, has more than
+    ///         whitespace after it, or has a line starting with `$$$$`
+    ///     TypeError: if the molblock is not the block's type
     #[setter(molblock)]
     fn set_molblock(&mut self, molblock: &Bound<'_, PyAny>) -> PyResult<()> {
         let molblock = self.arg_bytes(molblock, "molblocks")?;
@@ -692,11 +729,15 @@ impl PySDBlock {
 
     /// Return whether `needle` occurs in the CTAB text after the title.
     ///
-    /// Like `needle in "\\n".join(block.mdl)` without building the lines;
+    /// Like `needle in "\n".join(block.mdl)` without building the lines;
     /// text blocks are searched as UTF-8 without being decoded.
     ///
     /// Args:
     ///     needle: substring in the block's type
+    ///
+    /// Raises:
+    ///     TypeError: if `needle` is not the block's type
+    #[pyo3(signature = (needle: "AnyStr"))]
     fn mdl_contains(&self, needle: &Bound<'_, PyAny>) -> PyResult<bool> {
         let needle = self.arg_bytes(needle, "needles")?;
         let mdl = self.block.mdl();
@@ -704,8 +745,10 @@ impl PySDBlock {
         Ok(memchr::memmem::find(mdl, needle).is_some())
     }
 
-    /// Return the CTAB lines after the title, through `M  END`, without
-    /// line endings.
+    /// Return the CTAB lines after the title, through `M  END`.
+    ///
+    /// Lines have no line endings, like `str.splitlines()`, so
+    /// `"\n".join(block.mdl)` is the CTAB; `block.molblock` adds the title.
     #[getter]
     fn mdl<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         let lines = block::lines(self.block.mdl())
@@ -717,7 +760,9 @@ impl PySDBlock {
     /// Return all SD data records.
     ///
     /// Returns:
-    ///     Tuples of record name and value in the input type
+    ///     Tuples of record name and value in the input type; multiline
+    ///     values include their inner newlines
+    #[pyo3(signature = () -> "list[tuple[AnyStr, AnyStr]]")]
     fn records<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let list = PyList::empty(py);
         let mut pos = 0;
@@ -733,7 +778,10 @@ impl PySDBlock {
         })
     }
 
-    /// Lazily iterate over the SD data records.
+    /// Lazily iterate over SD data records in input order.
+    ///
+    /// Names and values are owned and have the block's type.
+    #[pyo3(signature = () -> "_SDRecordIterator[AnyStr]")]
     fn iter_records(slf: Bound<'_, Self>) -> PySDRecordIterator {
         PySDRecordIterator {
             block: slf.unbind(),
@@ -753,7 +801,10 @@ impl PySDBlock {
     ///
     /// Returns:
     ///     The record value in the block's type, or `default`
-    #[pyo3(signature = (name, default=None))]
+    ///
+    /// Raises:
+    ///     TypeError: if `name` is not the block's type
+    #[pyo3(signature = (name: "AnyStr", default: "_T | None" = None) -> "AnyStr | _T | None")]
     fn get<'py>(
         &self,
         name: &Bound<'py, PyAny>,
@@ -782,6 +833,7 @@ impl PySDBlock {
     /// Return the records as a dict, later duplicates winning.
     ///
     /// Equivalent to `dict(block.records())`.
+    #[pyo3(signature = () -> "dict[AnyStr, AnyStr]")]
     fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         let strip = self.kind.strip();
@@ -804,6 +856,7 @@ impl PySDBlock {
     /// Return the block as SDF text ending with $$$$, in the input type.
     ///
     /// The inverse of `SDBlock(sdf)`, and what `write` writes.
+    #[pyo3(signature = () -> "AnyStr")]
     fn to_sdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.kind
             .value(py, &self.block.serialized(self.kind.strip()))
@@ -811,8 +864,12 @@ impl PySDBlock {
 
     /// Write the block, ending with $$$$, to a file-like handle.
     ///
+    /// Every line ends with "\n", and the block is written in one `write`
+    /// call.
+    ///
     /// Args:
     ///     outh: a text or binary file-like handle matching the input type
+    #[pyo3(signature = (outh: "_SupportsWrite[AnyStr]"))]
     fn write(&self, outh: &Bound<'_, PyAny>) -> PyResult<()> {
         let py = outh.py();
         let output = self.block.serialized(self.kind.strip());
@@ -825,6 +882,10 @@ impl PySDBlock {
     /// Args:
     ///     record_name: field name
     ///     value: field value, with no terminating newline
+    ///
+    /// Raises:
+    ///     TypeError: if `record_name` or `value` is not the block's type
+    #[pyo3(signature = (record_name: "AnyStr", value: "AnyStr"))]
     fn append_record(
         &mut self,
         record_name: &Bound<'_, PyAny>,
@@ -844,6 +905,10 @@ impl PySDBlock {
     /// Args:
     ///     name: record name in the block's type
     ///     value: record value in the block's type
+    ///
+    /// Raises:
+    ///     TypeError: if `name` or `value` is not the block's type
+    #[pyo3(signature = (name: "AnyStr", value: "AnyStr"))]
     fn set_record(&mut self, name: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let name = self.arg_bytes(name, "record names")?;
         let value = self.arg_bytes(value, "values")?;
@@ -859,6 +924,10 @@ impl PySDBlock {
     ///
     /// Returns:
     ///     How many records were removed
+    ///
+    /// Raises:
+    ///     TypeError: if `name` is not the block's type
+    #[pyo3(signature = (name: "AnyStr"))]
     fn remove_record(&mut self, name: &Bound<'_, PyAny>) -> PyResult<usize> {
         let name = self.arg_bytes(name, "record names")?;
         self.block
@@ -871,6 +940,10 @@ impl PySDBlock {
     /// Args:
     ///     records: a mapping, or an iterable of (name, value) tuples, in
     ///         the block's type
+    ///
+    /// Raises:
+    ///     TypeError: if a name or value is not the block's type
+    #[pyo3(signature = (records: "Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]]"))]
     fn replace_records(&mut self, records: &Bound<'_, PyAny>) -> PyResult<()> {
         let pairs = record_pairs(records)?;
         let records = pairs
@@ -888,7 +961,12 @@ impl PySDBlock {
 
     /// Parse out the underlying CTable object from a text SDBlock.
     ///
-    /// Byte-backed SDBlocks cannot be converted without decoding their title.
+    /// Returns:
+    ///     The CTable titled with this block's title, parsed from its MDL
+    ///     lines without validation
+    ///
+    /// Raises:
+    ///     NotImplementedError: for byte-backed SDBlocks
     fn ctable(&self, py: Python<'_>) -> PyResult<PyCTable> {
         self.require_text()?;
         let mut lines = vec![decode(py, self.block.title(Strip::Str))?.to_owned()];
@@ -899,12 +977,16 @@ impl PySDBlock {
     }
 
     /// Get the number of atoms declared by the counts line.
+    ///
+    /// The count may differ from the number of atom lines.
     fn num_atoms(&self) -> PyResult<i64> {
         let (_, atoms, _) = self.block.counts().map_err(error_to_py)?;
         Ok(atoms)
     }
 
     /// Get the number of bonds declared by the counts line.
+    ///
+    /// The count may differ from the number of bond lines.
     fn num_bonds(&self) -> PyResult<i64> {
         let (_, _, bonds) = self.block.counts().map_err(error_to_py)?;
         Ok(bonds)
@@ -912,7 +994,10 @@ impl PySDBlock {
 
     /// Renumber atom and bond indices to be 1-indexed and in order.
     ///
-    /// Byte-backed blocks raise `NotImplementedError`.
+    /// Uses the CTable renumbering and replaces this block's MDL lines.
+    ///
+    /// Raises:
+    ///     NotImplementedError: for byte-backed SDBlocks
     fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
         let mut ctable = self.ctable(py)?;
         ctable.renumber_indices_for_block(py)?;
@@ -984,6 +1069,10 @@ impl Sink<'_> {
 /// Returns:
 ///     The number of blocks written
 #[pyfunction]
+#[pyo3(signature = (
+    dest: "str | bytes | os.PathLike[str] | os.PathLike[bytes] | _SupportsWrite[Any]",
+    blocks: "Iterable[SDBlock[Any]]",
+))]
 pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> PyResult<usize> {
     let py = dest.py();
     let mut sink = match dest.getattr(intern!(py, "write")) {
@@ -1036,6 +1125,7 @@ pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> P
 /// The file is opened on the first `next()` and read in chunks without
 /// holding the GIL. str paths give str values decoded as UTF-8 on access,
 /// with universal newlines; bytes paths give bytes split on b"\n" only.
+/// Use a bytes path for feeds that are not valid UTF-8.
 ///
 /// Args:
 ///     path: a str, bytes, or os.PathLike path
@@ -1043,6 +1133,7 @@ pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> P
 /// Returns:
 ///     An iterator of SDBlocks; `close()` closes the file early
 #[pyfunction]
+#[pyo3(signature = (path: "str | bytes | os.PathLike[str] | os.PathLike[bytes]") -> "_SDBlockIterator[Any]")]
 pub(crate) fn parse_sdf(path: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
     let os = PyModule::import(path.py(), "os")?;
     let filename = os.call_method1("fspath", (path,))?;

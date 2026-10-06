@@ -25,6 +25,7 @@ impl PyCTable {
     ///         The title line is parsed in by the SDBlock, and should
     ///         be supplied as the first in lines.
     #[new]
+    #[pyo3(signature = (lines: "Iterable[str]"))]
     fn new(lines: &Bound<'_, PyAny>) -> PyResult<Self> {
         let lines = lines
             .try_iter()?
