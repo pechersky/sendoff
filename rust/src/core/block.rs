@@ -578,19 +578,22 @@ fn next_record_by<'a, const VALUE: bool>(
             continue;
         }
         let Some(rest) = header.strip_prefix(b"> ") else {
-            while *pos < metadata.len() && !trim(next_line(metadata, pos)).is_empty() {}
+            while *pos < metadata.len() && !is_blank(next_line(metadata, pos), &trim) {}
             continue;
         };
         let name = record_name(rest, &trim)?;
         let mut value: Cow<'a, [u8]> = Cow::Borrowed(&[]);
         let mut first = true;
         while *pos < metadata.len() {
+            if !VALUE {
+                if is_blank(next_line(metadata, pos), &trim) {
+                    break;
+                }
+                continue;
+            }
             let line = trim(next_line(metadata, pos));
             if line.is_empty() {
                 break;
-            }
-            if !VALUE {
-                continue;
             }
             if first {
                 value = Cow::Borrowed(line);
@@ -604,6 +607,16 @@ fn next_record_by<'a, const VALUE: bool>(
         return Ok(Some(Record { name, value, start }));
     }
     Ok(None)
+}
+
+/// Whether `line` strips to nothing, deciding most lines by their first
+/// byte: printable ASCII is whitespace for neither `str` nor `bytes`.
+#[inline(always)]
+fn is_blank(line: &[u8], trim: &impl Fn(&[u8]) -> &[u8]) -> bool {
+    match line.first() {
+        Some(&byte) if byte > b' ' && byte < 0x80 => false,
+        _ => trim(line).is_empty(),
+    }
 }
 
 /// Extract `name` from the text after `> ` in a `> <name>` header.
