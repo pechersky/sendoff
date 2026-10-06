@@ -69,6 +69,24 @@ Edit blocks and write them back:
 ``write_sdf`` to a path writes in large chunks with the GIL released, so prefer
 it to a ``block.write`` loop.
 
+Release wheels
+--------------
+
+Build release wheels with profile-guided optimization on top of the release
+profile's fat LTO:
+
+.. code-block:: console
+
+   rustup component add llvm-tools
+   scripts/pgo-build --out dist
+
+It builds an instrumented wheel, runs it over a synthetic SDF it generates
+(heterogeneous records, V2000 and V3000, str and bytes, CRLF), and rebuilds
+with that profile; the result is reproducible. Real catalog and ADMET files
+stay held out: on them record access (``get``, ``in``, ``len``, ``names``,
+``to_dict``) got 5-18% faster and scan-bound work stayed within noise.
+``maturin build --release`` still makes a correct, LTO-only wheel.
+
 Native typing stubs
 -------------------
 
