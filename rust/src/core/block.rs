@@ -232,8 +232,9 @@ impl Block {
     /// `delimiter` is the offset of a trailing `$$$$` line, if any. The MDL
     /// runs through the first `M  END` line and the SD data runs to the
     /// delimiter; without `M  END`, the MDL runs to the delimiter and there is
-    /// no SD data. (sendoff < 1.0 kept the delimiter line in that MDL, so each
-    /// write added a `$$$$` line that read back as a spurious block.)
+    /// no SD data. (Pure-Python sendoff 0.1.x kept the delimiter line in that
+    /// MDL, so each write added a `$$$$` line that read back as a spurious
+    /// block.)
     pub fn new(mut data: Vec<u8>, delimiter: Option<usize>) -> Self {
         if data.last() != Some(&b'\n') {
             data.push(b'\n');

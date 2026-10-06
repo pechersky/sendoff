@@ -740,7 +740,7 @@ def test_text_strips_like_str_and_bytes_like_bytes() -> None:
     """Text blocks strip str.strip() whitespace; bytes blocks bytes.strip().
 
     A value line holding only Unicode whitespace is blank in text blocks, as
-    with str.strip() in sendoff < 1.0, so it ends the record.
+    with str.strip() in pure-Python sendoff 0.1.x, so it ends the record.
     """
     text_block = next(
         SDBlock.from_lines(
