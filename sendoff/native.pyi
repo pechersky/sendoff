@@ -333,20 +333,6 @@ class SDBlock(Generic[AnyStr]):
         `block.title + "\\n" + block.mdl` is `block.molblock`.
         """
 
-    def mdl_contains(self, /, needle: AnyStr) -> bool:
-        """
-        Return whether `needle` occurs in the CTAB after the title.
-
-        Equivalent to `needle in block.mdl` without building the CTAB value;
-        text blocks are searched as UTF-8 without being decoded.
-
-        Args:
-            needle: substring in the block's type
-
-        Raises:
-            TypeError: if `needle` is not the block's type
-        """
-
     @property
     def molblock(self, /) -> AnyStr:
         """

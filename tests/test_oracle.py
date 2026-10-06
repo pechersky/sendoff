@@ -149,9 +149,6 @@ def assert_blocks_match(
         assert block.molblock == expected.molblock(), context
         newline: Any = "\n" if text else b"\n"
         assert block.mdl == expected.molblock().partition(newline)[2], context
-        for needle in ["M  END", "END\n", "a", "\u3000", "", "\n"]:
-            key = needle if text else needle.encode()
-            assert block.mdl_contains(key) == (key in block.mdl), context
         names = outcome(lambda: [name for name, _ in expected.records()])
         assert outcome(block.names) == names, context
         count = len(names) if isinstance(names, list) else names

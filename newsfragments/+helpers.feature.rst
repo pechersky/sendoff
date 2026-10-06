@@ -6,7 +6,6 @@ New ``SDBlock`` helpers for common tasks:
   ``dict(block.records())``, and ``iter_records()`` iterates them lazily.
 - ``molblock`` returns the title and CTAB for ``Chem.MolFromMolBlock``.
   Assigning it swaps the structure and keeps the SD data.
-- ``mdl_contains(needle)`` searches the CTAB without building ``mdl``.
 - ``title`` is assignable, and ``set_record``, ``remove_record``, and
   ``replace_records`` edit the SD data.
 - ``SDBlock(sdf, records=None)`` parses one block, such as an RDKit molblock,

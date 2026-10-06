@@ -42,7 +42,6 @@ Usage
        block.records()  # [(name, value), ...] in file order
        "ID" in block, len(block), block.names()  # names only, no values built
        "V3000" in block.mdl  # the CTAB after the title, through M  END
-       block.mdl_contains("V3000")  # the same search, without building it
        mol = Chem.MolFromMolBlock(block.molblock)
 
 Many SDFs do not carry the same records on every block: ADMET Predictor

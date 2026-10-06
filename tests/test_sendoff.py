@@ -635,12 +635,6 @@ def test_mdl_is_the_ctab_text() -> None:
     no_end = next(SDBlock.from_lines(["t\n", "  prog\n", "> <A>\n", "$$$$\n"]))
     assert no_end.mdl == "  prog\n> <A>\n"
 
-    for needle in ["prog\n\nM  END", "M  END\n", "title", "A", ""]:
-        assert block.mdl_contains(needle) == (needle in block.mdl), needle
-    assert byte_block.mdl_contains(b"prog\r")
-    with pytest.raises(TypeError, match="needles must be bytes"):
-        byte_block.mdl_contains("prog")  # type: ignore[arg-type]
-
 
 def test_names_len_and_contains_skip_values() -> None:
     """names(), len() and in read record names without building values."""

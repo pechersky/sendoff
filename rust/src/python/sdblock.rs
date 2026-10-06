@@ -727,22 +727,6 @@ impl PySDBlock {
             .map_err(|error| PyValueError::new_err(error.to_string()))
     }
 
-    /// Return whether `needle` occurs in the CTAB after the title.
-    ///
-    /// Equivalent to `needle in block.mdl` without building the CTAB value;
-    /// text blocks are searched as UTF-8 without being decoded.
-    ///
-    /// Args:
-    ///     needle: substring in the block's type
-    ///
-    /// Raises:
-    ///     TypeError: if `needle` is not the block's type
-    #[pyo3(signature = (needle: "AnyStr"))]
-    fn mdl_contains(&self, needle: &Bound<'_, PyAny>) -> PyResult<bool> {
-        let needle = self.arg_bytes(needle, "needles")?;
-        Ok(memchr::memmem::find(self.block.mdl(), needle).is_some())
-    }
-
     /// Return the CTAB after the title, through `M  END`, as one value.
     ///
     /// Every line ends in `\n`, so `needle in block.mdl` searches the CTAB,

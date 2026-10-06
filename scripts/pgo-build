@@ -199,7 +199,6 @@ def train_kind(path: str, binary: bool, whole: bool = True) -> None:
     lines: str | bytes = b"1\n2" if binary else "1\n2"
     [b.title for b in parse_sdf(arg)]
     sum(needle in b.mdl for b in parse_sdf(arg))
-    sum(b.mdl_contains(needle) for b in parse_sdf(arg))
     [b.molblock for b in parse_sdf(arg)]
     [b.records() for b in parse_sdf(arg)]
     [list(b.iter_records()) for b in parse_sdf(arg)]
