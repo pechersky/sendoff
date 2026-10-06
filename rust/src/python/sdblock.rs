@@ -17,8 +17,14 @@ use crate::core::block::{self, Block, Record, Strip};
 use crate::core::scan::{Scanner, TRANSLATE_SLACK, Tail, single_block, translate_newlines};
 use crate::python::ctable::{PyCTable, error_to_py};
 
-/// Characters or bytes requested per `read` call.
-const CHUNK: usize = 1 << 20;
+/// Characters or bytes requested per `read` call. Blocks larger than this
+/// grow the scanner's buffer. Against 1 MiB, 128 KiB was as fast for paths
+/// and buffers, 25-30% faster for text file objects, and used less memory.
+const CHUNK: usize = 128 << 10;
+
+/// Bytes buffered before each write to a path. 64 KiB to 1 MiB timed the
+/// same, and 4 MiB was slower.
+const WRITE_CHUNK: usize = 256 << 10;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -559,7 +565,7 @@ impl PySDBlock {
 
     /// Parse SDBlocks from homogeneous str or bytes lines or a file object.
     ///
-    /// File objects are read in 1 MiB chunks with `read1`, when available,
+    /// File objects are read in 128 KiB chunks with `read1`, when available,
     /// or `read`, so the handle's position runs ahead of the blocks
     /// produced. Line iterables are consumed only up to each block's `$$$$`
     /// line, and the iterator does not close them.
@@ -1158,8 +1164,8 @@ impl Sink<'_> {
 
 /// Write SDBlocks to a path or a file object, and return how many.
 ///
-/// Blocks are written as `SDBlock.write` would, but a MiB or so at a
-/// time: to a path without holding the GIL, or to a file object with one
+/// Blocks are written as `SDBlock.write` would, but 64-256 KiB at a time:
+/// to a path without holding the GIL, or to a file object with one
 /// `write` call per chunk, as str for text blocks or bytes for byte-backed
 /// ones. Text blocks must be valid UTF-8.
 ///
@@ -1194,7 +1200,7 @@ pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> P
     // Chunks for a file object become new Python objects, which stay
     // cheaper below malloc's mmap threshold.
     let limit = match sink {
-        Sink::File { .. } => CHUNK,
+        Sink::File { .. } => WRITE_CHUNK,
         Sink::Handle { .. } => 64 << 10,
     };
     let mut chunk = Vec::with_capacity(2 * limit);

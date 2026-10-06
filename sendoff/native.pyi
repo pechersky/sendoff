@@ -280,7 +280,7 @@ class SDBlock(Generic[AnyStr]):
         """
         Parse SDBlocks from homogeneous str or bytes lines or a file object.
 
-        File objects are read in 1 MiB chunks with `read1`, when available,
+        File objects are read in 128 KiB chunks with `read1`, when available,
         or `read`, so the handle's position runs ahead of the blocks
         produced. Line iterables are consumed only up to each block's `$$$$`
         line, and the iterator does not close them.
@@ -568,8 +568,8 @@ def write_sdf(dest: _SupportsWrite[AnyStr], blocks: Iterable[SDBlock[AnyStr]]) -
     """
     Write SDBlocks to a path or a file object, and return how many.
 
-    Blocks are written as `SDBlock.write` would, but a MiB or so at a
-    time: to a path without holding the GIL, or to a file object with one
+    Blocks are written as `SDBlock.write` would, but 64-256 KiB at a time:
+    to a path without holding the GIL, or to a file object with one
     `write` call per chunk, as str for text blocks or bytes for byte-backed
     ones. Text blocks must be valid UTF-8.
 

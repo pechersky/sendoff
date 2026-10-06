@@ -813,19 +813,27 @@ def test_from_sdf_parses_like_a_file(tmp_path: Path) -> None:
     Args:
         tmp_path: pytest fixture of a temporary directory
     """
-    # The title's CRLF straddles the 1 MiB chunk size.
-    title = "x" * ((1 << 20) - 1)
-    text = f"{title}\r\nM  END\r> <A>\r\n1\n\n$$$$\r\nt\nM  END\n$$$$\n"
+    # The title's CRLF straddles the 128 KiB chunk size, and the second
+    # block's value spans several chunks.
+    title = "x" * ((128 << 10) - 1)
+    value = "v" * (1 << 20)
+    text = f"{title}\r\nM  END\r> <A>\r\n1\n\n$$$$\r\nt\nM  END\n> <B>\n{value}\n$$$$\n"
     path = tmp_path / "input.sdf"
     path.write_text(text, newline="")
     data = text.encode()
-    assert [b.to_sdf() for b in SDBlock.from_sdf(text)] == [
-        b.to_sdf() for b in parse_sdf(path)
+    expected = [b.to_sdf() for b in SDBlock.from_sdf(text)]
+    assert [b.to_sdf() for b in parse_sdf(path)] == expected
+    with path.open() as handle:
+        assert [b.to_sdf() for b in SDBlock.from_lines(handle)] == expected
+    expected_bytes = [b.to_sdf() for b in SDBlock.from_sdf(data)]
+    assert [b.to_sdf() for b in parse_sdf(os.fsencode(path))] == expected_bytes
+    assert [b.to_sdf() for b in SDBlock.from_lines(io.BytesIO(data))] == (
+        expected_bytes
+    )
+    assert [b.records() for b in SDBlock.from_sdf(text)] == [
+        [("A", "1")],
+        [("B", value)],
     ]
-    assert [b.to_sdf() for b in SDBlock.from_sdf(data)] == [
-        b.to_sdf() for b in parse_sdf(os.fsencode(path))
-    ]
-    assert [b.records() for b in SDBlock.from_sdf(text)] == [[("A", "1")], []]
     assert list(SDBlock.from_sdf("")) == []
     with pytest.raises(TypeError, match="use SDBlock.from_sdf"):
         SDBlock.from_lines("text")
