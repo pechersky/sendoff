@@ -77,6 +77,7 @@ Migrating from 0.1.x
 .. code-block:: python
 
    "".join(block.mdl)  # block.mdl
+   any(s in line for line in block.mdl)  # s in block.mdl
    block.title + "\n" + "".join(block.mdl)  # block.molblock
    dict(block.records())  # block.to_dict()
    dict(block.records()).get(name)  # block.get(name)
@@ -87,6 +88,10 @@ Migrating from 0.1.x
    SDBlock.from_block_lines(lines)  # SDBlock("".join(lines))
    SDBlock.from_lines(text.splitlines(True))  # SDBlock.from_sdf(text)
    block.write(handle, with_newlines=True)  # block.write(handle)
+
+``block.mdl`` is now one string, so code that iterated it as lines still runs
+but walks characters: ``any(s in line for line in block.mdl)`` is always
+``False`` for a longer ``s``. Check every ``.mdl`` use.
 
 ``block.metadata`` is gone: edit records with ``set_record``,
 ``remove_record``, ``replace_records``, or ``append_record``. ``mdl`` is

@@ -3,7 +3,10 @@ The ``SDBlock`` API changed. Migrate 0.1.x code as follows:
 - ``"".join(block.mdl)`` becomes ``block.mdl``, one ``str`` (or ``bytes``) of
   the CTAB after the title through ``M  END``, each line ending in ``\n``.
   Iterate lines with ``block.mdl.splitlines(keepends=True)`` and search with
-  ``needle in block.mdl``.
+  ``needle in block.mdl``. Code that iterated lines still runs but walks
+  characters, so ``any(s in line for line in block.mdl)``,
+  ``islice(block.mdl, ...)``, and ``"\n".join(block.mdl)`` give wrong results
+  without raising: check every ``.mdl`` use.
 - ``block.title + "\n" + "".join(block.mdl)`` becomes ``block.molblock``.
   ``mdl`` is read-only; assign ``block.molblock`` to replace the structure.
 - ``block.metadata`` is gone. Read records with ``records()``, ``get``, or
