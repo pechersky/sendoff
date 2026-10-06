@@ -47,16 +47,8 @@ Usage
 
 Many SDFs do not carry the same records on every block: ADMET Predictor
 exports, for one, have hundreds of record names, some on only part of the
-blocks. Access is per block, so ``get`` and ``to_dict`` assume no fixed columns.
-Whole-file helpers read the blocks in place without building them:
-
-.. code-block:: python
-
-   from sendoff.sdblock import sdf_names, sdf_values
-
-   sdf_names("compounds.sdf")  # {name: how many blocks have it}, first seen first
-   sdf_values("compounds.sdf", "ID")  # [block.get("ID") for each block]
-   sdf_values("compounds.sdf", "ID", "")  # "" for blocks without an ID
+blocks. Access is per block, so ``get`` and ``to_dict`` assume no fixed columns;
+``Counter(n for b in parse_sdf(path) for n in b.names())`` surveys a file.
 
 Edit blocks and write them back:
 

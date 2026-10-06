@@ -30,8 +30,6 @@ __all__ = [
     "_SDBlockIterator",
     "_SDRecordIterator",
     "parse_sdf",
-    "sdf_names",
-    "sdf_values",
     "write_sdf",
     "__version__",
     "DEBUG_BUILD",
@@ -560,69 +558,6 @@ def parse_sdf(
 
     Raises:
         TypeError: if `mdl_contains` is not the path's type
-    """
-
-@overload
-def sdf_names(path: str | os.PathLike[str]) -> dict[str, int]: ...
-@overload
-def sdf_names(path: bytes | os.PathLike[bytes]) -> dict[bytes, int]: ...
-@overload
-def sdf_names(
-    path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-) -> dict[Any, int]:
-    """
-    Return how many blocks have each record name, in first-seen order.
-
-    Equivalent to `Counter(n for b in parse_sdf(path) for n in
-    dict.fromkeys(b.names()))`, without building blocks or values: a survey
-    of a file whose blocks need not share names.
-
-    Args:
-        path: a str, bytes, or os.PathLike path
-
-    Returns:
-        Record names in the path's type and their block counts
-
-    Raises:
-        ValueError: if a record header has no `<name>`
-    """
-
-@overload
-def sdf_values(path: str | os.PathLike[str], name: str) -> list[str | None]: ...
-@overload
-def sdf_values(
-    path: str | os.PathLike[str], name: str, default: _T
-) -> list[str | _T]: ...
-@overload
-def sdf_values(path: bytes | os.PathLike[bytes], name: bytes) -> list[bytes | None]: ...
-@overload
-def sdf_values(
-    path: bytes | os.PathLike[bytes], name: bytes, default: _T
-) -> list[bytes | _T]: ...
-@overload
-def sdf_values(
-    path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-    name: str | bytes,
-    default: Any = None,
-) -> list[Any]:
-    """
-    Return each block's last value of the record `name`, or `default`.
-
-    Equivalent to `[b.get(name, default) for b in parse_sdf(path)]`, but
-    reads the blocks in place and builds only the values found. Blocks need
-    not share names; those without the record give `default`.
-
-    Args:
-        path: a str, bytes, or os.PathLike path
-        name: record name in the path's type
-        default: the value for blocks without the record
-
-    Returns:
-        One value per block, in file order
-
-    Raises:
-        TypeError: if `name` is not the path's type
-        ValueError: if a record header has no `<name>`
     """
 
 @overload

@@ -14,13 +14,12 @@ from __future__ import annotations
 import io
 import os
 import tempfile
-from collections import Counter
 from typing import Any, Callable, Iterable, Union
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from sendoff.sdblock import SDBlock, parse_sdf, sdf_names, sdf_values
+from sendoff.sdblock import SDBlock, parse_sdf
 from tests.reference_sdblock import RefBlock, ref_from_lines
 
 ALPHABET = list("abXZ09 \t<>$-_.()é中\x1f\xa0\u2003\u3000")
@@ -392,58 +391,3 @@ def test_parse_sdf_matches_reference(lines: list[str]) -> None:
         assert_blocks_match(parse_sdf(path), text_reference, text=True)
         bytes_reference = list(ref_from_lines(io.BytesIO(data)))
         assert_blocks_match(parse_sdf(os.fsencode(path)), bytes_reference, text=False)
-
-
-def block_counts(blocks: list[RefBlock[Any]]) -> list[tuple[Any, int]]:
-    """Count the blocks having each record name, in first-seen order.
-
-    Args:
-        blocks: reference blocks
-
-    Returns:
-        Names and block counts.
-    """
-    names = (name for b in blocks for name in dict.fromkeys(dict(b.records())))
-    return list(Counter(names).items())
-
-
-@examples
-@given(sdf_lines())
-def test_whole_file_helpers_match_reference(lines: list[str]) -> None:
-    """sdf_values, sdf_names, and mdl_contains match per-block idioms.
-
-    Args:
-        lines: generated lines with endings
-    """
-    data = "".join(lines).encode()
-    with tempfile.TemporaryDirectory() as directory:
-        path = os.path.join(directory, "input.sdf")
-        with open(path, "wb") as handle:
-            handle.write(data)
-        with open(path, encoding="utf-8") as handle:
-            text_reference = list(ref_from_lines(handle))
-        bytes_reference = list(ref_from_lines(io.BytesIO(data)))
-        cases: list[tuple[Any, list[RefBlock[Any]], bool]] = [
-            (path, text_reference, True),
-            (os.fsencode(path), bytes_reference, False),
-        ]
-        for source, reference, text in cases:
-            for field in ["A", "B", " spaced name ", "multi<angle>", "missing"]:
-                key = field if text else field.encode()
-                assert outcome(lambda: sdf_values(source, key, 0)) == outcome(
-                    lambda: [dict(r.records()).get(key, 0) for r in reference]
-                ), field
-
-            assert outcome(lambda: list(sdf_names(source).items())) == outcome(
-                lambda: block_counts(reference)
-            )
-            newline: Any = "\n" if text else b"\n"
-            for needle in ["M  END", "END\n", "a", "\u3000", ""]:
-                key = needle if text else needle.encode()
-                kept = [
-                    r.serialize()
-                    for r in reference
-                    if key in r.molblock().partition(newline)[2]
-                ]
-                filtered = parse_sdf(source, mdl_contains=key)
-                assert [serialized(b, text) for b in filtered] == kept, needle
