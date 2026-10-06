@@ -1,8 +1,6 @@
 use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
-use std::collections::HashMap;
 use std::fs::File;
-use std::hash::{BuildHasherDefault, Hasher};
 use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
 
@@ -15,6 +13,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyIterator, PyList, PyString, PyTuple, PyType};
 
 use crate::core::block::{self, Block, Record, Strip};
+use crate::core::names::{NameCounts, NameMap};
 use crate::core::scan::{Scanner, TRANSLATE_SLACK, Tail, single_block, translate_newlines};
 use crate::python::ctable::{PyCTable, error_to_py};
 
@@ -62,26 +61,6 @@ const MAX_NAMES: usize = 4096;
 /// Longer names are rare and are not cached.
 const MAX_CACHED_NAME: usize = 64;
 
-/// A fast hash for short record names, eight bytes at a time.
-#[derive(Default)]
-struct NameHasher(u64);
-
-impl Hasher for NameHasher {
-    fn write(&mut self, bytes: &[u8]) {
-        for chunk in bytes.chunks(8) {
-            let mut word = [0; 8];
-            word[..chunk.len()].copy_from_slice(chunk);
-            self.0 = (self.0.rotate_left(5) ^ u64::from_le_bytes(word))
-                .wrapping_mul(0x517c_c1b7_2722_0a95);
-        }
-    }
-
-    fn finish(&self) -> u64 {
-        // Fold the well-mixed high bits into the low bits buckets use.
-        self.0 ^ (self.0 >> 32)
-    }
-}
-
 /// Marks no cached name: the start of a block, or an unknown successor.
 const NO_NAME: u32 = u32::MAX;
 
@@ -98,7 +77,7 @@ struct Name {
 /// by comparing bytes instead of hashing them, even when some records are
 /// missing or new.
 struct Names {
-    index: HashMap<Box<[u8]>, u32, BuildHasherDefault<NameHasher>>,
+    index: NameMap<u32>,
     names: Vec<Name>,
     /// The first name of the last block.
     first: u32,
@@ -107,7 +86,7 @@ struct Names {
 impl Default for Names {
     fn default() -> Self {
         Names {
-            index: HashMap::default(),
+            index: NameMap::default(),
             names: Vec::new(),
             first: NO_NAME,
         }
@@ -287,6 +266,15 @@ fn os_error(py: Python<'_>, error: std::io::Error, filename: &Py<PyAny>) -> PyEr
 }
 
 impl Source {
+    /// A path to open on the first read, for values of `kind`.
+    fn path(path: PathBuf, filename: Py<PyAny>, kind: Kind) -> Self {
+        Source::Path {
+            path,
+            filename,
+            text: kind == Kind::Text,
+        }
+    }
+
     /// Append input to `tail`, returning `true` at end of input.
     fn fill(
         &mut self,
@@ -1227,16 +1215,112 @@ pub(crate) fn parse_sdf(
     mdl_contains: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PySDBlockIterator> {
     let (path, filename, kind) = sdf_path(path)?;
-    let mut blocks = PySDBlockIterator::new(Source::Path {
-        path,
-        filename,
-        text: kind == Kind::Text,
-    });
+    let mut blocks = PySDBlockIterator::new(Source::path(path, filename, kind));
     if let Some(needle) = mdl_contains {
         let needle = kind_bytes(needle, kind, "parse_sdf mdl_contains")?;
         blocks.mdl_contains = Some(Box::new(memmem::Finder::new(needle).into_owned()));
     }
     Ok(blocks)
+}
+
+/// Return each block's last value of the record `name`, or `default`.
+///
+/// Equivalent to `[b.get(name, default) for b in parse_sdf(path)]`, but
+/// reads the blocks in place and builds only the values found. Blocks need
+/// not share names; those without the record give `default`.
+///
+/// Args:
+///     path: a str, bytes, or os.PathLike path
+///     name: record name in the path's type
+///     default: the value for blocks without the record
+///
+/// Returns:
+///     One value per block, in file order
+///
+/// Raises:
+///     TypeError: if `name` is not the path's type
+///     ValueError: if a record header has no `<name>`
+#[pyfunction]
+#[pyo3(signature = (
+    path: "str | bytes | os.PathLike[str] | os.PathLike[bytes]",
+    name: "str | bytes",
+    default: "Any" = None,
+) -> "list[Any]")]
+pub(crate) fn sdf_values<'py>(
+    path: &Bound<'py, PyAny>,
+    name: &Bound<'py, PyAny>,
+    default: Option<Bound<'py, PyAny>>,
+) -> PyResult<Bound<'py, PyList>> {
+    let py = path.py();
+    let (path, filename, kind) = sdf_path(path)?;
+    let name = kind_bytes(name, kind, "sdf_values name")?;
+    let default = default.unwrap_or_else(|| py.None().into_bound(py));
+    let strip = kind.strip();
+    let values = PyList::empty(py);
+    let mut source = Source::path(path, filename, kind);
+    let mut scanner = Scanner::default();
+    while let Some(block) = scanner.next_view(|tail| source.fill(py, &mut Some(kind), tail))? {
+        let (mut pos, mut last) = (0, None);
+        loop {
+            let start = pos;
+            match block
+                .next_record_name(&mut pos, strip)
+                .map_err(value_error)?
+            {
+                Some(found) if found == name => last = Some(start),
+                Some(_) => {}
+                None => break,
+            }
+        }
+        match last {
+            Some(mut pos) => {
+                let record = block.next_record(&mut pos, strip).map_err(value_error)?;
+                let record = record.expect("a record starts at its header");
+                values.append(kind.value(py, &record.value)?)?;
+            }
+            None => values.append(&default)?,
+        }
+    }
+    Ok(values)
+}
+
+/// Return how many blocks have each record name, in first-seen order.
+///
+/// Equivalent to `Counter(n for b in parse_sdf(path) for n in
+/// dict.fromkeys(b.names()))`, without building blocks or values: a survey
+/// of a file whose blocks need not share names.
+///
+/// Args:
+///     path: a str, bytes, or os.PathLike path
+///
+/// Returns:
+///     Record names in the path's type and their block counts
+///
+/// Raises:
+///     ValueError: if a record header has no `<name>`
+#[pyfunction]
+#[pyo3(signature = (
+    path: "str | bytes | os.PathLike[str] | os.PathLike[bytes]",
+) -> "dict[Any, int]")]
+pub(crate) fn sdf_names<'py>(path: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
+    let py = path.py();
+    let (path, filename, kind) = sdf_path(path)?;
+    let strip = kind.strip();
+    let mut counts = NameCounts::default();
+    let mut source = Source::path(path, filename, kind);
+    let mut scanner = Scanner::default();
+    while let Some(block) = scanner.next_view(|tail| source.fill(py, &mut Some(kind), tail))? {
+        counts.add(&block, strip).map_err(value_error)?;
+    }
+    let names = PyDict::new(py);
+    for (name, blocks) in counts.iter() {
+        names.set_item(kind.value(py, name)?, blocks)?;
+    }
+    Ok(names)
+}
+
+fn value_error(error: block::MissingFieldName) -> PyErr {
+    PyValueError::new_err(error.to_string())
 }
 
 /// Return the path to open, the filename for errors, and the value kind

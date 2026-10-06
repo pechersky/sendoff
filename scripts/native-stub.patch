@@ -23,7 +23,7 @@
 
  DEBUG_BUILD: Final[bool]
  """
-@@ -6,6 +23,27 @@
+@@ -6,6 +23,29 @@
  """
 
  __version__: Final[str]
@@ -34,6 +34,8 @@
 +    "_SDBlockIterator",
 +    "_SDRecordIterator",
 +    "parse_sdf",
++    "sdf_names",
++    "sdf_values",
 +    "write_sdf",
 +    "__version__",
 +    "DEBUG_BUILD",
@@ -51,7 +53,7 @@
 
  @final
  class CTable:
-@@ -117,7 +155,7 @@
+@@ -117,7 +157,7 @@
          """
 
  @final
@@ -60,7 +62,7 @@
      """
      Handle a single molecule block from an SD file.
 
-@@ -130,13 +168,7 @@
+@@ -130,13 +170,7 @@
          A block is true even without records, as before it had a length.
          """
 
@@ -75,7 +77,7 @@
          """
          Whether any record is named `name`: `name in block.names()`.
 
-@@ -189,7 +221,7 @@
+@@ -189,7 +223,7 @@
              TypeError: if `record_name` or `value` is not the block's type
          """
 
@@ -84,7 +86,7 @@
          """
          Parse out the underlying CTable object from a text SDBlock.
 
-@@ -201,6 +233,17 @@
+@@ -201,6 +235,17 @@
              NotImplementedError: for byte-backed SDBlocks
          """
 
@@ -102,7 +104,7 @@
      @staticmethod
      def from_lines(
          lines: (
-@@ -226,6 +269,13 @@
+@@ -226,6 +271,13 @@
              TypeError: for a str or bytes argument; use `from_sdf` for those
          """
 
@@ -116,7 +118,7 @@
      @staticmethod
      def from_sdf(sdf: str | bytes) -> _SDBlockIterator[Any]:
          """
-@@ -245,7 +295,10 @@
+@@ -245,7 +297,10 @@
              TypeError: if `sdf` is not str or bytes
          """
 
@@ -128,7 +130,7 @@
          """
          Return the value of the last record named `name`, or `default`.
 
-@@ -271,7 +324,7 @@
+@@ -271,7 +326,7 @@
          """
 
      @property
@@ -137,7 +139,7 @@
          """
          Return the CTAB after the title, through `M  END`, as one value.
 
-@@ -295,7 +348,7 @@
+@@ -295,7 +350,7 @@
          """
 
      @property
@@ -146,7 +148,7 @@
          """
          Return the title line and CTAB through `M  END` as one value.
 
-@@ -304,7 +357,7 @@
+@@ -304,7 +359,7 @@
          """
 
      @molblock.setter
@@ -155,7 +157,7 @@
          """
          Replace the title line and CTAB, keeping the SD data.
 
-@@ -363,7 +416,7 @@
+@@ -363,7 +418,7 @@
              TypeError: if `name` is not the block's type
          """
 
@@ -164,7 +166,7 @@
          """
          Renumber atom and bond indices to be 1-indexed and in order.
 
-@@ -403,7 +456,7 @@
+@@ -403,7 +458,7 @@
          """
 
      @property
@@ -173,7 +175,7 @@
          """
          Return the molecule title in the input type.
 
-@@ -412,7 +465,7 @@
+@@ -412,7 +467,7 @@
          """
 
      @title.setter
@@ -182,7 +184,7 @@
          """
          Replace the title line.
 
-@@ -447,13 +500,13 @@
+@@ -447,13 +502,13 @@
          """
 
  @final
@@ -199,7 +201,7 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -461,14 +514,23 @@
+@@ -461,14 +516,23 @@
          """
 
  @final
@@ -227,8 +229,40 @@
  def parse_sdf(
      path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
      *,
-@@ -498,10 +560,13 @@
+@@ -498,6 +562,11 @@
          TypeError: if `mdl_contains` is not the path's type
+     """
+
++@overload
++def sdf_names(path: str | os.PathLike[str]) -> dict[str, int]: ...
++@overload
++def sdf_names(path: bytes | os.PathLike[bytes]) -> dict[bytes, int]: ...
++@overload
+ def sdf_names(
+     path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+ ) -> dict[Any, int]:
+@@ -518,6 +587,19 @@
+         ValueError: if a record header has no `<name>`
+     """
+
++@overload
++def sdf_values(path: str | os.PathLike[str], name: str) -> list[str | None]: ...
++@overload
++def sdf_values(
++    path: str | os.PathLike[str], name: str, default: _T
++) -> list[str | _T]: ...
++@overload
++def sdf_values(path: bytes | os.PathLike[bytes], name: bytes) -> list[bytes | None]: ...
++@overload
++def sdf_values(
++    path: bytes | os.PathLike[bytes], name: bytes, default: _T
++) -> list[bytes | _T]: ...
++@overload
+ def sdf_values(
+     path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+     name: str | bytes,
+@@ -543,10 +625,13 @@
+         ValueError: if a record header has no `<name>`
      """
 
 +@overload

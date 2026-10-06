@@ -11,4 +11,6 @@ Pathy = Union[str, bytes, "os.PathLike[str]", "os.PathLike[bytes]"]
 
 SDBlock = native.SDBlock
 parse_sdf = native.parse_sdf
+sdf_names = native.sdf_names
+sdf_values = native.sdf_values
 write_sdf = native.write_sdf

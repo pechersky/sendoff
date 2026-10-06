@@ -15,7 +15,14 @@ from sendoff.ctable import (
     IndicesMismatchError,
     IndicesOutOfOrderError,
 )
-from sendoff.sdblock import Pathy, SDBlock, parse_sdf, write_sdf
+from sendoff.sdblock import (
+    Pathy,
+    SDBlock,
+    parse_sdf,
+    sdf_names,
+    sdf_values,
+    write_sdf,
+)
 
 
 def test_single_mol_read(single_mol_sdf: Pathy) -> None:
@@ -328,6 +335,40 @@ def test_parse_sdf_mdl_contains_skips_other_blocks(tmp_path: Path) -> None:
         parse_sdf(path, mdl_contains=b"STER")
     with pytest.raises(TypeError, match="must be bytes for a bytes path"):
         parse_sdf(os.fsencode(path), mdl_contains="STER")
+
+
+def test_sdf_values_and_names_read_heterogeneous_blocks(tmp_path: Path) -> None:
+    """Blocks need not share names: missing records give the default.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixtures.
+    """
+    path = tmp_path / "mixed.sdf"
+    path.write_text(
+        "one\n\nM  END\n> <ID>\nX-1\n\n> <logP>\n1.5\n\n$$$$\n"
+        "two\n\nM  END\n> <Note>\nline 1\nline 2\n\n$$$$\n"
+        "three\n\nM  END\n> <ID>\nX-3\n\n> <ID>\n X-3b \n\n> <Note>\n\n$$$$\n"
+    )
+
+    assert sdf_values(path, "ID") == ["X-1", None, "X-3b"]
+    assert sdf_values(path, "Note", "") == ["", "line 1\nline 2", ""]
+    assert sdf_values(os.fsencode(path), b"logP") == [b"1.5", None, None]
+    assert sdf_names(path) == {"ID": 2, "logP": 1, "Note": 2}
+    assert list(sdf_names(os.fsencode(path))) == [b"ID", b"logP", b"Note"]
+
+    empty = tmp_path / "empty.sdf"
+    empty.write_text("")
+    assert (sdf_values(empty, "ID"), sdf_names(empty)) == ([], {})
+
+    with pytest.raises(TypeError, match="sdf_values name must be str"):
+        sdf_values(path, b"ID")
+    with pytest.raises(FileNotFoundError):
+        sdf_names(tmp_path / "missing.sdf")
+    malformed = tmp_path / "malformed.sdf"
+    malformed.write_text("t\n\nM  END\n> <ID>\n1\n\n> no name\n2\n\n$$$$\n")
+    for call in (lambda: sdf_values(malformed, "ID"), lambda: sdf_names(malformed)):
+        with pytest.raises(ValueError):
+            call()
 
 
 def test_from_lines_reads_file_objects_in_chunks() -> None:
