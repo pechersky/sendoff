@@ -2,6 +2,7 @@
 
 import subprocess
 import sys
+from importlib import resources
 from pathlib import Path
 
 import pytest
@@ -36,3 +37,8 @@ def test_native_stub_matches_extension(tmp_path: Path) -> None:
         text=True,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_package_is_marked_typed() -> None:
+    """The PEP 561 marker ships, so downstream type checkers read the stub."""
+    assert (resources.files("sendoff") / "py.typed").is_file()
