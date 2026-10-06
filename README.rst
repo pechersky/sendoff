@@ -69,9 +69,18 @@ it to a ``block.write`` loop.
 Native typing stubs
 -------------------
 
-``sendoff/native.pyi`` is written by hand, because ``SDBlock`` is generic over
-``str`` and ``bytes`` (``SDBlock[str]`` from text paths, ``SDBlock[bytes]`` from
-bytes paths), which generated stubs cannot express. ``tests/test_stubs.py`` runs
-``mypy.stubtest`` against the built extension, so a signature that drifts from
-the Rust API fails the test suite. Update the stub's signatures and docstrings
-with any Python-facing Rust change.
+``sendoff/native.pyi`` is generated: ``scripts/native-stub`` builds the
+extension with the ``stubgen`` feature, takes the signatures, the type hints in
+``#[pyo3(signature = ...)]``, and the Rust doc comments from PyO3 introspection,
+then applies ``scripts/native-stub.patch`` for what introspection cannot
+express. That covers ``SDBlock`` being generic over ``str`` and ``bytes``,
+overloads, typed getters and iterators, and the file-object protocols.
+
+* Change docstrings and simple types in the Rust source; the ``native-stub``
+  pre-commit hook regenerates the stub.
+* For typing that needs the patch, edit ``sendoff/native.pyi`` and run
+  ``scripts/native-stub --update-patch``.
+* ``scripts/native-stub --check`` fails if the committed stub is stale.
+
+``tests/test_stubs.py`` runs ``mypy.stubtest`` against the built extension, so
+a signature that drifts from the Rust API fails the test suite.

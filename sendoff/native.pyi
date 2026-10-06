@@ -18,7 +18,9 @@ _AnyStr_co = TypeVar("_AnyStr_co", str, bytes, covariant=True)
 _AnyStr_contra = TypeVar("_AnyStr_contra", str, bytes, contravariant=True)
 
 DEBUG_BUILD: Final[bool]
-"""True when compiled without optimizations; never benchmark such a build."""
+"""
+True when compiled without optimizations; never benchmark such a build.
+"""
 
 __version__: Final[str]
 
@@ -110,7 +112,7 @@ class CTable:
             NotImplementedError: if trying to renumber in a V2000 format table
         """
 
-    def valid_atom_indices(self, /, strict: "bool" = False) -> bool:
+    def valid_atom_indices(self, /, strict: bool = False) -> bool:
         """
         Validate that the atom lines match the counts line.
 
@@ -131,7 +133,7 @@ class CTable:
             If all the checks pass, return True.
         """
 
-    def valid_bond_indices(self, /, strict: "bool" = False) -> bool:
+    def valid_bond_indices(self, /, strict: bool = False) -> bool:
         """
         Validate that the bond lines match the counts line.
 
@@ -163,6 +165,7 @@ class SDBlock(Generic[AnyStr]):
 
     def __new__(
         cls,
+        /,
         sdf: AnyStr,
         records: (
             Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]] | None
@@ -171,34 +174,38 @@ class SDBlock(Generic[AnyStr]):
         """
         Parse one block from SDF str or bytes, such as a molblock.
 
-        The block ends at an optional $$$$ line, after which only whitespace
-        may follow. str input has universal newlines.
+        The block ends at an optional `$$$$` line, after which only
+        whitespace may follow. str input has universal newlines.
 
         Args:
             sdf: a molblock or one SDF record, as str or bytes
-            records: SD data to append after any in `sdf`, as a mapping or an
-                iterable of (name, value) tuples of the same type
+            records: SD data to append after any in `sdf`, as a mapping or
+                an iterable of (name, value) tuples of the same type
 
         Raises:
             ValueError: if `sdf` holds more than one block
+            TypeError: if `sdf` is not str or bytes, or a record is not its type
         """
 
     def append_record(self, /, record_name: AnyStr, value: AnyStr) -> None:
         """
-        Append a field and value to the SD data record.
+        Append a field and value of the same type as the input block.
 
         Args:
-            record_name: field name of the same type as the input lines
-            value: field value of the same type, without a terminating newline
+            record_name: field name
+            value: field value, with no terminating newline
+
+        Raises:
+            TypeError: if `record_name` or `value` is not the block's type
         """
 
     def ctable(self: SDBlock[str], /) -> CTable:
         """
-        Parse out the underlying CTable object from the SDBlock.
+        Parse out the underlying CTable object from a text SDBlock.
 
         Returns:
-            The CTable titled with this SDBlock's title, parsed from its MDL
-            lines without validation.
+            The CTable titled with this block's title, parsed from its MDL
+            lines without validation
 
         Raises:
             NotImplementedError: for byte-backed SDBlocks
@@ -222,20 +229,19 @@ class SDBlock(Generic[AnyStr]):
         ),
     ) -> _SDBlockIterator[Any]:
         """
-        Parse in SDBlocks from a sequence of lines or a file object.
+        Parse SDBlocks from homogeneous str or bytes lines or a file object.
 
-        File objects (anything with ``read1`` or ``read``) are read in 1 MiB
-        chunks, so the handle's position runs ahead of the blocks produced.
-        Line iterables are consumed only up to each block's $$$$ line.
+        File objects are read in 1 MiB chunks with `read1`, when available,
+        or `read`, so the handle's position runs ahead of the blocks
+        produced. Line iterables are consumed only up to each block's `$$$$`
+        line, and the iterator does not close them.
 
         Args:
-            lines: homogeneous str or bytes lines separated by the $$$$
+            lines: homogeneous str or bytes lines separated by the `$$$$`
                 delimiter, or a text or binary file object
 
         Returns:
-            A lazy iterator of SDBlocks whose values have the same type as the input
-
-        The iterator does not close the caller-owned lines iterable.
+            An iterator that produces owned SDBlocks as input is consumed
 
         Raises:
             TypeError: for a str or bytes argument; use `from_sdf` for those
@@ -246,56 +252,25 @@ class SDBlock(Generic[AnyStr]):
     def from_sdf(sdf: str) -> _SDBlockIterator[str]: ...
     @overload
     @staticmethod
-    def from_sdf(sdf: bytes) -> _SDBlockIterator[bytes]:
+    def from_sdf(sdf: bytes) -> _SDBlockIterator[bytes]: ...
+    @overload
+    @staticmethod
+    def from_sdf(sdf: str | bytes) -> _SDBlockIterator[Any]:
         """
         Lazily parse SDBlocks from SDF str or bytes held in memory.
 
-        Equivalent to ``from_lines(io.StringIO(sdf))`` or
-        ``from_lines(io.BytesIO(sdf))`` without splitting lines: str input has
-        universal newlines, and bytes are split on b"\\n" only.
+        Equivalent to `from_lines(io.StringIO(sdf))` or
+        `from_lines(io.BytesIO(sdf))`, without splitting lines: str input
+        has universal newlines, and bytes are split on b"\\n" only.
 
         Args:
             sdf: SDF content as str or bytes
 
         Returns:
-            A lazy iterator of SDBlocks of the input type
-        """
+            An iterator of SDBlocks of the input type
 
-    def num_atoms(self, /) -> int:
-        """
-        Get the number of atoms as indicated in the MDL block.
-
-        The count is read from the counts line and may differ from the number
-        of atom lines.
-
-        Returns:
-            The number of atoms parsed from the counts line.
-        """
-
-    def num_bonds(self, /) -> int:
-        """
-        Get the number of bonds as indicated in the MDL block.
-
-        The count is read from the counts line and may differ from the number
-        of bond lines.
-
-        Returns:
-            The number of bonds parsed from the counts line.
-        """
-
-    def records(self, /) -> list[tuple[AnyStr, AnyStr]]:
-        """
-        Generate SD metadata records.
-
-        Returns:
-            Tuples of input-typed name/value pairs; multiline values include newlines.
-        """
-
-    def iter_records(self, /) -> _SDRecordIterator[AnyStr]:
-        """
-        Lazily iterate over SD metadata records in input order.
-
-        Returned names and values are owned and have the same type as the block.
+        Raises:
+            TypeError: if `sdf` is not str or bytes
         """
 
     @overload
@@ -319,81 +294,34 @@ class SDBlock(Generic[AnyStr]):
             TypeError: if `name` is not the block's type
         """
 
-    def to_dict(self, /) -> dict[AnyStr, AnyStr]:
+    def iter_records(self, /) -> _SDRecordIterator[AnyStr]:
         """
-        Return the records as a dict, later duplicates winning.
+        Lazily iterate over SD data records in input order.
 
-        Equivalent to `dict(block.records())`.
-        """
-
-    def set_record(self, /, name: AnyStr, value: AnyStr) -> None:
-        """
-        Set a record, keeping the position of the first with that name.
-
-        Later records with the same name are removed; if there is none, the
-        record is appended.
-
-        Args:
-            name: record name in the block's type
-            value: record value in the block's type
-
-        Raises:
-            TypeError: if `name` or `value` is not the block's type
-        """
-
-    def remove_record(self, /, name: AnyStr) -> int:
-        """
-        Remove every record named `name`.
-
-        Args:
-            name: record name in the block's type
-
-        Returns:
-            How many records were removed
-
-        Raises:
-            TypeError: if `name` is not the block's type
-        """
-
-    def replace_records(
-        self,
-        /,
-        records: Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]],
-    ) -> None:
-        """
-        Replace all SD data with the given records.
-
-        Args:
-            records: a mapping, or an iterable of (name, value) tuples, in
-                the block's type
-
-        Raises:
-            TypeError: if a name or value is not the block's type
-        """
-
-    def renumber_indices(self: SDBlock[str], /) -> None:
-        """
-        Renumber atom and bond indices to be 1-indexed and in order.
-
-        Utilizes the underlying CTable's renumbering and overwrites this object's MDL lines.
-
-        Raises:
-            NotImplementedError: for byte-backed SDBlocks
+        Names and values are owned and have the block's type.
         """
 
     @property
-    def title(self, /) -> AnyStr:
+    def mdl(self, /) -> tuple[AnyStr, ...]:
         """
-        Return the molecule title in the input type.
+        Return the CTAB lines after the title, through `M  END`.
 
-        Titles, record names, and record values are stripped as str.strip()
-        does for str blocks and as bytes.strip() does for bytes blocks.
+        Lines have no line endings, like `str.splitlines()`, so
+        `"\\n".join(block.mdl)` is the CTAB; `block.molblock` adds the title.
         """
 
-    @title.setter
-    def title(self, /, title: AnyStr) -> None:
+    def mdl_contains(self, /, needle: AnyStr) -> bool:
         """
-        Replace the title line; a ValueError if it contains a line break.
+        Return whether `needle` occurs in the CTAB text after the title.
+
+        Like `needle in "\\n".join(block.mdl)` without building the lines;
+        text blocks are searched as UTF-8 without being decoded.
+
+        Args:
+            needle: substring in the block's type
+
+        Raises:
+            TypeError: if `needle` is not the block's type
         """
 
     @property
@@ -419,61 +347,138 @@ class SDBlock(Generic[AnyStr]):
             TypeError: if the molblock is not the block's type
         """
 
-    def mdl_contains(self, /, needle: AnyStr) -> bool:
+    def num_atoms(self, /) -> int:
         """
-        Return whether `needle` occurs in the CTAB text after the title.
+        Get the number of atoms declared by the counts line.
 
-        Equivalent to `needle in "\\n".join(block.mdl)` without building the
-        lines; text blocks are searched as UTF-8 without being decoded.
+        The count may differ from the number of atom lines.
+        """
+
+    def num_bonds(self, /) -> int:
+        """
+        Get the number of bonds declared by the counts line.
+
+        The count may differ from the number of bond lines.
+        """
+
+    def records(self, /) -> list[tuple[AnyStr, AnyStr]]:
+        """
+        Return all SD data records.
+
+        Returns:
+            Tuples of record name and value in the input type; multiline
+            values include their inner newlines
+        """
+
+    def remove_record(self, /, name: AnyStr) -> int:
+        """
+        Remove every record named `name`.
 
         Args:
-            needle: substring in the block's type
+            name: record name in the block's type
+
+        Returns:
+            How many records were removed
 
         Raises:
-            TypeError: if `needle` is not the block's type
+            TypeError: if `name` is not the block's type
+        """
+
+    def renumber_indices(self: SDBlock[str], /) -> None:
+        """
+        Renumber atom and bond indices to be 1-indexed and in order.
+
+        Uses the CTable renumbering and replaces this block's MDL lines.
+
+        Raises:
+            NotImplementedError: for byte-backed SDBlocks
+        """
+
+    def replace_records(
+        self, /, records: Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]]
+    ) -> None:
+        """
+        Replace all SD data with the given records.
+
+        Args:
+            records: a mapping, or an iterable of (name, value) tuples, in
+                the block's type
+
+        Raises:
+            TypeError: if a name or value is not the block's type
+        """
+
+    def set_record(self, /, name: AnyStr, value: AnyStr) -> None:
+        """
+        Set a record, keeping the position of the first with that name.
+
+        Later records with the same name are removed; if there is none, the
+        record is appended.
+
+        Args:
+            name: record name in the block's type
+            value: record value in the block's type
+
+        Raises:
+            TypeError: if `name` or `value` is not the block's type
         """
 
     @property
-    def mdl(self, /) -> tuple[AnyStr, ...]:
+    def title(self, /) -> AnyStr:
         """
-        Return the CTAB lines after the title, through `M  END`.
+        Return the molecule title in the input type.
 
-        Lines have no line endings, like `str.splitlines()`, so
-        `"\\n".join(block.mdl)` is the CTAB; `block.molblock` adds the title.
+        Titles, record names, and record values are stripped as `str.strip()`
+        does for str blocks and as `bytes.strip()` does for bytes blocks.
+        """
+
+    @title.setter
+    def title(self, /, title: AnyStr) -> None:
+        """
+        Replace the title line.
+
+        Raises:
+            ValueError: if the title contains a line break
+            TypeError: if the title is not the block's type
+        """
+
+    def to_dict(self, /) -> dict[AnyStr, AnyStr]:
+        """
+        Return the records as a dict, later duplicates winning.
+
+        Equivalent to `dict(block.records())`.
         """
 
     def to_sdf(self, /) -> AnyStr:
         """
         Return the block as SDF text ending with $$$$, in the input type.
 
-        The inverse of ``SDBlock(sdf)``, and what `write` writes.
-
-        Returns:
-            The serialized block
+        The inverse of `SDBlock(sdf)`, and what `write` writes.
         """
 
     def write(self, /, outh: _SupportsWrite[AnyStr]) -> None:
         """
-        Write an SDBlock, ending with "$$$$", to a file-like handle.
+        Write the block, ending with $$$$, to a file-like handle.
 
-        Every line is terminated with "\\n" and the block is written in a
-        single call.
+        Every line ends with "\\n", and the block is written in one `write`
+        call.
 
         Args:
-            outh: text or binary file-like handle matching the input type
+            outh: a text or binary file-like handle matching the input type
         """
 
 @final
 class _SDBlockIterator(Iterator[SDBlock[AnyStr]]):
     """
-    A lazy iterator of SDBlocks.
+    Lazily parse SDBlocks from an input source.
     """
 
+    def __iter__(self, /) -> _SDBlockIterator[AnyStr]: ...
     def __next__(self, /) -> SDBlock[AnyStr]: ...
     def close(self, /) -> None:
         """
         Stop iterating and release the input source, closing files that
-        parse_sdf opened.
+        `parse_sdf` opened.
         """
 
 @final
@@ -482,6 +487,7 @@ class _SDRecordIterator(Iterator[tuple[AnyStr, AnyStr]]):
     Lazily iterate over one block's SD data records.
     """
 
+    def __iter__(self, /) -> _SDRecordIterator[AnyStr]: ...
     def __next__(self, /) -> tuple[AnyStr, AnyStr]: ...
 
 @overload
@@ -495,7 +501,7 @@ def parse_sdf(
     """
     Lazily parse SDBlocks from an SDF path.
 
-    The file is opened on the first next() and read in chunks without
+    The file is opened on the first `next()` and read in chunks without
     holding the GIL. str paths give str values decoded as UTF-8 on access,
     with universal newlines; bytes paths give bytes split on b"\\n" only.
     Use a bytes path for feeds that are not valid UTF-8.
@@ -504,7 +510,7 @@ def parse_sdf(
         path: a str, bytes, or os.PathLike path
 
     Returns:
-        An iterator of SDBlocks; close() closes the file early
+        An iterator of SDBlocks; `close()` closes the file early
     """
 
 @overload
@@ -517,10 +523,10 @@ def write_sdf(dest: _SupportsWrite[AnyStr], blocks: Iterable[SDBlock[AnyStr]]) -
     """
     Write SDBlocks to a path or a file object, and return how many.
 
-    Blocks are written as SDBlock.write would, but a MiB or so at a time:
-    to a path without holding the GIL, or to a file object with one write
-    call per chunk, as str for text blocks or bytes for byte-backed ones.
-    Text blocks must be valid UTF-8.
+    Blocks are written as `SDBlock.write` would, but a MiB or so at a
+    time: to a path without holding the GIL, or to a file object with one
+    `write` call per chunk, as str for text blocks or bytes for byte-backed
+    ones. Text blocks must be valid UTF-8.
 
     Args:
         dest: a str, bytes, or os.PathLike path to create or truncate, or a

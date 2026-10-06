@@ -39,7 +39,7 @@ dev = [
     "flake8>=6.1.0,<8",
     "flake8-docstrings>=1.7.0,<2",
     "pydocstyle>=6.3.0,<7",
-    "black>=23.11.0,<27",
+    "black>=25.1,<26",
     "towncrier>=23.10.0,<27",
     "pre-commit>=3.5.0,<5",
     "darglint>=1.8.1,<2",
@@ -63,6 +63,8 @@ include = [
 exclude = ["sendoff/*.so", "sendoff/__pycache__/**"]
 
 [tool.black]
+# Match the black pre-commit hook; scripts/native-stub formats with it too.
+required-version = "25"
 line-length = 88
 include = '\.pyi?$'
 exclude = '''

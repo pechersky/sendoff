@@ -4,6 +4,10 @@ exclude: '^\.git/'
 default_stages: [pre-commit]
 fail_fast: true
 
+ci:
+    # pre-commit.ci has no Rust toolchain; run these locally.
+    skip: [cargo-fmt, cargo-clippy, native-stub]
+
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -52,4 +56,11 @@ repos:
         entry: cargo clippy --locked --all-targets -- -D warnings
         language: system
         files: '(^Cargo\.(toml|lock)$|^rust/.*\.rs$)'
+        pass_filenames: false
+    -   id: native-stub
+        name: regenerate sendoff/native.pyi
+        entry: python scripts/native-stub
+        language: python
+        additional_dependencies: [maturin==1.15.0, black==25.11.0]
+        files: '(^Cargo\.(toml|lock)$|^rust/.*\.rs$|^sendoff/native\.pyi$|^scripts/native-stub(\.patch)?$)'
         pass_filenames: false
