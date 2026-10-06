@@ -525,6 +525,7 @@ impl PySDRecordIterator {
                 .kind
                 .with_names(|names| names.lookup(py, record.name))
                 .and_then(|name| PyTuple::new(py, [name, block.kind.value(py, &record.value)?]))
+                .map_err(|error| block.noted(py, error, || reading_record(record.name)))
                 .map(Some),
             Ok(None) => Ok(None),
             Err(error) => Err(PyValueError::new_err(error.to_string())),
@@ -552,15 +553,29 @@ impl PySDBlock {
         &self,
         py: Python<'py>,
         names: &mut Namer<'_>,
-        record: Record<'_>,
+        record: &Record<'_>,
     ) -> PyResult<Bound<'py, PyTuple>> {
+        let noted = |error| self.noted(py, error, || reading_record(record.name));
         PyTuple::new(
             py,
             [
-                names.name(py, record.name)?,
-                self.kind.value(py, &record.value)?,
+                names.name(py, record.name).map_err(noted)?,
+                self.kind.value(py, &record.value).map_err(noted)?,
             ],
         )
+    }
+
+    /// Add to a decode error a note naming this block, what of it `action`
+    /// was doing, and how to read other encodings.
+    fn noted(&self, py: Python<'_>, error: PyErr, action: impl FnOnce() -> String) -> PyErr {
+        if error.is_instance_of::<PyUnicodeDecodeError>(py) {
+            let title = String::from_utf8_lossy(self.block.title(Strip::Str));
+            let note = format!("{} the SDBlock titled '{title}'. {DECODE_HINT}", action());
+            if let Err(error) = error.add_note(py, note) {
+                return error;
+            }
+        }
+        error
     }
 
     fn require_text(&self) -> PyResult<()> {
@@ -583,6 +598,14 @@ impl PySDBlock {
             })),
         }
     }
+}
+
+/// How to read SDF that is not UTF-8, for notes on decode errors.
+const DECODE_HINT: &str = "parse_sdf(os.fsencode(path)) reads such files as bytes, and \
+    SDBlock.from_lines(open(path, encoding=...)) decodes another encoding.";
+
+fn reading_record(name: &[u8]) -> String {
+    format!("Reading record '{}' of", String::from_utf8_lossy(name))
 }
 
 fn decode<'a>(py: Python<'_>, bytes: &'a [u8]) -> PyResult<&'a str> {
@@ -722,7 +745,9 @@ impl PySDBlock {
     /// does for str blocks and as `bytes.strip()` does for bytes blocks.
     #[getter]
     fn title<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.kind.value(py, self.block.title(self.kind.strip()))
+        self.kind
+            .value(py, self.block.title(self.kind.strip()))
+            .map_err(|error| self.noted(py, error, || "Reading the title of".into()))
     }
 
     /// Replace the title line.
@@ -748,7 +773,9 @@ impl PySDBlock {
     /// `OEReadMolFromBytes`.
     #[getter]
     fn molblock<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.kind.value(py, &self.block.molblock(self.kind.strip()))
+        self.kind
+            .value(py, &self.block.molblock(self.kind.strip()))
+            .map_err(|error| self.noted(py, error, || "Reading the molblock of".into()))
     }
 
     /// Replace the title line and CTAB, keeping the SD data.
@@ -779,7 +806,9 @@ impl PySDBlock {
     /// is `block.title`, the title line's ending, then `block.mdl`.
     #[getter]
     fn mdl<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.kind.value(py, self.block.mdl())
+        self.kind
+            .value(py, self.block.mdl())
+            .map_err(|error| self.noted(py, error, || "Reading the MDL of".into()))
     }
 
     /// Return all SD data records.
@@ -797,7 +826,7 @@ impl PySDBlock {
                 .next_record(&mut pos, self.kind.strip())
                 .map_err(|error| PyValueError::new_err(error.to_string()))?
             {
-                list.append(self.record(py, names, record)?)?;
+                list.append(self.record(py, names, &record)?)?;
             }
             Ok(list)
         })
@@ -853,7 +882,11 @@ impl PySDBlock {
             return Ok(default);
         };
         match self.block.next_record(&mut start, strip) {
-            Ok(Some(record)) => self.kind.value(py, &record.value).map(Some),
+            Ok(Some(record)) => self
+                .kind
+                .value(py, &record.value)
+                .map(Some)
+                .map_err(|error| self.noted(py, error, || reading_record(record.name))),
             _ => unreachable!("a record was found here"),
         }
     }
@@ -874,7 +907,10 @@ impl PySDBlock {
                 .next_header(&mut pos, strip)
                 .map_err(|error| PyValueError::new_err(error.to_string()))?
             {
-                list.append(names.name(py, header.name)?)?;
+                let name = names.name(py, header.name);
+                list.append(
+                    name.map_err(|error| self.noted(py, error, || reading_record(header.name)))?,
+                )?;
             }
             Ok(list)
         })
@@ -991,9 +1027,10 @@ impl PySDBlock {
                 .next_record(&mut pos, strip)
                 .map_err(|error| PyValueError::new_err(error.to_string()))?
             {
+                let noted = |error| self.noted(py, error, || reading_record(record.name));
                 dict.set_item(
-                    names.name(py, record.name)?,
-                    self.kind.value(py, &record.value)?,
+                    names.name(py, record.name).map_err(noted)?,
+                    self.kind.value(py, &record.value).map_err(noted)?,
                 )?;
             }
             Ok(dict)
@@ -1007,6 +1044,7 @@ impl PySDBlock {
     fn to_sdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.kind
             .value(py, &self.block.serialized(self.kind.strip()))
+            .map_err(|error| self.noted(py, error, || "Writing".into()))
     }
 
     /// Write the block, ending with $$$$, to a file-like handle.
@@ -1023,7 +1061,11 @@ impl PySDBlock {
     fn write(&self, outh: &Bound<'_, PyAny>) -> PyResult<()> {
         let py = outh.py();
         let output = self.block.serialized(self.kind.strip());
-        outh.call_method1(intern!(py, "write"), (self.kind.value(py, &output)?,))?;
+        let output = self
+            .kind
+            .value(py, &output)
+            .map_err(|error| self.noted(py, error, || "Writing".into()))?;
+        outh.call_method1(intern!(py, "write"), (output,))?;
         Ok(())
     }
 
@@ -1119,9 +1161,14 @@ impl PySDBlock {
     ///     NotImplementedError: for byte-backed SDBlocks
     fn ctable(&self, py: Python<'_>) -> PyResult<PyCTable> {
         self.require_text()?;
-        let mut lines = vec![decode(py, self.block.title(Strip::Str))?.to_owned()];
+        let noted = |error| self.noted(py, error, || "Reading the CTAB of".into());
+        let mut lines = vec![
+            decode(py, self.block.title(Strip::Str))
+                .map_err(noted)?
+                .to_owned(),
+        ];
         for line in block::lines(self.block.mdl()) {
-            lines.push(decode(py, line)?.to_owned());
+            lines.push(decode(py, line).map_err(noted)?.to_owned());
         }
         PyCTable::from_lines(lines)
     }
@@ -1251,18 +1298,23 @@ pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> P
         let block = block.cast::<PySDBlock>()?.borrow();
         let start = chunk.len();
         block.block.serialize_into(block.kind.strip(), &mut chunk);
-        let alone = sink.accept(py, block.kind, &chunk[start..])?;
-        count += 1;
+        let noted = |error| block.noted(py, error, || format!("Writing block {count} (from 0),"));
+        let alone = sink
+            .accept(py, block.kind, &chunk[start..])
+            .map_err(noted)?;
         if alone {
             if start > 0 {
                 sink.write(py, &chunk[..start])?;
             }
-            sink.write(py, &chunk[start..])?;
+            // Text blocks that are not ASCII, which include any that are
+            // not UTF-8, are written alone, so a decode error is this block's.
+            sink.write(py, &chunk[start..]).map_err(noted)?;
             chunk.clear();
         } else if chunk.len() >= limit {
             sink.write(py, &chunk)?;
             chunk.clear();
         }
+        count += 1;
     }
     if !chunk.is_empty() {
         sink.write(py, &chunk)?;
@@ -1279,7 +1331,8 @@ pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> P
 /// iterating can kill the process with SIGBUS, so write results to a new
 /// path. str paths give str values decoded as UTF-8 on access, with
 /// universal newlines; bytes paths give bytes split on b"\n" only. Use a
-/// bytes path for feeds that are not valid UTF-8.
+/// bytes path for feeds that are not valid UTF-8: from a str path, their
+/// text raises UnicodeDecodeError with a note naming the block and record.
 ///
 /// Args:
 ///     path: a str, bytes, or os.PathLike path

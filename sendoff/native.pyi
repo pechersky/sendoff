@@ -556,7 +556,8 @@ def parse_sdf(
     iterating can kill the process with SIGBUS, so write results to a new
     path. str paths give str values decoded as UTF-8 on access, with
     universal newlines; bytes paths give bytes split on b"\\n" only. Use a
-    bytes path for feeds that are not valid UTF-8.
+    bytes path for feeds that are not valid UTF-8: from a str path, their
+    text raises UnicodeDecodeError with a note naming the block and record.
 
     Args:
         path: a str, bytes, or os.PathLike path

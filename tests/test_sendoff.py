@@ -298,7 +298,9 @@ def test_parse_sdf_raises_open_errors_on_first_next(tmp_path: Path) -> None:
 
 
 def test_parse_sdf_text_paths_decode_utf8_on_access(tmp_path: Path) -> None:
-    """A non-UTF-8 feed still splits on a str path; only bad values raise.
+    """A non-UTF-8 feed still splits on a str path; only bad text raises.
+
+    The error notes what was read, the block, and how to read the file.
 
     Args:
         tmp_path: Temporary directory for the SDF fixture.
@@ -311,9 +313,37 @@ def test_parse_sdf_text_paths_decode_utf8_on_access(tmp_path: Path) -> None:
     blocks = list(parse_sdf(path))
 
     assert [block.title for block in blocks] == ["first", "second"]
-    with pytest.raises(UnicodeDecodeError):
-        blocks[0].records()
+    first = blocks[0]
+    reads: list[typing.Callable[[], object]] = [
+        first.records,
+        first.to_dict,
+        lambda: first.get("F"),
+        lambda: list(first.iter_records()),
+    ]
+    for read in reads:
+        with pytest.raises(UnicodeDecodeError) as error:
+            read()
+        (note,) = error.value.__notes__
+        assert note.startswith("Reading record 'F' of the SDBlock titled 'first'.")
+        assert "parse_sdf(os.fsencode(path))" in note
+    with pytest.raises(UnicodeDecodeError) as error:
+        first.to_sdf()
+    assert error.value.__notes__[0].startswith("Writing the SDBlock titled 'first'.")
     assert next(parse_sdf(os.fsencode(path))).records() == [(b"F", b"\xa6 bad")]
+
+    path.write_bytes(b"\xa6\n\nM  END\n$$$$\n")
+    (block,) = parse_sdf(path)
+    parts: dict[str, typing.Callable[[], object]] = {
+        "the title": lambda: block.title,
+        "the molblock": lambda: block.molblock,
+        "the CTAB": block.ctable,
+    }
+    for what, read in parts.items():
+        with pytest.raises(UnicodeDecodeError) as error:
+            read()
+        assert error.value.__notes__[0].startswith(
+            f"Reading {what} of the SDBlock titled '\ufffd'."
+        )
 
 
 def test_from_lines_reads_file_objects_in_chunks() -> None:
@@ -1814,8 +1844,11 @@ def test_write_sdf_rejects_bad_input(tmp_path: Path) -> None:
     assert error.value.filename == str(tmp_path / "missing" / "x.sdf")
 
     source = tmp_path / "latin1.sdf"
-    source.write_bytes(b"t\nM  END\n> <A>\n\xe9\n\n$$$$\n")
+    source.write_bytes(b"s\nM  END\n$$$$\nt\nM  END\n> <A>\n\xe9\n\n$$$$\n")
     dests: list[typing.Any] = [tmp_path / "bad.sdf", io.StringIO()]
     for dest in dests:
-        with pytest.raises(UnicodeDecodeError):
+        with pytest.raises(UnicodeDecodeError) as decode_error:
             write_sdf(dest, parse_sdf(source))
+        assert decode_error.value.__notes__[0].startswith(
+            "Writing block 1 (from 0), the SDBlock titled 't'."
+        )
