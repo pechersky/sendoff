@@ -575,6 +575,37 @@ def test_record_names_are_shared_between_blocks() -> None:
     check(sdf.encode(), [name.encode() for name in names])
 
 
+def test_record_names_follow_changing_orders() -> None:
+    """Reordered, missing, repeated, and new names between blocks read exactly."""
+    orders = [
+        ["A", "B", "C", "D"],
+        ["A", "C", "D"],
+        ["D", "C", "B", "A"],
+        ["A", "A", "E", "B"],
+        [],
+        ["B", "C", "D", "A"],
+        ["A", "B", "C", "D"],
+    ]
+    sdf = "".join(
+        "t\nM  END\n" + "".join(f"> <{n}>\n{n}{i}\n\n" for n in order) + "$$$$\n"
+        for i, order in enumerate(orders)
+    )
+    expected = [[(n, f"{n}{i}") for n in order] for i, order in enumerate(orders)]
+    for _ in range(2):
+        blocks = list(SDBlock.from_sdf(sdf))
+        assert [block.records() for block in blocks] == expected
+        assert [block.to_dict() for block in blocks] == [dict(e) for e in expected]
+        assert [list(block.iter_records()) for block in blocks] == expected
+    lazy = blocks[2].iter_records()
+    assert next(lazy) == expected[2][0]
+    assert blocks[3].to_dict() == dict(expected[3])
+    assert list(lazy) == expected[2][1:]
+    byte_blocks = list(SDBlock.from_sdf(sdf.encode()))
+    assert [block.records() for block in byte_blocks] == [
+        [(n.encode(), v.encode()) for n, v in e] for e in expected
+    ]
+
+
 def test_sdblock_is_generic_at_runtime() -> None:
     """SDBlock[str] and SDBlock[bytes] work in evaluated annotations."""
     alias = SDBlock[str]
