@@ -76,16 +76,16 @@ Migrating from 0.1.x
 
 .. code-block:: python
 
-   "".join(block.mdl)  # block.mdl
+   str.join("", block.mdl)  # block.mdl
    any(s in line for line in block.mdl)  # s in block.mdl
-   block.title + "\n" + "".join(block.mdl)  # block.molblock
+   block.title + "\n" + str.join("", block.mdl)  # block.molblock
    dict(block.records())  # block.to_dict()
    dict(block.records()).get(name)  # block.get(name)
    len(list(block.records()))  # len(block)
    name in dict(block.records())  # name in block
    [name for name, _ in block.records()]  # block.names()
    next(block.records())  # next(block.iter_records())
-   SDBlock.from_block_lines(lines)  # SDBlock("".join(lines))
+   SDBlock.from_block_lines(lines)  # SDBlock(str.join("", lines))
    SDBlock.from_lines(text.splitlines(True))  # SDBlock.from_sdf(text)
    block.write(handle, with_newlines=True)  # block.write(handle)
 

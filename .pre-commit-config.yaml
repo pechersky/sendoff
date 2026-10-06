@@ -45,6 +45,11 @@ repos:
 
 -   repo: local
     hooks:
+    -   id: str-join
+        name: write str.join(sep, items), not sep.join(items)
+        entry: '[''"]\.join\('
+        language: pygrep
+        types_or: [python, pyi, rst, markdown]
     -   id: cargo-fmt
         name: cargo fmt
         entry: cargo fmt --all -- --check

@@ -570,7 +570,7 @@ def test_record_names_are_shared_between_blocks() -> None:
         assert first.records()[-1][0] is second.records()[-1][0]
 
     names = [f"N{index}" for index in range(5000)] + ["L" * 65, "A"]
-    sdf = "t\nM  END\n" + "".join(f"> <{name}>\n{name}v\n\n" for name in names)
+    sdf = "t\nM  END\n" + str.join("", [f"> <{name}>\n{name}v\n\n" for name in names])
     check(sdf, names)
     check(sdf.encode(), [name.encode() for name in names])
 
@@ -586,9 +586,14 @@ def test_record_names_follow_changing_orders() -> None:
         ["B", "C", "D", "A"],
         ["A", "B", "C", "D"],
     ]
-    sdf = "".join(
-        "t\nM  END\n" + "".join(f"> <{n}>\n{n}{i}\n\n" for n in order) + "$$$$\n"
-        for i, order in enumerate(orders)
+    sdf = str.join(
+        "",
+        [
+            "t\nM  END\n"
+            + str.join("", [f"> <{n}>\n{n}{i}\n\n" for n in order])
+            + "$$$$\n"
+            for i, order in enumerate(orders)
+        ],
     )
     expected = [[(n, f"{n}{i}") for n in order] for i, order in enumerate(orders)]
     for _ in range(2):
@@ -1570,9 +1575,12 @@ def test_write_sdf_writes_what_block_write_would(tmp_path: Path) -> None:
     """
     # Padded titles are stripped; 3 MiB of blocks span several chunks, and
     # non-ASCII text blocks go to a text handle on their own.
-    text = "".join(
-        f"  t{index}  \r\nM  END\n> <A>\n{'é' * (index % 7 < 2)}{'v' * 1000}\n\n$$$$\n"
-        for index in range(3000)
+    text = str.join(
+        "",
+        [
+            f"  t{i}  \r\nM  END\n> <A>\n{'é' * (i % 7 < 2)}{'v' * 1000}\n\n$$$$\n"
+            for i in range(3000)
+        ],
     )
     source = tmp_path / "input.sdf"
     source.write_text(text, newline="")
@@ -1581,9 +1589,12 @@ def test_write_sdf_writes_what_block_write_would(tmp_path: Path) -> None:
     for path in paths:
         blocks = list(parse_sdf(path))
         handle = io.StringIO() if isinstance(path, Path) else io.BytesIO()
-        expected = b"".join(
-            b.to_sdf().encode() if isinstance(b.title, str) else b.to_sdf()
-            for b in blocks
+        expected = bytes.join(
+            b"",
+            [
+                b.to_sdf().encode() if isinstance(b.title, str) else b.to_sdf()
+                for b in blocks
+            ],
         )
         assert write_sdf(out, blocks) == 3000
         assert out.read_bytes() == expected

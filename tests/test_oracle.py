@@ -330,7 +330,7 @@ def test_from_splitlines_matches_reference(lines: list[str]) -> None:
     Args:
         lines: generated lines with endings
     """
-    stripped = "".join(lines).splitlines()
+    stripped = str.join("", lines).splitlines()
     assert_blocks_match(
         SDBlock.from_lines(stripped), list(ref_from_lines(stripped)), text=True
     )
@@ -345,7 +345,7 @@ def test_file_objects_match_reference(lines: list[str], sizes: list[int]) -> Non
         lines: generated lines with endings
         sizes: chunk sizes for the reader to cycle through
     """
-    text = "".join(lines)
+    text = str.join("", lines)
     data = text.encode()
     text_sources: list[Any] = [ChunkedReader(text, sizes), io.StringIO(text)]
     for text_source in text_sources:
@@ -365,7 +365,7 @@ def test_from_sdf_matches_reference(lines: list[str]) -> None:
     Args:
         lines: generated lines with endings
     """
-    text = "".join(lines)
+    text = str.join("", lines)
     data = text.encode()
     text_reference = list(ref_from_lines(io.StringIO(text, newline=None)))
     assert_blocks_match(SDBlock.from_sdf(text), text_reference, text=True)
@@ -381,7 +381,7 @@ def test_parse_sdf_matches_reference(lines: list[str]) -> None:
     Args:
         lines: generated lines with endings
     """
-    data = "".join(lines).encode()
+    data = str.join("", lines).encode()
     with tempfile.TemporaryDirectory() as directory:
         path = os.path.join(directory, "input.sdf")
         with open(path, "wb") as handle:

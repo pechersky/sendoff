@@ -1,13 +1,13 @@
 The ``SDBlock`` API changed. Migrate 0.1.x code as follows:
 
-- ``"".join(block.mdl)`` becomes ``block.mdl``, one ``str`` (or ``bytes``) of
-  the CTAB after the title through ``M  END``, each line ending in ``\n``.
-  Iterate lines with ``block.mdl.splitlines(keepends=True)`` and search with
-  ``needle in block.mdl``. Code that iterated lines still runs but walks
-  characters, so ``any(s in line for line in block.mdl)``,
-  ``islice(block.mdl, ...)``, and ``"\n".join(block.mdl)`` give wrong results
-  without raising: check every ``.mdl`` use.
-- ``block.title + "\n" + "".join(block.mdl)`` becomes ``block.molblock``.
+- ``str.join("", block.mdl)`` becomes ``block.mdl``, one ``str`` (or
+  ``bytes``) of the CTAB after the title through ``M  END``, each line ending
+  in ``\n``. Iterate lines with ``block.mdl.splitlines(keepends=True)`` and
+  search with ``needle in block.mdl``. Code that iterated lines still runs but
+  walks characters, so ``any(s in line for line in block.mdl)``,
+  ``islice(block.mdl, ...)``, and ``str.join("\n", block.mdl)`` give wrong
+  results without raising: check every ``.mdl`` use.
+- ``block.title + "\n" + str.join("", block.mdl)`` becomes ``block.molblock``.
   ``mdl`` is read-only; assign ``block.molblock`` to replace the structure.
 - ``block.metadata`` is gone. Read records with ``records()``, ``get``, or
   ``to_dict``; edit them with ``append_record``, ``set_record``,
@@ -20,8 +20,9 @@ The ``SDBlock`` API changed. Migrate 0.1.x code as follows:
   ``[name for name, _ in block.records()]`` becomes ``block.names()``.
 - ``SDBlock`` is no longer a dataclass. ``SDBlock(title, mdl, metadata)``
   becomes ``SDBlock(sdf, records)``, and ``SDBlock.from_block_lines(lines)``
-  becomes ``SDBlock("".join(lines))``. ``parse_mdl`` and ``parse_metadata`` are
-  removed. Blocks compare by identity and cannot be copied or pickled.
+  becomes ``SDBlock(str.join("", lines))``. ``parse_mdl`` and
+  ``parse_metadata`` are removed. Blocks compare by identity and cannot be
+  copied or pickled.
 - ``SDBlock.from_lines`` no longer takes a ``str`` or ``bytes``, which it
   iterated character by character: ``from_lines(text.splitlines(True))``
   becomes ``SDBlock.from_sdf(text)``. ``from_lines`` also takes file objects.

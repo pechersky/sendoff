@@ -111,7 +111,7 @@ def value(rng: random.Random, name: str, index: int) -> str:
     if roll < 0.03:
         return ""
     if roll < 0.08 or name == "Notes":
-        return "\n".join(f"line {i} of {name}" for i in range(rng.randint(2, 4)))
+        return str.join("\n", [f"line {i} of {name}" for i in range(rng.randint(2, 4))])
     if name in ("MW", "LogP", "TPSA", "Purity"):
         return f"{rng.uniform(0, 600):.2f}"
     if name in ("HBD", "HBA", "Stock_mg"):
@@ -133,7 +133,7 @@ def synthetic_sdf(path: Path, blocks: int) -> None:
     with path.open("w", newline="\n") as out:
         for index in range(blocks):
             title = f"SYN-{index:06d}" if rng.random() < 0.5 else ""
-            out.write("\n".join([title, *ctab(rng)]) + "\n")
+            out.write(str.join("\n", [title, *ctab(rng)]) + "\n")
             fields = [name for name, p in FIELDS if rng.random() < p]
             if rng.random() < 0.05:
                 fields.append(f"Extra_{index}")
@@ -236,7 +236,7 @@ def run(
         cwd: the working directory
         env: the environment, if not this one
     """
-    print("+", " ".join(command), file=sys.stderr, flush=True)
+    print("+", str.join(" ", command), file=sys.stderr, flush=True)
     subprocess.run(command, cwd=cwd, env=env, check=True)
 
 

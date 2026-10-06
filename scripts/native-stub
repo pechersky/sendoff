@@ -102,7 +102,7 @@ def normalize(text: str) -> str:
         head = lines[first].encode()[:start].decode()
         tail = lines[last - 1].encode()[end:].decode()
         lines[first:last] = [head + replacement + tail]
-    return "".join(lines)
+    return str.join("", lines)
 
 
 def black(text: str) -> str:
@@ -149,14 +149,17 @@ def diff(old: str, new: str) -> str:
     Returns:
         The unified diff
     """
-    patch = "".join(
-        "\n" if line == " \n" else line
-        for line in difflib.unified_diff(
-            old.splitlines(keepends=True),
-            new.splitlines(keepends=True),
-            "a/sendoff/native.pyi",
-            "b/sendoff/native.pyi",
-        )
+    patch = str.join(
+        "",
+        [
+            "\n" if line == " \n" else line
+            for line in difflib.unified_diff(
+                old.splitlines(keepends=True),
+                new.splitlines(keepends=True),
+                "a/sendoff/native.pyi",
+                "b/sendoff/native.pyi",
+            )
+        ],
     )
     return patch.rstrip("\n") + "\n" if patch else ""
 
@@ -209,14 +212,14 @@ def apply(text: str, patch: str) -> str:
         if not starts:
             raise SystemExit(
                 f"{PATCH.name}: hunk at line {header[1]} no longer applies:\n"
-                + "".join(old)
+                + str.join("", old)
                 + "Edit sendoff/native.pyi to match the Rust change, then run "
                 "scripts/native-stub --update-patch."
             )
         start = min(starts, key=lambda start: abs(start - hint))
         out += lines[pos:start] + new
         pos = start + len(old)
-    return "".join(out + lines[pos:])
+    return str.join("", out + lines[pos:])
 
 
 def main() -> int:
