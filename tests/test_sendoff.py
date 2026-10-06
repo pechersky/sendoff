@@ -1677,6 +1677,15 @@ def test_renumber_slices_atom_lines_by_character() -> None:
     assert "M  V30 1" in block.ctable().lines
 
 
+def test_ctable_lines_are_a_fresh_list() -> None:
+    """Each CTable.lines access is a new list that does not alias the table."""
+    table = v3000_block(atom="a b 1 C").ctable()
+    lines = table.lines
+    assert lines == table.lines and lines is not table.lines
+    lines.clear()
+    assert table.lines and table.lines[0] == "t"
+
+
 def test_write_sdf_writes_what_block_write_would(tmp_path: Path) -> None:
     """write_sdf to a path or handle matches SDBlock.write, across chunks.
 

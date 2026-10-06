@@ -36,8 +36,8 @@ impl PyCTable {
 
     /// Return a copy of the original connection-table lines.
     #[getter]
-    fn lines(&self) -> Vec<String> {
-        self.inner.lines.clone()
+    fn lines(&self) -> &[String] {
+        &self.inner.lines
     }
 
     /// Return the atom count from the counts line.
@@ -140,8 +140,8 @@ impl PyCTable {
         Ok(Self { inner })
     }
 
-    pub(crate) fn lines_after_title(&self) -> Vec<String> {
-        self.inner.lines[1..].to_vec()
+    pub(crate) fn lines_after_title(&self) -> &[String] {
+        &self.inner.lines[1..]
     }
 
     pub(crate) fn renumber_indices_for_block(&mut self, py: Python<'_>) -> PyResult<()> {
