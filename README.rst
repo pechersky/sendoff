@@ -69,6 +69,30 @@ Edit blocks and write them back:
 ``write_sdf`` to a path writes in large chunks with the GIL released, so prefer
 it to a ``block.write`` loop.
 
+Migrating from 0.1.x
+--------------------
+
+``SDBlock`` is no longer a dataclass of line deques. The common rewrites:
+
+.. code-block:: python
+
+   "".join(block.mdl)  # block.mdl
+   block.title + "\n" + "".join(block.mdl)  # block.molblock
+   dict(block.records())  # block.to_dict()
+   dict(block.records()).get(name)  # block.get(name)
+   len(list(block.records()))  # len(block)
+   name in dict(block.records())  # name in block
+   [name for name, _ in block.records()]  # block.names()
+   next(block.records())  # next(block.iter_records())
+   SDBlock.from_block_lines(lines)  # SDBlock("".join(lines))
+   SDBlock.from_lines(text.splitlines(True))  # SDBlock.from_sdf(text)
+   block.write(handle, with_newlines=True)  # block.write(handle)
+
+``block.metadata`` is gone: edit records with ``set_record``,
+``remove_record``, ``replace_records``, or ``append_record``. ``mdl`` is
+read-only, so assign ``block.molblock`` to change the structure. The release
+notes list every change.
+
 Release wheels
 --------------
 
