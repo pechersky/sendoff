@@ -2,8 +2,11 @@
 
 This mirrors ``sendoff/sdblock.py`` from the 0.1.x pure-Python release and is
 the oracle for the differential tests. It encodes the accepted native-parser
-behavior changes that an unterminated final block is still yielded and that a
-block without ``M  END`` does not keep its ``$$$$`` line as MDL. Divergences that are
+behavior changes that an unterminated final block is still yielded, that a
+block without ``M  END`` does not keep its ``$$$$`` line as MDL, and that line
+endings survive: a ``$$$$`` line that is exactly ``$$$$`` and a newline is kept,
+and lines the block writes or ends itself end like its title line (a line
+ending in a bare ``\r`` gets just ``\n``). Divergences that are
 accepted but not modeled here are kept out of the generated inputs instead.
 """
 
@@ -36,6 +39,8 @@ class RefBlock(Generic[AnyStr]):
     """A molecule block parsed by the reference implementation."""
 
     title: AnyStr
+    newline: AnyStr
+    trailer: AnyStr
     mdl: list[AnyStr] = field(default_factory=list)
     metadata: list[AnyStr] = field(default_factory=list)
 
@@ -49,9 +54,23 @@ class RefBlock(Generic[AnyStr]):
         Returns:
             The parsed reference block.
         """
+        lf, crlf = _lit(lines[0], "\n"), _lit(lines[0], "\r\n")
+        title = lines[0] if lines[0].endswith(lf) else lines[0] + lf
+        newline = crlf if title.endswith(crlf) else lf
+        lines = [
+            (
+                line
+                if line.endswith(lf)
+                else line + (lf if line.endswith(crlf[:1]) else newline)
+            )
+            for line in [title] + lines[1:]
+        ]
         iterlines = iter(lines)
         first = next(iterlines)
         mend, delimiter = _lit(first, "M  END"), _lit(first, "$$$$")
+        trailer = delimiter + newline
+        if len(lines) > 1 and lines[-1] in (delimiter + lf, delimiter + crlf):
+            trailer = lines[-1]
         mdl: list[AnyStr] = []
         for line in iterlines:
             if line.startswith(delimiter):
@@ -64,7 +83,7 @@ class RefBlock(Generic[AnyStr]):
             if line.startswith(delimiter):
                 break
             metadata.append(line)
-        return cls(first.strip(), mdl, metadata)
+        return cls(first.strip(), newline, trailer, mdl, metadata)
 
     def records(self) -> list[tuple[AnyStr, AnyStr]]:
         """Return (name, value) records exactly as main's generator yields them.
@@ -93,23 +112,22 @@ class RefBlock(Generic[AnyStr]):
             name: record name
             value: record value without a trailing newline
         """
-        newline = _lit(name, "\n")
+        newline = self.newline
         self.metadata.extend(
-            [_lit(name, "> <") + name + _lit(name, ">\n"), value + newline, newline]
+            [
+                _lit(name, "> <") + name + _lit(name, ">") + newline,
+                value + newline,
+                newline,
+            ]
         )
 
     def molblock(self) -> AnyStr:
         """Return the title and MDL lines as main's idiom joins them.
 
         Returns:
-            The stripped title, a newline, and the MDL lines, each
-            terminated by a newline as ``write`` terminates them.
+            The stripped title, the title line's ending, and the MDL lines.
         """
-        newline = _lit(self.title, "\n")
-        return self.title[:0].join(
-            [self.title, newline]
-            + [line if line.endswith(newline) else line + newline for line in self.mdl]
-        )
+        return self.title[:0].join([self.title, self.newline] + self.mdl)
 
     def serialize(self) -> AnyStr:
         """Return what main's ``write(outh)`` writes, as one value.
@@ -117,14 +135,9 @@ class RefBlock(Generic[AnyStr]):
         Returns:
             The serialized block.
         """
-        newline = _lit(self.title, "\n")
-        parts: list[AnyStr] = [self.title, newline]
-        for line in self.mdl + self.metadata:
-            parts.append(line)
-            if not line.endswith(newline):
-                parts.append(newline)
-        parts.append(_lit(self.title, "$$$$\n"))
-        return self.title[:0].join(parts)
+        return self.title[:0].join(
+            [self.title, self.newline] + self.mdl + self.metadata + [self.trailer]
+        )
 
 
 def ref_from_lines(lines: Iterable[AnyStr]) -> Iterator[RefBlock[AnyStr]]:

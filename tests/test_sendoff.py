@@ -381,6 +381,43 @@ def test_block_without_mend_round_trips() -> None:
         text = out.getvalue()
 
 
+def test_bytes_blocks_keep_crlf(tmp_path: Path) -> None:
+    """Untouched CRLF bytes blocks write back byte for byte, and edits stay CRLF.
+
+    Args:
+        tmp_path: pytest fixture of a temporary directory
+    """
+    data = (
+        b" t1 \r\n  prog\r\n\r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$\r\n"
+        b"t2\r\nM  END\r\n> <B>\r\n\xe9\r\n\r\n$$$$\r\n"
+    )
+    source = tmp_path / "crlf.sdf"
+    source.write_bytes(data)
+    blocks = list(parse_sdf(os.fsencode(source)))
+    out = io.BytesIO()
+    assert write_sdf(out, blocks) == 2
+    assert out.getvalue() == data.replace(b" t1 ", b"t1")
+    assert blocks[0].molblock == b"t1\r\n  prog\r\n\r\nM  END\r\n"
+
+    blocks[1].title = b"new"
+    blocks[1].append_record(b"C", b"3")
+    assert blocks[1].to_sdf() == (
+        b"new\r\nM  END\r\n> <B>\r\n\xe9\r\n\r\n> <C>\r\n3\r\n\r\n$$$$\r\n"
+    )
+    assert SDBlock(b"t\r\nM  END\r\n").to_sdf() == b"t\r\nM  END\r\n$$$$\r\n"
+
+    # A file without a final newline still writes CRLF throughout.
+    source.write_bytes(data.removesuffix(b"\r\n"))
+    out = io.BytesIO()
+    write_sdf(out, parse_sdf(os.fsencode(source)))
+    assert out.getvalue() == data.replace(b" t1 ", b"t1")
+    with open(source, "rb") as handle:
+        lines = handle.readlines()
+    assert bytes.join(b"", (b.to_sdf() for b in SDBlock.from_lines(lines))) == (
+        data.replace(b" t1 ", b"t1")
+    )
+
+
 def test_titled_mol_read(single_titled_mol_sdf: Pathy) -> None:
     """An sdf of a single titled molecule contains it with the expected title.
 
@@ -892,7 +929,7 @@ def test_molblock_setter_replaces_the_structure_only() -> None:
 
     byte_block = next(SDBlock.from_lines([b"t\n", b"M  END\n", b"> <A>\n", b"1\n"]))
     byte_block.molblock = b"b\r\nM  END\r\n"
-    assert byte_block.molblock == b"b\nM  END\r\n"  # the title is stripped
+    assert byte_block.molblock == b"b\r\nM  END\r\n"
     assert byte_block.title == b"b"
     assert byte_block.to_dict() == {b"A": b"1"}
 

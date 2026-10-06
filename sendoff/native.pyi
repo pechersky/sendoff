@@ -355,9 +355,9 @@ class SDBlock(Generic[AnyStr]):
         """
         Return the CTAB after the title, through `M  END`, as one value.
 
-        Every line ends in `\\n`, so `needle in block.mdl` searches the CTAB,
-        `block.mdl.splitlines()` gives its lines, and
-        `block.title + "\\n" + block.mdl` is `block.molblock`.
+        Every line ends in a newline, so `needle in block.mdl` searches the
+        CTAB and `block.mdl.splitlines()` gives its lines. `block.molblock`
+        is `block.title`, the title line's ending, then `block.mdl`.
         """
 
     @property
@@ -505,8 +505,11 @@ class SDBlock(Generic[AnyStr]):
         """
         Write the block, ending with $$$$, to a file-like handle.
 
-        Every line ends with "\\n", and the block is written in one `write`
-        call.
+        Lines end as they were read, so blocks from a bytes path keep "\\r\\n";
+        str paths read universal newlines, so their lines end in "\\n". Lines
+        the block adds or ends (a stripped title, new records, a missing $$$$,
+        a last line without "\\n") end like the title line. The block is
+        written in one `write` call.
 
         Args:
             outh: a text or binary file-like handle matching the input type

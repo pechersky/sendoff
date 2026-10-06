@@ -212,23 +212,67 @@ impl fmt::Display for InvalidMolblock {
     }
 }
 
-/// Append `> <name>`, the value line, and a blank line.
-fn push_record(data: &mut Vec<u8>, name: &[u8], value: &[u8]) {
-    data.reserve(name.len() + value.len() + 7);
+/// Append `> <name>`, the value line, and a blank line, each ending in
+/// `newline`.
+fn push_record(data: &mut Vec<u8>, name: &[u8], value: &[u8], newline: &[u8]) {
+    data.reserve(name.len() + value.len() + 4 + 3 * newline.len());
     data.extend_from_slice(b"> <");
     data.extend_from_slice(name);
-    data.extend_from_slice(b">\n");
+    data.push(b'>');
+    data.extend_from_slice(newline);
     data.extend_from_slice(value);
-    data.extend_from_slice(b"\n\n");
+    data.extend_from_slice(newline);
+    data.extend_from_slice(newline);
 }
 
-/// The delimiter line that ends every serialized block.
+/// The delimiter lines that end serialized blocks, as read.
 const TRAILER: &[u8] = b"$$$$\n";
+const CRLF_TRAILER: &[u8] = b"$$$$\r\n";
+
+/// `\r\n` if `line` ends with it, else `\n`.
+fn newline(line: &[u8]) -> &'static [u8] {
+    if line.ends_with(b"\r\n") {
+        b"\r\n"
+    } else {
+        b"\n"
+    }
+}
+
+/// The ending of `data`'s first line once it ends in `\n`, which lines a
+/// block writes itself use.
+pub fn title_newline(data: &[u8]) -> &'static [u8] {
+    match memchr(b'\n', data) {
+        Some(index) => newline(&data[..=index]),
+        None if data.ends_with(b"\r") => b"\r\n",
+        None => b"\n",
+    }
+}
+
+/// What ends `line` if it lacks a `\n`: `\n` after a `\r`, else `newline`.
+pub fn missing_ending(line: &[u8], newline: &'static [u8]) -> &'static [u8] {
+    if line.ends_with(b"\r") {
+        b"\n"
+    } else {
+        newline
+    }
+}
+
+/// The `$$$$` line ending in `newline`.
+fn trailer(newline: &[u8]) -> &'static [u8] {
+    if newline == b"\r\n" {
+        CRLF_TRAILER
+    } else {
+        TRAILER
+    }
+}
 
 /// One molecule block: a title line, MDL lines, and SD data lines.
 ///
-/// `data` also ends with [`TRAILER`], so an unstripped block serializes
-/// as a single copy of `data`.
+/// `data` also ends with a `$$$$` line, so an unstripped block serializes
+/// as a single copy of `data`. Lines the block writes or ends itself (a
+/// stripped title, new records, a missing or normalized `$$$$`, a last line
+/// without `\n`) end like the title line, so CRLF input stays CRLF; a line
+/// ending in a bare `\r` gets just `\n`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
     data: Vec<u8>,
@@ -247,7 +291,8 @@ impl Block {
     /// block.)
     pub fn new(mut data: Vec<u8>, delimiter: Option<usize>) -> Self {
         if data.last() != Some(&b'\n') {
-            data.push(b'\n');
+            let ending = missing_ending(&data, title_newline(&data));
+            data.extend_from_slice(ending);
         }
         let BlockView {
             title_end,
@@ -255,9 +300,10 @@ impl Block {
             body_end,
             ..
         } = BlockView::new(&data, delimiter);
-        if data[body_end..] != *TRAILER {
+        if !matches!(&data[body_end..], TRAILER | CRLF_TRAILER) {
+            let trailer = trailer(newline(&data[..title_end]));
             data.truncate(body_end);
-            data.extend_from_slice(TRAILER);
+            data.extend_from_slice(trailer);
         }
         Self {
             data,
@@ -266,7 +312,7 @@ impl Block {
         }
     }
 
-    /// The data, ending with `$$$$\n`, and where the title and MDL end:
+    /// The data, ending with a `$$$$` line, and where the title and MDL end:
     /// what `from_parts` rebuilds the block from.
     ///
     /// Re-parsing the serialized block does not always restore it: a title
@@ -278,8 +324,9 @@ impl Block {
 
     /// Rebuild a block from `parts`, or `None` if no block has them.
     pub fn from_parts(data: Vec<u8>, title_end: usize, mdl_end: usize) -> Option<Self> {
-        let body_end = data.len().checked_sub(TRAILER.len())?;
-        let valid = data.ends_with(TRAILER)
+        let delimiter = trailer(newline(&data));
+        let body_end = data.len().checked_sub(delimiter.len())?;
+        let valid = data.ends_with(delimiter)
             && memchr(b'\n', &data) == title_end.checked_sub(1)
             && title_end <= mdl_end
             && mdl_end <= body_end
@@ -291,9 +338,19 @@ impl Block {
         })
     }
 
+    /// The `$$$$` line that ends the data.
+    fn trailer(&self) -> &'static [u8] {
+        trailer(newline(&self.data))
+    }
+
     /// Where the SD data ends and the trailer starts.
     fn body_end(&self) -> usize {
-        self.data.len() - TRAILER.len()
+        self.data.len() - self.trailer().len()
+    }
+
+    /// The title line's ending, which lines the block writes also use.
+    fn newline(&self) -> &'static [u8] {
+        newline(&self.data[..self.title_end])
     }
 
     /// Read the block through a view.
@@ -320,18 +377,25 @@ impl Block {
     ///
     /// Borrows from the block unless stripping changed the title.
     pub fn molblock(&self, strip: Strip) -> Cow<'_, [u8]> {
+        self.retitled(strip, self.mdl_end)
+    }
+
+    /// The stripped title line and `data[title_end..end]`.
+    ///
+    /// Borrows from the block unless stripping changed more than the
+    /// title line's ending.
+    fn retitled(&self, strip: Strip, end: usize) -> Cow<'_, [u8]> {
         let title = self.title(strip);
-        // Trimming always drops the title line's `\n`; if that is all it
-        // dropped, the title and MDL are already contiguous.
-        if title.len() + 1 == self.title_end {
-            return Cow::Borrowed(&self.data[..self.mdl_end]);
+        let newline = self.newline();
+        if title.len() + newline.len() == self.title_end {
+            return Cow::Borrowed(&self.data[..end]);
         }
-        let mdl = self.mdl();
-        let mut molblock = Vec::with_capacity(title.len() + 1 + mdl.len());
-        molblock.extend_from_slice(title);
-        molblock.push(b'\n');
-        molblock.extend_from_slice(mdl);
-        Cow::Owned(molblock)
+        let rest = &self.data[self.title_end..end];
+        let mut output = Vec::with_capacity(title.len() + newline.len() + rest.len());
+        output.extend_from_slice(title);
+        output.extend_from_slice(newline);
+        output.extend_from_slice(rest);
+        Cow::Owned(output)
     }
 
     /// The SD data lines, each ending in `\n`.
@@ -343,40 +407,34 @@ impl Block {
     ///
     /// Borrows from the block unless stripping changed the title.
     pub fn serialized(&self, strip: Strip) -> Cow<'_, [u8]> {
-        let title = self.title(strip);
-        if title.len() + 1 == self.title_end {
-            return Cow::Borrowed(&self.data);
-        }
-        let body = &self.data[self.title_end..];
-        let mut output = Vec::with_capacity(title.len() + 1 + body.len());
-        output.extend_from_slice(title);
-        output.push(b'\n');
-        output.extend_from_slice(body);
-        Cow::Owned(output)
+        self.retitled(strip, self.data.len())
     }
 
     /// Append what `serialized` returns to `out`.
     pub fn serialize_into(&self, strip: Strip, out: &mut Vec<u8>) {
         out.extend_from_slice(self.title(strip));
-        out.push(b'\n');
+        out.extend_from_slice(self.newline());
         out.extend_from_slice(&self.data[self.title_end..]);
     }
 
     /// Append a `> <name>` record with a single value line.
     pub fn append_record(&mut self, name: &[u8], value: &[u8]) {
+        let (newline, trailer) = (self.newline(), self.trailer());
         self.data.truncate(self.body_end());
-        push_record(&mut self.data, name, value);
-        self.data.extend_from_slice(TRAILER);
+        push_record(&mut self.data, name, value, newline);
+        self.data.extend_from_slice(trailer);
     }
 
-    /// Replace the title line with `title`, which must not contain `\n`.
+    /// Replace the title line with `title`, which must not contain `\n`,
+    /// keeping the line's ending.
     pub fn set_title(&mut self, title: &[u8]) {
         let old_end = self.title_end;
-        let mut line = Vec::with_capacity(title.len() + 1);
+        let newline = self.newline();
+        let mut line = Vec::with_capacity(title.len() + newline.len());
         line.extend_from_slice(title);
-        line.push(b'\n');
+        line.extend_from_slice(newline);
         self.data.splice(..old_end, line);
-        self.title_end = title.len() + 1;
+        self.title_end = title.len() + newline.len();
         self.mdl_end = self.mdl_end - old_end + self.title_end;
     }
 
@@ -398,7 +456,7 @@ impl Block {
         let mut data = Vec::with_capacity(mdl_end + 1 + metadata.len());
         data.extend_from_slice(&molblock[..mdl_end]);
         if !data.ends_with(b"\n") {
-            data.push(b'\n');
+            data.extend_from_slice(missing_ending(&data, title_newline(&data)));
         }
         let new_mdl_end = data.len();
         data.extend_from_slice(metadata);
@@ -429,11 +487,12 @@ impl Block {
 
     /// Replace the whole SD data with `records`.
     pub fn replace_records<'a>(&mut self, records: impl IntoIterator<Item = (&'a [u8], &'a [u8])>) {
+        let (newline, trailer) = (self.newline(), self.trailer());
         self.data.truncate(self.mdl_end);
         for (name, value) in records {
-            push_record(&mut self.data, name, value);
+            push_record(&mut self.data, name, value, newline);
         }
-        self.data.extend_from_slice(TRAILER);
+        self.data.extend_from_slice(trailer);
     }
 
     /// Drop the records named `name`, putting `value` in place of the
@@ -456,14 +515,16 @@ impl Block {
         if spans.is_empty() {
             return Ok(0);
         }
-        let mut data =
-            Vec::with_capacity(self.data.len() + name.len() + value.map_or(0, <[u8]>::len) + 7);
+        let newline = self.newline();
+        let mut data = Vec::with_capacity(
+            self.data.len() + name.len() + value.map_or(0, <[u8]>::len) + 4 + 3 * newline.len(),
+        );
         data.extend_from_slice(&self.data[..self.mdl_end]);
         let mut copied = 0;
         for (index, &(start, end)) in spans.iter().enumerate() {
             data.extend_from_slice(&metadata[copied..start]);
             if let (0, Some(value)) = (index, value) {
-                push_record(&mut data, name, value);
+                push_record(&mut data, name, value, newline);
             }
             copied = end;
         }
@@ -474,12 +535,13 @@ impl Block {
 
     /// Replace the MDL lines, keeping the raw title line and SD data.
     pub fn replace_mdl<'a>(&mut self, mdl: impl IntoIterator<Item = &'a [u8]>) {
+        let newline = self.newline();
         let mut data = Vec::with_capacity(self.data.len() + 64);
         data.extend_from_slice(&self.data[..self.title_end]);
         for line in mdl {
             data.extend_from_slice(line);
             if !line.ends_with(b"\n") {
-                data.push(b'\n');
+                data.extend_from_slice(missing_ending(line, newline));
             }
         }
         let mdl_end = data.len();
@@ -763,7 +825,7 @@ mod tests {
         );
         assert_eq!(
             written(&block),
-            "t\nsrc\nM  END\n> <A>\n a \nb\n\n> <B>\n\n$$$$\n"
+            "t\r\nsrc\nM  END\n> <A>\n a \nb\n\n> <B>\n\n$$$$\n"
         );
     }
 
@@ -783,6 +845,59 @@ mod tests {
         let block = block("$$$$\n", true);
         assert_eq!(block.title(Strip::Bytes), b"$$$$");
         assert_eq!(written(&block), "$$$$\n$$$$\n");
+        assert_eq!(written(&self::block("$$$$\r\n", true)), "$$$$\r\n$$$$\r\n");
+    }
+
+    #[test]
+    fn crlf_blocks_keep_their_line_endings() {
+        let tidy = block("t\r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$\r\n", true);
+        assert!(matches!(tidy.serialized(Strip::Bytes), Cow::Borrowed(_)));
+        assert!(matches!(
+            tidy.molblock(Strip::Bytes),
+            Cow::Borrowed(b"t\r\nM  END\r\n")
+        ));
+        assert_eq!(tidy.mdl(), b"M  END\r\n");
+
+        // Lines the block writes itself end like the title line.
+        let mut block = block(" t \r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$ x\r\n", true);
+        assert_eq!(block.title(Strip::Bytes), b"t");
+        assert_eq!(written(&block), "t\r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$\r\n");
+        assert_eq!(
+            written(&self::block("t\r\nx\r\n", false)),
+            "t\r\nx\r\n$$$$\r\n"
+        );
+        // So does a last line without `\n`, unless a bare `\r` ends it.
+        let unterminated = self::block("t\r\nM  END\r\n$$$$", true);
+        assert_eq!(written(&unterminated), "t\r\nM  END\r\n$$$$\r\n");
+        assert_eq!(written(&self::block("t\r\nx", false)), "t\r\nx\r\n$$$$\r\n");
+        assert_eq!(
+            written(&self::block("t\r\nx\r", false)),
+            "t\r\nx\r\n$$$$\r\n"
+        );
+        assert_eq!(written(&self::block("t\r", false)), "t\r\n$$$$\r\n");
+        assert_eq!(written(&self::block("t", false)), "t\n$$$$\n");
+        block.append_record(b"B", b"2");
+        block.set_title(b"new");
+        block.set_record(b"A", b"3", Strip::Bytes).unwrap();
+        let edited = "new\r\nM  END\r\n> <A>\r\n3\r\n\r\n> <B>\r\n2\r\n\r\n$$$$\r\n";
+        assert_eq!(written(&block), edited);
+        let (data, title_end, mdl_end) = block.parts();
+        assert_eq!(
+            Block::from_parts(data.to_vec(), title_end, mdl_end),
+            Some(block.clone())
+        );
+        block.replace_records([(&b"C"[..], &b"c"[..])]);
+        assert_eq!(
+            written(&block),
+            "new\r\nM  END\r\n> <C>\r\nc\r\n\r\n$$$$\r\n"
+        );
+
+        // A delimiter line is kept as read, even if the title's ending differs.
+        let mut mixed = self::block("t\nM  END\n$$$$\r\n", true);
+        mixed.append_record(b"A", b"1");
+        assert_eq!(written(&mixed), "t\nM  END\n> <A>\n1\n\n$$$$\r\n");
+        assert_eq!(Block::from_parts(b"t\r\n$$$$\r".to_vec(), 3, 3), None);
+        assert_eq!(Block::from_parts(b"\r\n".to_vec(), 2, 2), None);
     }
 
     #[test]
