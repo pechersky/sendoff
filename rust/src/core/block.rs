@@ -500,13 +500,15 @@ impl Block {
     /// Equivalent to parsing a `CTable` from the title and MDL lines, without
     /// copying them.
     pub fn counts(&self) -> Result<(CTableFormat, i64, i64), CTableError> {
-        let header: Vec<Cow<'_, str>> = std::iter::once(&b""[..])
+        let mut source = std::iter::once(&b""[..])
             .chain(lines(self.mdl()))
-            .take(6)
-            .map(String::from_utf8_lossy)
-            .collect();
-        let header: Vec<&str> = header.iter().map(AsRef::as_ref).collect();
-        ctable::parse_header(&header).map(|(format, _, atoms, bonds)| (format, atoms, bonds))
+            .map(String::from_utf8_lossy);
+        let owned: [Option<Cow<'_, str>>; ctable::HEADER_LINES] =
+            std::array::from_fn(|_| source.next());
+        let found = owned.iter().take_while(|line| line.is_some()).count();
+        let header = owned.each_ref().map(|line| line.as_deref().unwrap_or(""));
+        ctable::parse_header(&header[..found])
+            .map(|(format, _, atoms, bonds)| (format, atoms, bonds))
     }
 }
 

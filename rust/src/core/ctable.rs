@@ -39,6 +39,9 @@ impl From<ParseIntError> for CTableError {
     }
 }
 
+/// The most lines, title included, that `parse_header` reads.
+pub const HEADER_LINES: usize = 6;
+
 fn line_at<'a>(lines: &[&'a str], index: usize) -> Result<&'a str, CTableError> {
     lines.get(index).copied().ok_or(CTableError::Truncated {
         needed: index + 1,
@@ -72,13 +75,6 @@ pub fn parse_header<'a>(
         }
     };
     Ok((format, counts, atoms, bonds))
-}
-
-fn field<'a>(fields: &[&'a str], index: usize, name: &'static str) -> Result<&'a str, CTableError> {
-    fields
-        .get(index)
-        .copied()
-        .ok_or(CTableError::MissingField(name))
 }
 
 fn integer(text: &str) -> Result<i64, CTableError> {
@@ -115,8 +111,10 @@ impl CTable {
     /// stored atom and bond counts come from the counts line, not from counting
     /// the raw atom and bond lines later in the table.
     pub fn parse(lines: Vec<String>) -> Result<Self, CTableError> {
-        let header: Vec<&str> = lines.iter().take(6).map(String::as_str).collect();
-        let (format, counts, num_atoms, num_bonds) = parse_header(&header)?;
+        let header: [&str; HEADER_LINES] =
+            std::array::from_fn(|index| lines.get(index).map_or("", String::as_str));
+        let (format, counts, num_atoms, num_bonds) =
+            parse_header(&header[..lines.len().min(HEADER_LINES)])?;
         let counts = counts.to_owned();
         let title = lines[0].trim().to_owned();
         let source = lines[1].clone();
@@ -340,8 +338,10 @@ impl Renumbered {
         let mut atom_index_mapping = HashMap::with_capacity(atom_lines.len());
         let mut new_atom_lines = Vec::with_capacity(atom_lines.len());
         for (line_index, line) in atom_lines.iter().enumerate() {
-            let fields: Vec<_> = line.split_whitespace().collect();
-            let old_field = field(&fields, 2, "atom index")?;
+            let old_field = line
+                .split_whitespace()
+                .nth(2)
+                .ok_or(CTableError::MissingField("atom index"))?;
             let old_index = integer(old_field)?;
             let new_index = line_index + 1;
             atom_index_mapping
@@ -361,9 +361,13 @@ impl Renumbered {
         let bond_lines = &lines[bond_start..bond_end];
         let mut new_bond_lines = Vec::with_capacity(bond_lines.len());
         for (line_index, line) in bond_lines.iter().enumerate() {
-            let fields: Vec<_> = line.split_whitespace().collect();
-            let from_index = integer(field(&fields, 4, "bond atom index")?)?;
-            let to_index = integer(field(&fields, 5, "bond atom index")?)?;
+            let missing = || CTableError::MissingField("bond atom index");
+            let mut fields = line.split_whitespace().skip(3);
+            let (Some(bond_type), Some(from_field)) = (fields.next(), fields.next()) else {
+                return Err(missing());
+            };
+            let from_index = integer(from_field)?;
+            let to_index = integer(fields.next().ok_or_else(missing)?)?;
             let (new_from, new_to) = match (
                 atom_index_mapping.get(&from_index),
                 atom_index_mapping.get(&to_index),
@@ -376,25 +380,22 @@ impl Renumbered {
             };
             let trailing = if line.ends_with('\n') { "\n" } else { "" };
             new_bond_lines.push(format!(
-                "{prefix}{} {} {new_from} {new_to}{trailing}",
+                "{prefix}{} {bond_type} {new_from} {new_to}{trailing}",
                 line_index + 1,
-                field(&fields, 3, "bond type")?,
             ));
         }
 
-        let suffix = format!(
-            " {}",
-            counts
-                .split_whitespace()
-                .skip(5)
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-        let new_counts = format!(
-            "{prefix}COUNTS {} {}{suffix}",
+        let mut new_counts = format!(
+            "{prefix}COUNTS {} {} ",
             new_atom_lines.len(),
             new_bond_lines.len()
         );
+        for (index, token) in counts.split_whitespace().skip(5).enumerate() {
+            if index > 0 {
+                new_counts.push(' ');
+            }
+            new_counts.push_str(token);
+        }
         Ok(Self {
             counts: new_counts,
             atoms: new_atom_lines,
