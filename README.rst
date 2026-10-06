@@ -40,7 +40,8 @@ Usage
        block.get("ID")  # the last value named "ID", or None
        block.to_dict()  # every record, later duplicates winning
        block.records()  # [(name, value), ...] in file order
-       block.mdl_contains("V3000")  # search the CTAB without building lines
+       "V3000" in block.mdl  # the CTAB after the title, through M  END
+       block.mdl_contains("V3000")  # the same search, without building it
        mol = Chem.MolFromMolBlock(block.molblock)
 
 Many SDFs do not carry the same records on every block: ADMET Predictor

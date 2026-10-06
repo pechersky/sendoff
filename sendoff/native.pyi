@@ -302,19 +302,20 @@ class SDBlock(Generic[AnyStr]):
         """
 
     @property
-    def mdl(self, /) -> tuple[AnyStr, ...]:
+    def mdl(self, /) -> AnyStr:
         """
-        Return the CTAB lines after the title, through `M  END`.
+        Return the CTAB after the title, through `M  END`, as one value.
 
-        Lines have no line endings, like `str.splitlines()`, so
-        `"\\n".join(block.mdl)` is the CTAB; `block.molblock` adds the title.
+        Every line ends in `\\n`, so `needle in block.mdl` searches the CTAB,
+        `block.mdl.splitlines()` gives its lines, and
+        `block.title + "\\n" + block.mdl` is `block.molblock`.
         """
 
     def mdl_contains(self, /, needle: AnyStr) -> bool:
         """
-        Return whether `needle` occurs in the CTAB text after the title.
+        Return whether `needle` occurs in the CTAB after the title.
 
-        Like `needle in "\\n".join(block.mdl)` without building the lines;
+        Equivalent to `needle in block.mdl` without building the CTAB value;
         text blocks are searched as UTF-8 without being decoded.
 
         Args:

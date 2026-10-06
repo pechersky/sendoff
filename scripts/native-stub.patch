@@ -129,12 +129,12 @@
          """
 
      @property
--    def mdl(self, /) -> tuple:
-+    def mdl(self, /) -> tuple[AnyStr, ...]:
+-    def mdl(self, /) -> Any:
++    def mdl(self, /) -> AnyStr:
          """
-         Return the CTAB lines after the title, through `M  END`.
+         Return the CTAB after the title, through `M  END`, as one value.
 
-@@ -272,7 +325,7 @@
+@@ -273,7 +326,7 @@
          """
 
      @property
@@ -143,7 +143,7 @@
          """
          Return the title line and CTAB through `M  END` as one value.
 
-@@ -281,7 +334,7 @@
+@@ -282,7 +335,7 @@
          """
 
      @molblock.setter
@@ -152,7 +152,7 @@
          """
          Replace the title line and CTAB, keeping the SD data.
 
-@@ -331,7 +384,7 @@
+@@ -332,7 +385,7 @@
              TypeError: if `name` is not the block's type
          """
 
@@ -161,7 +161,7 @@
          """
          Renumber atom and bond indices to be 1-indexed and in order.
 
-@@ -371,7 +424,7 @@
+@@ -372,7 +425,7 @@
          """
 
      @property
@@ -170,7 +170,7 @@
          """
          Return the molecule title in the input type.
 
-@@ -380,7 +433,7 @@
+@@ -381,7 +434,7 @@
          """
 
      @title.setter
@@ -179,7 +179,7 @@
          """
          Replace the title line.
 
-@@ -415,13 +468,13 @@
+@@ -416,13 +469,13 @@
          """
 
  @final
@@ -196,7 +196,7 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -429,14 +482,19 @@
+@@ -430,14 +483,19 @@
          """
 
  @final
@@ -220,7 +220,7 @@
  def parse_sdf(
      path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
  ) -> _SDBlockIterator[Any]:
-@@ -455,10 +513,13 @@
+@@ -456,10 +514,13 @@
          An iterator of SDBlocks; `close()` closes the file early
      """
 

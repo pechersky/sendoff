@@ -614,22 +614,24 @@ def test_sdblock_is_generic_at_runtime() -> None:
     assert typing.get_args(SDBlock[bytes]) == (bytes,)
 
 
-def test_mdl_is_the_ctab_lines_without_endings() -> None:
-    """The mdl property is the CTAB lines through M  END, without the title."""
+def test_mdl_is_the_ctab_text() -> None:
+    """The mdl property is the CTAB through M  END as one value, without the title."""
     text = "title\r\n  prog\r\n\r\nM  END\r\n> <A>\r\n1\r\n"
     block = next(SDBlock.from_lines(io.StringIO(text, newline=None)))
     byte_block = next(SDBlock.from_lines(io.BytesIO(text.encode())))
 
-    assert block.mdl == ("  prog", "", "M  END")
-    ctab = "\n".join(block.mdl) + "\n"
-    assert ctab == block.molblock.partition("\n")[2]
-    assert byte_block.mdl == (b"  prog\r", b"\r", b"M  END\r")
-    assert next(SDBlock.from_lines(["t\n", "M  END\n"])).mdl == ("M  END",)
-    assert next(SDBlock.from_lines(["t\n"])).mdl == ()
+    assert block.mdl == "  prog\n\nM  END\n"
+    assert block.title + "\n" + block.mdl == block.molblock
+    assert block.mdl.splitlines() == ["  prog", "", "M  END"]
+    assert byte_block.mdl == b"  prog\r\n\r\nM  END\r\n"
+    assert byte_block.mdl.splitlines() == [b"  prog", b"", b"M  END"]
+    assert next(SDBlock.from_lines(["t\n", "M  END\n"])).mdl == "M  END\n"
+    assert next(SDBlock.from_lines(["t\n"])).mdl == ""
+    no_end = next(SDBlock.from_lines(["t\n", "  prog\n", "> <A>\n", "$$$$\n"]))
+    assert no_end.mdl == "  prog\n> <A>\n"
 
-    assert block.mdl_contains("prog\n\nM  END")
-    assert not block.mdl_contains("title")
-    assert not block.mdl_contains("M  END\n")
+    for needle in ["prog\n\nM  END", "M  END\n", "title", "A", ""]:
+        assert block.mdl_contains(needle) == (needle in block.mdl), needle
     assert byte_block.mdl_contains(b"prog\r")
     with pytest.raises(TypeError, match="needles must be bytes"):
         byte_block.mdl_contains("prog")  # type: ignore[arg-type]
@@ -649,9 +651,11 @@ def test_constructor_parses_one_block() -> None:
     assert pairs.records() == [(b"A", b"1"), (b"A", b"2")]
 
     assert SDBlock(molblock.replace("\n", "\r\n")).molblock == molblock
-    assert SDBlock(molblock.encode().replace(b"\n", b"\r\n")).mdl[-1] == b"M  END\r"
+    assert SDBlock(molblock.encode().replace(b"\n", b"\r\n")).mdl.endswith(
+        b"M  END\r\n"
+    )
     empty = SDBlock("")
-    assert (empty.title, empty.mdl, empty.records()) == ("", (), [])
+    assert (empty.title, empty.mdl, empty.records()) == ("", "", [])
 
     with pytest.raises(ValueError, match="one block"):
         SDBlock(molblock + "$$$$\n" + molblock)
