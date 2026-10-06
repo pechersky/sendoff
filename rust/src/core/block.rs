@@ -12,6 +12,7 @@ use std::sync::LazyLock;
 use memchr::{memchr, memmem};
 
 use crate::core::ctable::{self, CTableError, CTableFormat};
+use crate::core::lines::Lines;
 
 static MEND: LazyLock<memmem::Finder<'static>> = LazyLock::new(|| memmem::Finder::new(b"\nM  END"));
 
@@ -159,6 +160,15 @@ impl fmt::Display for MissingFieldName {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("SD data field header is missing a name")
     }
+}
+
+/// Where an SD data record starts, and its name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Header<'a> {
+    /// The field name between the header's first `<` and last `>`.
+    pub name: &'a [u8],
+    /// Offset of the header line in the SD data.
+    pub start: usize,
 }
 
 /// One SD data record borrowed from a block where possible.
@@ -437,9 +447,10 @@ impl Block {
         let metadata = self.metadata();
         let mut spans = Vec::new();
         let mut pos = 0;
-        while let Some(record) = next_record(metadata, &mut pos, strip)? {
-            if record.name == name {
-                spans.push((record.start, pos));
+        let view = self.view();
+        while let Some(header) = view.next_header(&mut pos, strip)? {
+            if header.name == name {
+                spans.push((header.start, pos));
             }
         }
         if spans.is_empty() {
@@ -486,13 +497,13 @@ impl Block {
         self.view().next_record(pos, strip)
     }
 
-    /// Like `next_record`, but return only the name, skipping the value.
-    pub fn next_record_name(
+    /// Like `next_record`, but skip the value.
+    pub fn next_header(
         &self,
         pos: &mut usize,
         strip: Strip,
-    ) -> Result<Option<&[u8]>, MissingFieldName> {
-        self.view().next_record_name(pos, strip)
+    ) -> Result<Option<Header<'_>>, MissingFieldName> {
+        self.view().next_header(pos, strip)
     }
 
     /// The format and atom and bond counts declared by the MDL header.
@@ -563,17 +574,22 @@ impl<'a> BlockView<'a> {
         next_record(self.metadata(), pos, strip)
     }
 
-    /// Like `next_record`, but return only the name, skipping the value.
-    pub fn next_record_name(
+    /// Like `next_record`, but skip the value.
+    pub fn next_header(
         &self,
         pos: &mut usize,
         strip: Strip,
-    ) -> Result<Option<&'a [u8]>, MissingFieldName> {
+    ) -> Result<Option<Header<'a>>, MissingFieldName> {
         let found = match strip {
             Strip::Bytes => next_record_by::<false>(self.metadata(), pos, trim),
             Strip::Str => next_record_by::<false>(self.metadata(), pos, trim_str),
         };
-        found.map(|record| record.map(|record| record.name))
+        found.map(|record| {
+            record.map(|record| Header {
+                name: record.name,
+                start: record.start,
+            })
+        })
     }
 }
 
@@ -598,27 +614,39 @@ fn next_record_by<'a, const VALUE: bool>(
     pos: &mut usize,
     trim: impl Fn(&[u8]) -> &[u8],
 ) -> Result<Option<Record<'a>>, MissingFieldName> {
-    while *pos < metadata.len() {
-        let start = *pos;
-        let header = trim(next_line(metadata, pos));
+    let mut lines = Lines::new(metadata, *pos);
+    let found = record_in::<VALUE>(&mut lines, &trim);
+    *pos = lines.pos();
+    found
+}
+
+#[inline(always)]
+fn record_in<'a, const VALUE: bool>(
+    lines: &mut Lines<'a>,
+    trim: &impl Fn(&[u8]) -> &[u8],
+) -> Result<Option<Record<'a>>, MissingFieldName> {
+    loop {
+        let start = lines.pos();
+        let Some(line) = lines.next() else {
+            return Ok(None);
+        };
+        let header = trim(line);
         if header.is_empty() {
             continue;
         }
         let Some(rest) = header.strip_prefix(b"> ") else {
-            while *pos < metadata.len() && !is_blank(next_line(metadata, pos), &trim) {}
+            skip_run(lines, trim);
             continue;
         };
-        let name = record_name(rest, &trim)?;
+        let name = record_name(rest)?;
         let mut value: Cow<'a, [u8]> = Cow::Borrowed(&[]);
+        if !VALUE {
+            skip_run(lines, trim);
+            return Ok(Some(Record { name, value, start }));
+        }
         let mut first = true;
-        while *pos < metadata.len() {
-            if !VALUE {
-                if is_blank(next_line(metadata, pos), &trim) {
-                    break;
-                }
-                continue;
-            }
-            let line = trim(next_line(metadata, pos));
+        for line in lines.by_ref() {
+            let line = trim(line);
             if line.is_empty() {
                 break;
             }
@@ -633,7 +661,16 @@ fn next_record_by<'a, const VALUE: bool>(
         }
         return Ok(Some(Record { name, value, start }));
     }
-    Ok(None)
+}
+
+/// Consume lines through the next blank one.
+#[inline(always)]
+fn skip_run(lines: &mut Lines<'_>, trim: &impl Fn(&[u8]) -> &[u8]) {
+    for line in lines {
+        if is_blank(line, trim) {
+            break;
+        }
+    }
 }
 
 /// Whether `line` strips to nothing, deciding most lines by their first
@@ -646,12 +683,11 @@ fn is_blank(line: &[u8], trim: &impl Fn(&[u8]) -> &[u8]) -> bool {
     }
 }
 
-/// Extract `name` from the text after `> ` in a `> <name>` header.
-fn record_name<'a>(
-    rest: &'a [u8],
-    trim: &impl Fn(&[u8]) -> &[u8],
-) -> Result<&'a [u8], MissingFieldName> {
-    let field = trim(rest);
+/// Extract `name` from the text after `> ` in a stripped `> <name>` header.
+///
+/// Python strips `rest` again first, but that can only remove leading
+/// whitespace, which holds no `<` or `>`, so the name is the same.
+fn record_name(field: &[u8]) -> Result<&[u8], MissingFieldName> {
     let field = field
         .iter()
         .rposition(|&byte| byte == b'>')
@@ -700,19 +736,19 @@ mod tests {
             let block = block(text, true);
             for strip in [Strip::Bytes, Strip::Str] {
                 let (mut pos, mut names) = (0, Vec::new());
-                while let Some(name) = block.next_record_name(&mut pos, strip).unwrap() {
-                    names.push(name.to_vec());
+                while let Some(header) = block.next_header(&mut pos, strip).unwrap() {
+                    names.push((header.name.to_vec(), header.start, pos));
                 }
                 let mut pos = 0;
                 let mut expected = Vec::new();
                 while let Some(record) = block.next_record(&mut pos, strip).unwrap() {
-                    expected.push(record.name.to_vec());
+                    expected.push((record.name.to_vec(), record.start, pos));
                 }
                 assert_eq!(names, expected, "{text:?}");
             }
         }
         let missing = block("t\nM  END\n> A\n1\n$$$$\n", true);
-        assert!(missing.next_record_name(&mut 0, Strip::Bytes).is_err());
+        assert!(missing.next_header(&mut 0, Strip::Bytes).is_err());
     }
 
     #[test]

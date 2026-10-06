@@ -11,6 +11,7 @@ use std::sync::LazyLock;
 use memchr::{memchr, memmem};
 
 use crate::core::block::Block;
+use crate::core::lines::{WINDOW, byte_mask};
 
 static DELIMITER: LazyLock<memmem::Finder<'static>> =
     LazyLock::new(|| memmem::Finder::new(b"\n$$$$"));
@@ -179,7 +180,7 @@ pub fn translate_newlines(space: &mut [u8], len: usize, pending_cr: &mut bool) -
     let lane_end = space.len().saturating_sub(LANE);
     let mut base = 0;
     while base < len {
-        let mut mask = cr_mask(&space[base..len.min(base + WINDOW)]);
+        let mut mask = byte_mask(&space[base..len.min(base + WINDOW)], b'\r');
         while mask != 0 {
             let cr = base + mask.trailing_zeros() as usize;
             mask &= mask - 1;
@@ -216,66 +217,6 @@ pub fn translate_newlines(space: &mut [u8], len: usize, pending_cr: &mut bool) -
         space.copy_within(read..len, write);
     }
     write + (len - read)
-}
-
-const WINDOW: usize = 64;
-
-/// Bit `i` is set when `window[i]` is `\r`; short windows are zero-padded.
-#[inline]
-fn cr_mask(window: &[u8]) -> u64 {
-    let mut padded = [0; WINDOW];
-    let window = match <&[u8; WINDOW]>::try_from(window) {
-        Ok(full) => full,
-        Err(_) => {
-            padded[..window.len()].copy_from_slice(window);
-            &padded
-        }
-    };
-    #[cfg(target_arch = "x86_64")]
-    {
-        sse2_cr_mask(window)
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        swar_cr_mask(window)
-    }
-}
-
-/// SSE2 is part of the x86_64 baseline, so no runtime detection is needed.
-#[cfg(target_arch = "x86_64")]
-#[inline]
-fn sse2_cr_mask(window: &[u8; WINDOW]) -> u64 {
-    use std::arch::x86_64::{_mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8};
-    window
-        .chunks_exact(16)
-        .enumerate()
-        .fold(0, |mask, (index, lane)| {
-            // SAFETY: SSE2 is enabled on every x86_64 target, and `lane` is
-            // 16 readable bytes for the unaligned load.
-            let bits = unsafe {
-                let lane = _mm_loadu_si128(lane.as_ptr().cast());
-                _mm_movemask_epi8(_mm_cmpeq_epi8(lane, _mm_set1_epi8(b'\r' as i8)))
-            } as u16;
-            mask | (u64::from(bits) << (16 * index))
-        })
-}
-
-/// Portable fallback: exact per-byte zero test on `byte ^ b'\r'`, 8 at a time.
-#[cfg(any(test, not(target_arch = "x86_64")))]
-fn swar_cr_mask(window: &[u8; WINDOW]) -> u64 {
-    const LOW: u64 = 0x7f7f_7f7f_7f7f_7f7f;
-    window
-        .chunks_exact(8)
-        .enumerate()
-        .fold(0, |mask, (index, word)| {
-            let word = u64::from_le_bytes(word.try_into().unwrap()) ^ 0x0d0d_0d0d_0d0d_0d0d;
-            // Bit 7 of each byte is set exactly when that byte is zero.
-            let zero = !(((word & LOW) + LOW) | word | LOW);
-            let bits = (0..8).fold(0, |bits, byte| {
-                bits | ((zero >> (8 * byte + 7)) & 1) << byte
-            });
-            mask | (bits << (8 * index))
-        })
 }
 
 #[cfg(test)]
@@ -373,24 +314,6 @@ mod tests {
             }
         }
         assert_eq!(translated(b"plain\n", 3, 0), b"plain\n");
-    }
-
-    #[test]
-    fn cr_masks_agree() {
-        let mut window = [b'x'; WINDOW];
-        for (index, byte) in window.iter_mut().enumerate() {
-            if index % 3 == 0 || index % 7 == 0 {
-                *byte = b'\r';
-            } else if index % 5 == 0 {
-                *byte = 0x8d;
-            }
-        }
-        let expected = window.iter().enumerate().fold(0, |mask, (index, &byte)| {
-            mask | (u64::from(byte == b'\r') << index)
-        });
-        assert_eq!(swar_cr_mask(&window), expected);
-        assert_eq!(cr_mask(&window), expected);
-        assert_eq!(cr_mask(&window[..10]), expected & 0x3ff);
     }
 
     #[test]

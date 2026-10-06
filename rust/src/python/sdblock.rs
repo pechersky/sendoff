@@ -796,18 +796,21 @@ impl PySDBlock {
         let strip = self.kind.strip();
         let mut pos = 0;
         let mut found = None;
-        while let Some(record) = self
+        while let Some(header) = self
             .block
-            .next_record(&mut pos, strip)
+            .next_header(&mut pos, strip)
             .map_err(|error| PyValueError::new_err(error.to_string()))?
         {
-            if record.name == name {
-                found = Some(record.value);
+            if header.name == name {
+                found = Some(header.start);
             }
         }
-        match found {
-            Some(value) => self.kind.value(py, &value).map(Some),
-            None => Ok(default),
+        let Some(mut start) = found else {
+            return Ok(default);
+        };
+        match self.block.next_record(&mut start, strip) {
+            Ok(Some(record)) => self.kind.value(py, &record.value).map(Some),
+            _ => unreachable!("a record was found here"),
         }
     }
 
@@ -822,12 +825,12 @@ impl PySDBlock {
         let strip = self.kind.strip();
         let mut pos = 0;
         self.kind.with_names(|names| {
-            while let Some(name) = self
+            while let Some(header) = self
                 .block
-                .next_record_name(&mut pos, strip)
+                .next_header(&mut pos, strip)
                 .map_err(|error| PyValueError::new_err(error.to_string()))?
             {
-                list.append(names.name(py, name)?)?;
+                list.append(names.name(py, header.name)?)?;
             }
             Ok(list)
         })
@@ -839,7 +842,7 @@ impl PySDBlock {
         let (mut pos, mut count) = (0, 0);
         while self
             .block
-            .next_record_name(&mut pos, strip)
+            .next_header(&mut pos, strip)
             .map_err(|error| PyValueError::new_err(error.to_string()))?
             .is_some()
         {
@@ -920,12 +923,12 @@ impl PySDBlock {
         let name = self.arg_bytes(name, "record names")?;
         let strip = self.kind.strip();
         let (mut pos, mut seen) = (0, false);
-        while let Some(found) = self
+        while let Some(header) = self
             .block
-            .next_record_name(&mut pos, strip)
+            .next_header(&mut pos, strip)
             .map_err(|error| PyValueError::new_err(error.to_string()))?
         {
-            seen |= found == name;
+            seen |= header.name == name;
         }
         Ok(seen)
     }
