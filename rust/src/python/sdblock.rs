@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::cell::{RefCell, RefMut};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::io::{ErrorKind, Read, Write};
@@ -14,12 +14,14 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyIterator, PyList, PyString, PyTuple, PyType};
 
 use crate::core::block::{self, Block, Record, Strip};
+use crate::core::mapped::MappedBlocks;
 use crate::core::scan::{Scanner, TRANSLATE_SLACK, Tail, single_block, translate_newlines};
 use crate::python::ctable::{PyCTable, error_to_py};
 
-/// Characters or bytes requested per `read` call. Blocks larger than this
-/// grow the scanner's buffer. Against 1 MiB, 128 KiB was as fast for paths
-/// and buffers, 25-30% faster for text file objects, and used less memory.
+/// Characters or bytes requested per `read` call, or split per batch from a
+/// mapped file. Blocks larger than this grow the scanner's buffer. Against
+/// 1 MiB, 128 KiB was as fast for paths and buffers, 25-30% faster for text
+/// file objects, and used less memory.
 const CHUNK: usize = 128 << 10;
 
 /// Bytes buffered before each write to a path. 64 KiB to 1 MiB timed the
@@ -270,7 +272,14 @@ enum Source {
         filename: Py<PyAny>,
         text: bool,
     },
-    /// A file opened from `Path`, read without holding the GIL.
+    /// A file mapped from `Path`, split a batch of blocks at a time without
+    /// holding the GIL.
+    Mapped {
+        blocks: MappedBlocks,
+        batch: VecDeque<Block>,
+    },
+    /// A file opened from `Path` that does not map, read without holding
+    /// the GIL.
     File {
         file: File,
         filename: Py<PyAny>,
@@ -292,6 +301,33 @@ fn os_error(py: Python<'_>, error: std::io::Error, filename: &Py<PyAny>) -> PyEr
 }
 
 impl Source {
+    /// Open a `Path`, mapping the file when it maps.
+    fn open(&mut self, py: Python<'_>, kind: &mut Option<Kind>) -> PyResult<()> {
+        let Source::Path {
+            path,
+            filename,
+            text,
+        } = self
+        else {
+            return Ok(());
+        };
+        let file = File::open(&*path).map_err(|error| os_error(py, error, filename))?;
+        *kind = Some(if *text { Kind::Text } else { Kind::Bytes });
+        *self = match MappedBlocks::new(&file, *text) {
+            Some(blocks) => Source::Mapped {
+                blocks,
+                batch: VecDeque::new(),
+            },
+            None => Source::File {
+                file,
+                filename: filename.clone_ref(py),
+                text: *text,
+                pending_cr: false,
+            },
+        };
+        Ok(())
+    }
+
     /// Append input to `tail`, returning `true` at end of input.
     fn fill(
         &mut self,
@@ -358,20 +394,8 @@ impl Source {
                 }
                 Ok(*pos == bytes.len())
             }
-            Source::Path {
-                path,
-                filename,
-                text,
-            } => {
-                let file = File::open(&*path).map_err(|error| os_error(py, error, filename))?;
-                *kind = Some(if *text { Kind::Text } else { Kind::Bytes });
-                *self = Source::File {
-                    file,
-                    filename: filename.clone_ref(py),
-                    text: *text,
-                    pending_cr: false,
-                };
-                self.fill(py, kind, tail)
+            Source::Path { .. } | Source::Mapped { .. } => {
+                unreachable!("PySDBlockIterator opens paths and splits mapped files")
             }
             Source::File {
                 file,
@@ -425,6 +449,22 @@ impl PySDBlockIterator {
             ..Self::new(source)
         }
     }
+
+    fn next_block(&mut self, py: Python<'_>) -> PyResult<Option<Block>> {
+        let Self {
+            source,
+            kind,
+            scanner,
+        } = self;
+        source.open(py, kind)?;
+        if let Source::Mapped { blocks, batch } = source {
+            if batch.is_empty() {
+                py.detach(|| blocks.split(CHUNK, batch));
+            }
+            return Ok(batch.pop_front());
+        }
+        scanner.next_block(|tail| source.fill(py, kind, tail))
+    }
 }
 
 #[pymethods]
@@ -434,15 +474,10 @@ impl PySDBlockIterator {
     }
 
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<PySDBlock>> {
-        let Self {
-            source,
-            kind,
-            scanner,
-        } = self;
-        match scanner.next_block(|tail| source.fill(py, kind, tail)) {
+        match self.next_block(py) {
             Ok(Some(block)) => Ok(Some(PySDBlock {
                 block,
-                kind: kind.unwrap_or(Kind::Text),
+                kind: self.kind.unwrap_or(Kind::Text),
             })),
             Ok(None) => {
                 self.close();
@@ -1231,16 +1266,19 @@ pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> P
 
 /// Lazily parse SDBlocks from an SDF path.
 ///
-/// The file is opened on the first `next()` and read in chunks without
-/// holding the GIL. str paths give str values decoded as UTF-8 on access,
-/// with universal newlines; bytes paths give bytes split on b"\n" only.
-/// Use a bytes path for feeds that are not valid UTF-8.
+/// The file is opened on the first `next()`. Regular files are memory-mapped
+/// and split a batch of blocks at a time without holding the GIL; pipes and
+/// other files that cannot be mapped are read in chunks. As with any mapped
+/// file, truncating the file while iterating can kill the process with
+/// SIGBUS, so write results to a new path. str paths give str values decoded
+/// as UTF-8 on access, with universal newlines; bytes paths give bytes split
+/// on b"\n" only. Use a bytes path for feeds that are not valid UTF-8.
 ///
 /// Args:
 ///     path: a str, bytes, or os.PathLike path
 ///
 /// Returns:
-///     An iterator of SDBlocks; `close()` closes the file early
+///     An iterator of SDBlocks; `close()` releases the file early
 #[pyfunction]
 #[pyo3(signature = (path: "str | bytes | os.PathLike[str] | os.PathLike[bytes]") -> "_SDBlockIterator[Any]")]
 pub(crate) fn parse_sdf(path: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {

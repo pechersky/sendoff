@@ -5,6 +5,7 @@ import errno
 import io
 import os
 import pickle
+import threading
 import typing
 from itertools import chain
 from pathlib import Path
@@ -216,10 +217,10 @@ def test_from_lines_does_not_close_caller_owned_iterable() -> None:
 
 
 def open_paths() -> set[str]:
-    """Return the paths this process has open, from /proc/self/fd.
+    """Return the paths this process has open or mapped, from /proc/self.
 
     Returns:
-        Resolved targets of the open file descriptors.
+        Resolved targets of the open file descriptors, and mapped files.
     """
     paths = set()
     for fd in os.listdir("/proc/self/fd"):
@@ -227,6 +228,11 @@ def open_paths() -> set[str]:
             paths.add(os.readlink(os.path.join("/proc/self/fd", fd)))
         except OSError:
             continue
+    with open("/proc/self/maps") as maps:
+        for line in maps:
+            fields = line.split(maxsplit=5)
+            if len(fields) == 6:
+                paths.add(fields[5].rstrip("\n"))
     return paths
 
 
@@ -251,6 +257,25 @@ def test_parse_sdf_opens_lazily_and_close_releases_the_file(tmp_path: Path) -> N
 
     assert len(list(parse_sdf(path))) == 2
     assert str(path) not in open_paths()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+def test_parse_sdf_reads_files_that_do_not_map(tmp_path: Path) -> None:
+    """Pipes and empty files, which are not mapped, are read instead.
+
+    Args:
+        tmp_path: Temporary directory for the pipe and the empty file.
+    """
+    pipe = tmp_path / "pipe.sdf"
+    os.mkfifo(pipe)
+    data = b"a\r\nM  END\r\n$$$$\r\nb\r$$$$\r"
+    writer = threading.Thread(target=pipe.write_bytes, args=(data,), daemon=True)
+    writer.start()
+    assert [block.title for block in parse_sdf(pipe)] == ["a", "b"]
+    writer.join()
+    empty = tmp_path / "empty.sdf"
+    empty.write_bytes(b"")
+    assert list(parse_sdf(empty)) == []
 
 
 def test_parse_sdf_raises_open_errors_on_first_next(tmp_path: Path) -> None:

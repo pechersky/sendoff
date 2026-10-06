@@ -9,7 +9,7 @@
 
 use std::sync::LazyLock;
 
-use memchr::{memchr, memchr2, memmem};
+use memchr::{memchr, memchr2, memmem, memrchr};
 
 use crate::core::block::Block;
 use crate::core::lines::{WINDOW, byte_mask};
@@ -150,19 +150,22 @@ pub fn split_block(data: &[u8], text: bool) -> (Block, usize) {
         return (Block::new(data[..end].to_vec(), delimiter), end);
     }
     let delimiter = text_delimiter(data);
-    let (end, newline) = delimiter
+    let end = delimiter
         .and_then(|start| memchr2(b'\n', b'\r', &data[start..]).map(|index| start + index))
-        .map_or((data.len(), 0), |at| {
-            let newline = 1 + usize::from(data[at..].starts_with(b"\r\n"));
-            (at + newline, newline)
+        .map_or(data.len(), |at| {
+            at + 1 + usize::from(data[at..].starts_with(b"\r\n"))
         });
     let mut block = Vec::with_capacity(end + TRANSLATE_SLACK);
     block.extend_from_slice(&data[..end]);
     block.resize(end + TRANSLATE_SLACK, 0);
     let len = translate_newlines(&mut block, end, &mut false);
     block.truncate(len);
-    // The delimiter line ends the block, its newline translated to one byte.
-    let delimiter = delimiter.map(|start| len + newline.saturating_sub(1) - (end - start));
+    // The delimiter line is the last line, found in the copy so that a file
+    // changing under a map cannot set it past the block.
+    let delimiter = delimiter.map(|_| {
+        let lines = block.strip_suffix(b"\n").unwrap_or(&block);
+        memrchr(b'\n', lines).map_or(0, |index| index + 1)
+    });
     (Block::new(block, delimiter), end)
 }
 
