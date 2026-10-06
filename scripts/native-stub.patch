@@ -223,7 +223,7 @@
  def parse_sdf(
      path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
  ) -> _SDBlockIterator[Any]:
-@@ -503,10 +561,13 @@
+@@ -504,10 +562,13 @@
          An iterator of SDBlocks; `close()` releases the file early
      """
 

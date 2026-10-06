@@ -28,6 +28,15 @@ pub struct MappedBlocks {
 }
 
 impl MappedBlocks {
+    /// Map `file` if it is on a filesystem where mapping beats reading.
+    pub fn open(file: &File, text: bool) -> Option<Self> {
+        if is_local(file) {
+            Self::new(file, text)
+        } else {
+            None
+        }
+    }
+
     /// Map `file`, or return `None` unless it is a nonempty regular file
     /// that maps: pipes, devices, and procfs files are better read.
     ///
@@ -97,6 +106,39 @@ impl MappedBlocks {
     fn drop_behind(&mut self) {}
 }
 
+/// Whether `file` is on a local disk or memory filesystem.
+///
+/// Mapping parsed faster than reading on ext4 and tmpfs, but 5-6x slower
+/// over the 9p mount WSL gives Windows drives, where page faults are round
+/// trips; network and FUSE filesystems risk the same, so they are read.
+#[cfg(target_os = "linux")]
+fn is_local(file: &File) -> bool {
+    use std::os::fd::AsRawFd;
+
+    // The constants and f_type differ in type across targets, not value.
+    const LOCAL: [u32; 6] = [
+        libc::BTRFS_SUPER_MAGIC as u32,
+        libc::EXT4_SUPER_MAGIC as u32,
+        libc::F2FS_SUPER_MAGIC as u32,
+        libc::OVERLAYFS_SUPER_MAGIC as u32,
+        libc::TMPFS_MAGIC as u32,
+        libc::XFS_SUPER_MAGIC as u32,
+    ];
+    let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: fstatfs fills `stat` when it returns 0, and only then is it read.
+    if unsafe { libc::fstatfs(file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+        return false;
+    }
+    let kind = unsafe { stat.assume_init() }.f_type;
+    LOCAL.contains(&(kind as u32))
+}
+
+/// Mapping is only measured on Linux, so other systems read.
+#[cfg(not(target_os = "linux"))]
+fn is_local(_: &File) -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +188,15 @@ mod tests {
     #[test]
     fn leaves_empty_files_to_reads() {
         assert!(blocks(b"", false, 1).is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn maps_only_local_filesystems() {
+        assert!(!is_local(&File::open("/proc/self/status").unwrap()));
+        if let Ok(file) = File::open("/dev/shm") {
+            assert!(is_local(&file));
+        }
     }
 
     #[cfg(unix)]

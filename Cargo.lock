@@ -120,6 +120,7 @@ dependencies = [
 name = "sendoff"
 version = "0.1.6"
 dependencies = [
+ "libc",
  "memchr",
  "memmap2",
  "pyo3",

@@ -66,9 +66,9 @@ Edit blocks and write them back:
    blocks = list(SDBlock.from_sdf(sdf_text))  # parse SDF held in memory
 
 ``write_sdf`` to a path writes in large chunks with the GIL released, so prefer
-it to a ``block.write`` loop. ``parse_sdf`` memory-maps regular files given by
-path, so write results to a new path: truncating a file while it is parsed
-crashes the process.
+it to a ``block.write`` loop. ``parse_sdf`` memory-maps regular files on local
+Linux filesystems, so write results to a new path: truncating a file while it
+is parsed crashes the process.
 
 Migrating from 0.1.x
 --------------------

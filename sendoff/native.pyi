@@ -546,13 +546,14 @@ def parse_sdf(
     """
     Lazily parse SDBlocks from an SDF path.
 
-    The file is opened on the first `next()`. Regular files are memory-mapped
-    and split a batch of blocks at a time without holding the GIL; pipes and
-    other files that cannot be mapped are read in chunks. As with any mapped
-    file, truncating the file while iterating can kill the process with
-    SIGBUS, so write results to a new path. str paths give str values decoded
-    as UTF-8 on access, with universal newlines; bytes paths give bytes split
-    on b"\\n" only. Use a bytes path for feeds that are not valid UTF-8.
+    The file is opened on the first `next()`. Regular files on local Linux
+    filesystems are memory-mapped and split a batch of blocks at a time
+    without holding the GIL; pipes, network filesystems, and other files are
+    read in chunks. As with any mapped file, truncating the file while
+    iterating can kill the process with SIGBUS, so write results to a new
+    path. str paths give str values decoded as UTF-8 on access, with
+    universal newlines; bytes paths give bytes split on b"\\n" only. Use a
+    bytes path for feeds that are not valid UTF-8.
 
     Args:
         path: a str, bytes, or os.PathLike path
