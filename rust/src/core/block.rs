@@ -448,6 +448,19 @@ impl Block {
         next_record(self.metadata(), pos, strip)
     }
 
+    /// Like `next_record`, but return only the name, skipping the value.
+    pub fn next_record_name(
+        &self,
+        pos: &mut usize,
+        strip: Strip,
+    ) -> Result<Option<&[u8]>, MissingFieldName> {
+        let found = match strip {
+            Strip::Bytes => next_record_by::<false>(self.metadata(), pos, trim),
+            Strip::Str => next_record_by::<false>(self.metadata(), pos, trim_str),
+        };
+        found.map(|record| record.map(|record| record.name))
+    }
+
     /// The format and atom and bond counts declared by the MDL header.
     ///
     /// Equivalent to parsing a `CTable` from the title and MDL lines, without
@@ -472,13 +485,14 @@ pub fn next_record<'a>(
     strip: Strip,
 ) -> Result<Option<Record<'a>>, MissingFieldName> {
     match strip {
-        Strip::Bytes => next_record_by(metadata, pos, trim),
-        Strip::Str => next_record_by(metadata, pos, trim_str),
+        Strip::Bytes => next_record_by::<true>(metadata, pos, trim),
+        Strip::Str => next_record_by::<true>(metadata, pos, trim_str),
     }
 }
 
+/// Parse the next record; without `VALUE`, skip the value lines unbuilt.
 #[inline]
-fn next_record_by<'a>(
+fn next_record_by<'a, const VALUE: bool>(
     metadata: &'a [u8],
     pos: &mut usize,
     trim: impl Fn(&[u8]) -> &[u8],
@@ -500,6 +514,9 @@ fn next_record_by<'a>(
             let line = trim(next_line(metadata, pos));
             if line.is_empty() {
                 break;
+            }
+            if !VALUE {
+                continue;
             }
             if first {
                 value = Cow::Borrowed(line);
@@ -556,6 +573,32 @@ mod tests {
             ));
         }
         Ok(found)
+    }
+
+    #[test]
+    fn record_names_match_records() {
+        for text in [
+            "t\nM  END\n> <A>\n1\n2\n\n> <B>\n\njunk\nmore\n\n> <A>\n3\n$$$$\n",
+            "t\nM  END\n\n\n> <A> (1)\n\u{3000}\n> <B>\n$$$$\n",
+            "t\nM  END\n$$$$\n",
+            "t\n> <A>\nM  END\n> <C>\nx\n$$$$\n",
+        ] {
+            let block = block(text, true);
+            for strip in [Strip::Bytes, Strip::Str] {
+                let (mut pos, mut names) = (0, Vec::new());
+                while let Some(name) = block.next_record_name(&mut pos, strip).unwrap() {
+                    names.push(name.to_vec());
+                }
+                let mut pos = 0;
+                let mut expected = Vec::new();
+                while let Some(record) = block.next_record(&mut pos, strip).unwrap() {
+                    expected.push(record.name.to_vec());
+                }
+                assert_eq!(names, expected, "{text:?}");
+            }
+        }
+        let missing = block("t\nM  END\n> A\n1\n$$$$\n", true);
+        assert!(missing.next_record_name(&mut 0, Strip::Bytes).is_err());
     }
 
     #[test]

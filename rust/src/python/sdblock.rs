@@ -826,6 +826,70 @@ impl PySDBlock {
         }
     }
 
+    /// Return the record names in input order, duplicates included.
+    ///
+    /// Equivalent to `[name for name, _ in block.records()]`, without
+    /// building the values. Blocks need not share names, so collect them
+    /// across a file with `Counter(n for b in blocks for n in b.names())`.
+    #[pyo3(signature = () -> "list[AnyStr]")]
+    fn names<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let list = PyList::empty(py);
+        let strip = self.kind.strip();
+        let mut pos = 0;
+        self.kind.with_names(|names| {
+            while let Some(name) = self
+                .block
+                .next_record_name(&mut pos, strip)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?
+            {
+                list.append(names.name(py, name)?)?;
+            }
+            Ok(list)
+        })
+    }
+
+    /// The number of records, duplicates included: `len(block.records())`.
+    fn __len__(&self) -> PyResult<usize> {
+        let strip = self.kind.strip();
+        let (mut pos, mut count) = (0, 0);
+        while self
+            .block
+            .next_record_name(&mut pos, strip)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+            .is_some()
+        {
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// A block is true even without records, as before it had a length.
+    fn __bool__(&self) -> bool {
+        true
+    }
+
+    /// Whether any record is named `name`: `name in block.names()`.
+    ///
+    /// Like `get`, every record header is checked, so a malformed one raises
+    /// even after a match.
+    ///
+    /// Raises:
+    ///     TypeError: if `name` is not the block's type
+    ///     ValueError: if a record header has no `<name>`
+    fn __contains__(&self, name: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let name = self.arg_bytes(name, "record names")?;
+        let strip = self.kind.strip();
+        let (mut pos, mut seen) = (0, false);
+        while let Some(found) = self
+            .block
+            .next_record_name(&mut pos, strip)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
+        {
+            seen |= found == name;
+        }
+        Ok(seen)
+    }
+
     /// Return the records as a dict, later duplicates winning.
     ///
     /// Equivalent to `dict(block.records())`.

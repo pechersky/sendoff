@@ -637,6 +637,33 @@ def test_mdl_is_the_ctab_text() -> None:
         byte_block.mdl_contains("prog")  # type: ignore[arg-type]
 
 
+def test_names_len_and_contains_skip_values() -> None:
+    """names(), len() and in read record names without building values."""
+    sdf = "t\nM  END\n> <A>\n1\n2\n\n> <B>\n\n> <A>\n3\n\n$$$$\n"
+    (block,) = SDBlock.from_sdf(sdf)
+    (byte_block,) = SDBlock.from_sdf(sdf.encode())
+
+    assert block.names() == [name for name, _ in block.records()] == ["A", "B", "A"]
+    assert byte_block.names() == [b"A", b"B", b"A"]
+    assert len(block) == len(byte_block) == 3
+    assert "A" in block and "B" in block and "C" not in block
+    assert b"A" in byte_block and "" not in block
+    with pytest.raises(TypeError, match="record names must be bytes"):
+        assert "A" in byte_block  # type: ignore[operator]
+
+    empty = SDBlock("t\n\nM  END\n")
+    assert (empty.names(), len(empty), "A" in empty) == ([], 0, False)
+    assert empty, "a block without records is still true"
+
+    block.append_record("C", "4")
+    block.remove_record("A")
+    assert (block.names(), len(block), "A" in block) == (["B", "C"], 2, False)
+    malformed = SDBlock("t\n\nM  END\n> <A>\n1\n\n> no name\n1\n\n$$$$\n")
+    for call in (malformed.names, lambda: len(malformed), lambda: "A" in malformed):
+        with pytest.raises(ValueError):
+            call()
+
+
 def test_constructor_parses_one_block() -> None:
     """SDBlock(sdf) parses a molblock or one record and appends records."""
     molblock = "title\n  prog\n\nM  END\n"

@@ -163,6 +163,28 @@ class SDBlock(Generic[AnyStr]):
     from binary input; names, values, and lines have the block's type.
     """
 
+    def __bool__(self, /) -> bool:
+        """
+        A block is true even without records, as before it had a length.
+        """
+
+    def __contains__(self, name: AnyStr, /) -> bool:
+        """
+        Whether any record is named `name`: `name in block.names()`.
+
+        Like `get`, every record header is checked, so a malformed one raises
+        even after a match.
+
+        Raises:
+            TypeError: if `name` is not the block's type
+            ValueError: if a record header has no `<name>`
+        """
+
+    def __len__(self, /) -> int:
+        """
+        The number of records, duplicates included: `len(block.records())`.
+        """
+
     def __new__(
         cls,
         /,
@@ -346,6 +368,15 @@ class SDBlock(Generic[AnyStr]):
             ValueError: if the molblock has no `M  END` line, has more than
                 whitespace after it, or has a line starting with `$$$$`
             TypeError: if the molblock is not the block's type
+        """
+
+    def names(self, /) -> list[AnyStr]:
+        """
+        Return the record names in input order, duplicates included.
+
+        Equivalent to `[name for name, _ in block.records()]`, without
+        building the values. Blocks need not share names, so collect them
+        across a file with `Counter(n for b in blocks for n in b.names())`.
         """
 
     def num_atoms(self, /) -> int:

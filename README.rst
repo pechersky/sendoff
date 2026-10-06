@@ -40,13 +40,15 @@ Usage
        block.get("ID")  # the last value named "ID", or None
        block.to_dict()  # every record, later duplicates winning
        block.records()  # [(name, value), ...] in file order
+       "ID" in block, len(block), block.names()  # names only, no values built
        "V3000" in block.mdl  # the CTAB after the title, through M  END
        block.mdl_contains("V3000")  # the same search, without building it
        mol = Chem.MolFromMolBlock(block.molblock)
 
 Many SDFs do not carry the same records on every block: ADMET Predictor
 exports, for one, have hundreds of record names, some on only part of the
-blocks. Access is per block, so ``get`` and ``to_dict`` assume no fixed columns.
+blocks. Access is per block, so ``get`` and ``to_dict`` assume no fixed columns;
+``Counter(n for b in parse_sdf(path) for n in b.names())`` surveys a file.
 
 Edit blocks and write them back:
 

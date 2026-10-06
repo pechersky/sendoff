@@ -152,12 +152,19 @@ def assert_blocks_match(
         for needle in ["M  END", "END\n", "a", "\u3000", "", "\n"]:
             key = needle if text else needle.encode()
             assert block.mdl_contains(key) == (key in block.mdl), context
+        names = outcome(lambda: [name for name, _ in expected.records()])
+        assert outcome(block.names) == names, context
+        count = len(names) if isinstance(names, list) else names
+        assert outcome(lambda: len(block)) == count, context
         expected_dict = outcome(lambda: dict(expected.records()))
         assert outcome(block.to_dict) == expected_dict, context
         for field in ["A", "B", " spaced name ", "missing"]:
             key = field if text else field.encode()
             assert outcome(lambda: block.get(key, 0)) == outcome(
                 lambda: expected_dict.get(key, 0)
+            ), context
+            assert outcome(lambda: key in block) == outcome(
+                lambda: key in expected_dict.keys()
             ), context
         name, value = ("Z", "v\u00e9") if text else (b"Z", "v\u00e9".encode())
         block.append_record(name, value)
