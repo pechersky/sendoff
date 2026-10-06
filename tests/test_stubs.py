@@ -6,11 +6,9 @@ from pathlib import Path
 
 import pytest
 
-# Generic[AnyStr] supplies __class_getitem__ in the stub, and iter_records is
-# typed as Iterator[tuple] rather than by its private iterator class.
+# Generic[AnyStr] supplies __class_getitem__ in the stub.
 ALLOWLIST = """\
 sendoff.native.SDBlock.__class_getitem__
-sendoff.native._SDRecordIterator
 """
 
 

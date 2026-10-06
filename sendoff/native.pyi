@@ -22,6 +22,17 @@ DEBUG_BUILD: Final[bool]
 
 __version__: Final[str]
 
+__all__ = [
+    "CTable",
+    "SDBlock",
+    "_SDBlockIterator",
+    "_SDRecordIterator",
+    "parse_sdf",
+    "write_sdf",
+    "__version__",
+    "DEBUG_BUILD",
+]
+
 class _SupportsRead(Protocol[_AnyStr_co]):
     """A text or binary file-like handle read in chunks."""
 
@@ -280,7 +291,7 @@ class SDBlock(Generic[AnyStr]):
             Tuples of input-typed name/value pairs; multiline values include newlines.
         """
 
-    def iter_records(self, /) -> Iterator[tuple[AnyStr, AnyStr]]:
+    def iter_records(self, /) -> _SDRecordIterator[AnyStr]:
         """
         Lazily iterate over SD metadata records in input order.
 
@@ -465,13 +476,21 @@ class _SDBlockIterator(Iterator[SDBlock[AnyStr]]):
         parse_sdf opened.
         """
 
+@final
+class _SDRecordIterator(Iterator[tuple[AnyStr, AnyStr]]):
+    """
+    Lazily iterate over one block's SD data records.
+    """
+
+    def __next__(self, /) -> tuple[AnyStr, AnyStr]: ...
+
 @overload
-def parse_sdf(path: str | os.PathLike[str], /) -> _SDBlockIterator[str]: ...
+def parse_sdf(path: str | os.PathLike[str]) -> _SDBlockIterator[str]: ...
 @overload
-def parse_sdf(path: bytes | os.PathLike[bytes], /) -> _SDBlockIterator[bytes]: ...
+def parse_sdf(path: bytes | os.PathLike[bytes]) -> _SDBlockIterator[bytes]: ...
 @overload
 def parse_sdf(
-    path: str | bytes | os.PathLike[str] | os.PathLike[bytes], /
+    path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
 ) -> _SDBlockIterator[Any]:
     """
     Lazily parse SDBlocks from an SDF path.
