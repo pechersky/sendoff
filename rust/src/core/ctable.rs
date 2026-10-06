@@ -171,7 +171,8 @@ impl CTable {
         if self.format != CTableFormat::V3000 {
             return Err(CTableError::NotImplemented);
         }
-        self.lines = renumber_indices(&self.lines, &self.counts)?;
+        let renumbered = Renumbered::new(&self.lines, &self.counts)?;
+        self.lines = renumbered.splice(std::mem::take(&mut self.lines));
         Ok(())
     }
 }
@@ -308,103 +309,138 @@ fn validate_indices(
     Ok(())
 }
 
-/// Return lines with atom and bond indices renumbered in table order.
-///
-/// Atom and bond lines are numbered from one in their existing order, and
-/// bond atom references are remapped through the atom-index map. The counts
-/// line is updated to reflect the number of raw atom and bond lines. Fail with
-/// `Duplicate` when duplicate atom indices make a bond's atom mapping
-/// ambiguous, and with `MissingField` when a bond references an absent atom.
-pub fn renumber_indices(lines: &[String], counts: &str) -> Result<Vec<String>, CTableError> {
-    let prefix = "M  V30 ";
-    let (atom_start, atom_end) = atom_line_range(lines);
-    let atom_lines = &lines[atom_start..atom_end];
-    let mut atom_index_mapping: HashMap<i64, Vec<usize>> = HashMap::new();
-    let mut new_atom_lines = Vec::new();
-    for (line_index, line) in atom_lines.iter().enumerate() {
-        let fields: Vec<_> = line.split_whitespace().collect();
-        let old_field = field(&fields, 2, "atom index")?;
-        let old_index = integer(old_field)?;
-        let new_index = line_index + 1;
-        atom_index_mapping
-            .entry(old_index)
-            .or_default()
-            .push(new_index);
-        // Like the Python slice line[n:], skip characters, not bytes.
-        let skip_chars = prefix.chars().count() + old_field.chars().count();
-        let rest = line
-            .char_indices()
-            .nth(skip_chars)
-            .map_or("", |(offset, _)| &line[offset..]);
-        new_atom_lines.push(format!("{prefix}{new_index}{rest}"));
+/// Atom and bond lines numbered from one in table order, and the counts
+/// line that declares them, to splice into the table.
+struct Renumbered {
+    counts: String,
+    atoms: Vec<String>,
+    bonds: Vec<String>,
+}
+
+impl Renumbered {
+    /// Renumber the atom and bond lines of `lines`.
+    ///
+    /// Atom and bond lines are numbered from one in their existing order, and
+    /// bond atom references are remapped through the atom-index map. The
+    /// counts line declares the number of raw atom and bond lines. Fail with
+    /// `Duplicate` when duplicate atom indices make a bond's atom mapping
+    /// ambiguous, and with `MissingField` when a bond references an absent
+    /// atom.
+    fn new(lines: &[String], counts: &str) -> Result<Self, CTableError> {
+        let prefix = "M  V30 ";
+        let (atom_start, atom_end) = atom_line_range(lines);
+        let atom_lines = &lines[atom_start..atom_end];
+        let mut atom_index_mapping: HashMap<i64, Vec<usize>> = HashMap::new();
+        let mut new_atom_lines = Vec::with_capacity(atom_lines.len());
+        for (line_index, line) in atom_lines.iter().enumerate() {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            let old_field = field(&fields, 2, "atom index")?;
+            let old_index = integer(old_field)?;
+            let new_index = line_index + 1;
+            atom_index_mapping
+                .entry(old_index)
+                .or_default()
+                .push(new_index);
+            // Like the Python slice line[n:], skip characters, not bytes.
+            let skip_chars = prefix.chars().count() + old_field.chars().count();
+            let rest = line
+                .char_indices()
+                .nth(skip_chars)
+                .map_or("", |(offset, _)| &line[offset..]);
+            new_atom_lines.push(format!("{prefix}{new_index}{rest}"));
+        }
+
+        let (bond_start, bond_end) = bond_line_range(lines);
+        let bond_lines = &lines[bond_start..bond_end];
+        let mut new_bond_lines = Vec::with_capacity(bond_lines.len());
+        for (line_index, line) in bond_lines.iter().enumerate() {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            let from_index = integer(field(&fields, 4, "bond atom index")?)?;
+            let to_index = integer(field(&fields, 5, "bond atom index")?)?;
+            let from_mapping = atom_index_mapping
+                .get(&from_index)
+                .map_or(&[][..], Vec::as_slice);
+            let to_mapping = atom_index_mapping
+                .get(&to_index)
+                .map_or(&[][..], Vec::as_slice);
+            if from_mapping.len() > 1 || to_mapping.len() > 1 {
+                return Err(CTableError::Duplicate);
+            }
+            let (Some(new_from), Some(new_to)) = (from_mapping.first(), to_mapping.first()) else {
+                return Err(CTableError::MissingField("bonded atom"));
+            };
+            let trailing = if line.ends_with('\n') { "\n" } else { "" };
+            new_bond_lines.push(format!(
+                "{prefix}{} {} {new_from} {new_to}{trailing}",
+                line_index + 1,
+                field(&fields, 3, "bond type")?,
+            ));
+        }
+
+        let suffix = format!(
+            " {}",
+            counts
+                .split_whitespace()
+                .skip(5)
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        let new_counts = format!(
+            "{prefix}COUNTS {} {}{suffix}",
+            new_atom_lines.len(),
+            new_bond_lines.len()
+        );
+        Ok(Self {
+            counts: new_counts,
+            atoms: new_atom_lines,
+            bonds: new_bond_lines,
+        })
     }
 
-    let (bond_start, bond_end) = bond_line_range(lines);
-    let bond_lines = &lines[bond_start..bond_end];
-    let mut new_bond_lines = Vec::new();
-    for (line_index, line) in bond_lines.iter().enumerate() {
-        let fields: Vec<_> = line.split_whitespace().collect();
-        let from_index = integer(field(&fields, 4, "bond atom index")?)?;
-        let to_index = integer(field(&fields, 5, "bond atom index")?)?;
-        let from_mapping = atom_index_mapping
-            .get(&from_index)
-            .map_or(&[][..], Vec::as_slice);
-        let to_mapping = atom_index_mapping
-            .get(&to_index)
-            .map_or(&[][..], Vec::as_slice);
-        if from_mapping.len() > 1 || to_mapping.len() > 1 {
-            return Err(CTableError::Duplicate);
-        }
-        let (Some(new_from), Some(new_to)) = (from_mapping.first(), to_mapping.first()) else {
-            return Err(CTableError::MissingField("bonded atom"));
-        };
-        let trailing = if line.ends_with('\n') { "\n" } else { "" };
-        new_bond_lines.push(format!(
-            "{prefix}{} {} {new_from} {new_to}{trailing}",
-            line_index + 1,
-            field(&fields, 3, "bond type")?,
-        ));
-    }
-
-    let suffix = format!(
-        " {}",
-        counts
-            .split_whitespace()
-            .skip(5)
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    let new_counts = format!(
-        "{prefix}COUNTS {} {}{suffix}",
-        new_atom_lines.len(),
-        new_bond_lines.len()
-    );
-    let mut new_lines = Vec::new();
-    let mut appending = true;
-    for line in lines {
-        if appending {
-            new_lines.push(line.clone());
-        }
-        if line.starts_with("M  V30 COUNTS") {
-            new_lines.pop();
-            new_lines.push(new_counts.clone());
-        }
-        if line.starts_with("M  V30 BEGIN ATOM") {
-            appending = false;
-        }
-        if line.starts_with("M  V30 END ATOM") {
+    /// Put the new lines in place of the counts, atom, and bond lines.
+    ///
+    /// Malformed marker sequences keep their established output: a `COUNTS`
+    /// line inside a section replaces the line before it, an `END` line
+    /// outside a section is kept twice, and every `END ATOM` or `END BOND`
+    /// line gets the new lines, which only the last one moves.
+    fn splice(mut self, lines: Vec<String>) -> Vec<String> {
+        let last_atom_end = lines
+            .iter()
+            .rposition(|line| line.starts_with("M  V30 END ATOM"));
+        let last_bond_end = lines
+            .iter()
+            .rposition(|line| line.starts_with("M  V30 END BOND"));
+        let mut new_lines = Vec::with_capacity(lines.len());
+        let mut appending = true;
+        for (index, line) in lines.into_iter().enumerate() {
+            let (new, last) = if line.starts_with("M  V30 END ATOM") {
+                (&mut self.atoms, last_atom_end)
+            } else if line.starts_with("M  V30 END BOND") {
+                (&mut self.bonds, last_bond_end)
+            } else {
+                if line.starts_with("M  V30 COUNTS") {
+                    if !appending {
+                        new_lines.pop();
+                    }
+                    new_lines.push(self.counts.clone());
+                } else if appending {
+                    appending = !(line.starts_with("M  V30 BEGIN ATOM")
+                        || line.starts_with("M  V30 BEGIN BOND"));
+                    new_lines.push(line);
+                }
+                continue;
+            };
+            if appending {
+                new_lines.push(line.clone());
+            }
             appending = true;
-            new_lines.extend(new_atom_lines.iter().cloned());
-            new_lines.push(line.clone());
+            if Some(index) == last {
+                new_lines.append(new);
+            } else {
+                new_lines.extend_from_slice(new);
+            }
+            new_lines.push(line);
         }
-        if line.starts_with("M  V30 BEGIN BOND") {
-            appending = false;
-        }
-        if line.starts_with("M  V30 END BOND") {
-            appending = true;
-            new_lines.extend(new_bond_lines.iter().cloned());
-            new_lines.push(line.clone());
-        }
+        new_lines
     }
-    Ok(new_lines)
 }
