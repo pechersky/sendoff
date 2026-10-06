@@ -189,16 +189,21 @@ pub fn parse_v2000_counts(line: &str) -> Result<(i64, i64), ParseIntError> {
     Ok((atom_field.trim().parse()?, bond_field.trim().parse()?))
 }
 
+/// Split a counts line into fields as Python's argument-less `str.split()`
+/// does for ASCII text.
+fn fields(line: &str) -> impl DoubleEndedIterator<Item = &str> {
+    line.split(|character: char| {
+        character.is_ascii_whitespace() || ('\u{1c}'..='\u{1f}').contains(&character)
+    })
+    .filter(|field| !field.is_empty())
+}
+
 /// Parse atom and bond counts from the V3000 `COUNTS` line.
 ///
 /// The atom and bond values are the fourth and fifth whitespace-delimited
 /// fields.
 pub fn parse_v3000_counts(line: &str) -> Result<(i64, i64), CTableError> {
-    let mut fields = line
-        .split(|character: char| {
-            character.is_ascii_whitespace() || ('\u{1c}'..='\u{1f}').contains(&character)
-        })
-        .filter(|field| !field.is_empty());
+    let mut fields = fields(line);
     let atoms = fields
         .nth(3)
         .ok_or(CTableError::MissingField("atom count"))?;
@@ -210,12 +215,7 @@ pub fn parse_v3000_counts(line: &str) -> Result<(i64, i64), CTableError> {
 
 /// Return the final whitespace-delimited token from a counts line.
 pub fn parse_format(line: &str) -> Option<&str> {
-    let mut fields = line
-        .split(|character: char| {
-            character.is_ascii_whitespace() || ('\u{1c}'..='\u{1f}').contains(&character)
-        })
-        .filter(|field| !field.is_empty());
-    fields.next_back()
+    fields(line).next_back()
 }
 
 /// Return the half-open range of raw atom lines in a CTable.
