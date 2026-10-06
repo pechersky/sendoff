@@ -4,17 +4,19 @@
 //! search serves file reads, Python `read()` chunks, and Python line
 //! iterables. Each block is copied out once into its own `Block`. The buffer
 //! stays initialized up to its high-water mark, so refills write into it
-//! without zero-filling first.
+//! without zero-filling first. `split_block` splits input that is already
+//! complete, such as a mapped file, without a buffer.
 
 use std::sync::LazyLock;
 
-use memchr::{memchr, memmem};
+use memchr::{memchr, memchr2, memmem};
 
 use crate::core::block::Block;
 use crate::core::lines::{WINDOW, byte_mask};
 
 static DELIMITER: LazyLock<memmem::Finder<'static>> =
     LazyLock::new(|| memmem::Finder::new(b"\n$$$$"));
+static DOLLARS: LazyLock<memmem::Finder<'static>> = LazyLock::new(|| memmem::Finder::new(b"$$$$"));
 
 /// Incremental block splitter over a caller-filled buffer.
 #[derive(Default)]
@@ -106,22 +108,73 @@ impl Scanner {
     }
 }
 
+/// Where the first block in complete input ends, and where its `$$$$` line
+/// starts, if it has one.
+fn bounds(data: &[u8]) -> (usize, Option<usize>) {
+    let delimiter = if data.starts_with(b"$$$$") {
+        Some(0)
+    } else {
+        DELIMITER.find(data).map(|index| index + 1)
+    };
+    let end = delimiter.map_or(data.len(), |start| {
+        memchr(b'\n', &data[start..]).map_or(data.len(), |index| start + index + 1)
+    });
+    (end, delimiter)
+}
+
+/// Where the first line starting with `$$$$` starts, with universal
+/// newlines: a line starts after `\n`, or after a `\r` that `$` follows.
+fn text_delimiter(data: &[u8]) -> Option<usize> {
+    if data.starts_with(b"$$$$") {
+        return Some(0);
+    }
+    let mut from = 1;
+    while let Some(index) = DOLLARS.find(data.get(from..)?) {
+        let start = from + index;
+        if matches!(data[start - 1], b'\n' | b'\r') {
+            return Some(start);
+        }
+        from = start + 1;
+    }
+    None
+}
+
+/// Split the first block from complete, nonempty input, returning it and
+/// the input length it took.
+///
+/// `text` reads universal newlines, translating them as `translate_newlines`
+/// does, so blocks match a `Scanner` over translated input.
+pub fn split_block(data: &[u8], text: bool) -> (Block, usize) {
+    if !text {
+        let (end, delimiter) = bounds(data);
+        return (Block::new(data[..end].to_vec(), delimiter), end);
+    }
+    let delimiter = text_delimiter(data);
+    let (end, newline) = delimiter
+        .and_then(|start| memchr2(b'\n', b'\r', &data[start..]).map(|index| start + index))
+        .map_or((data.len(), 0), |at| {
+            let newline = 1 + usize::from(data[at..].starts_with(b"\r\n"));
+            (at + newline, newline)
+        });
+    let mut block = Vec::with_capacity(end + TRANSLATE_SLACK);
+    block.extend_from_slice(&data[..end]);
+    block.resize(end + TRANSLATE_SLACK, 0);
+    let len = translate_newlines(&mut block, end, &mut false);
+    block.truncate(len);
+    // The delimiter line ends the block, its newline translated to one byte.
+    let delimiter = delimiter.map(|start| len + newline.saturating_sub(1) - (end - start));
+    (Block::new(block, delimiter), end)
+}
+
 /// Parse `data` as one block ending at its first `$$$$` line, if any.
 ///
 /// Returns `None` when anything but ASCII whitespace follows that line.
 pub fn single_block(mut data: Vec<u8>) -> Option<Block> {
-    let delimiter = if data.starts_with(b"$$$$") {
-        Some(0)
-    } else {
-        DELIMITER.find(&data).map(|index| index + 1)
-    };
-    if let Some(start) = delimiter {
-        let end = memchr(b'\n', &data[start..]).map_or(data.len(), |index| start + index + 1);
-        if !data[end..].iter().all(u8::is_ascii_whitespace) {
-            return None;
-        }
-        data.truncate(end);
+    let (end, delimiter) = bounds(&data);
+    if !data[end..].iter().all(u8::is_ascii_whitespace) {
+        return None;
     }
+    data.truncate(end);
     Some(Block::new(data, delimiter))
 }
 
@@ -224,7 +277,7 @@ mod tests {
     use super::*;
     use crate::core::block::Strip;
 
-    fn split(input: &[u8], chunk: usize) -> Vec<(String, String)> {
+    fn scanned(input: &[u8], chunk: usize) -> Vec<Block> {
         let mut scanner = Scanner::default();
         let mut offset = 0;
         let mut blocks = Vec::new();
@@ -237,12 +290,94 @@ mod tests {
             })
             .unwrap()
         {
-            blocks.push((
-                String::from_utf8(block.title(Strip::Bytes).to_vec()).unwrap(),
-                String::from_utf8(block.serialized(Strip::Bytes).into_owned()).unwrap(),
-            ));
+            blocks.push(block);
         }
         blocks
+    }
+
+    fn split(input: &[u8], chunk: usize) -> Vec<(String, String)> {
+        scanned(input, chunk)
+            .iter()
+            .map(|block| {
+                (
+                    String::from_utf8(block.title(Strip::Bytes).to_vec()).unwrap(),
+                    String::from_utf8(block.serialized(Strip::Bytes).into_owned()).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    fn split_complete(input: &[u8], text: bool) -> Vec<Block> {
+        let mut pos = 0;
+        let mut blocks = Vec::new();
+        while pos < input.len() {
+            let (block, taken) = split_block(&input[pos..], text);
+            assert!(taken > 0);
+            blocks.push(block);
+            pos += taken;
+        }
+        blocks
+    }
+
+    #[test]
+    fn split_block_matches_the_scanner_on_random_input() {
+        const TOKENS: [&[u8]; 10] = [
+            b"\n",
+            b"\r",
+            b"\r\n",
+            b"$$$$",
+            b"$",
+            b"M  END",
+            b"> <X>",
+            b"x",
+            b" ",
+            b"\n$$$$\r\n",
+        ];
+        let mut state = 0x2545_F491_4F6C_DD1D_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..3000 {
+            let len = (next() % 60) as usize;
+            let input: Vec<u8> = (0..len)
+                .flat_map(|_| TOKENS[(next() % TOKENS.len() as u64) as usize])
+                .copied()
+                .collect();
+            let chunk = 1 + (next() % 50) as usize;
+            assert_eq!(
+                split_complete(&input, false),
+                scanned(&input, chunk),
+                "{input:?}"
+            );
+            let translated = translated(&input, input.len().max(1), 0);
+            assert_eq!(
+                split_complete(&input, true),
+                scanned(&translated, chunk),
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn split_block_reads_universal_newline_delimiters() {
+        let blocks = split_complete(b"a\r$$$$\rb\r\n$$$$\r\nc\n$$$$x\r$$$$", true);
+        let serialized: Vec<_> = blocks
+            .iter()
+            .map(|block| block.serialized(Strip::Bytes).into_owned())
+            .collect();
+        assert_eq!(
+            serialized,
+            [
+                &b"a\n$$$$\n"[..],
+                b"b\n$$$$\n",
+                b"c\n$$$$\n",
+                b"$$$$\n$$$$\n"
+            ]
+        );
+        assert_eq!(split_complete(b"a\r$$$$\rb", false).len(), 1);
     }
 
     #[test]
