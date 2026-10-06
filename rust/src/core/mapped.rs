@@ -13,7 +13,9 @@ use crate::core::block::Block;
 use crate::core::scan::split_block;
 
 /// Input kept mapped in behind the cursor before older pages are dropped.
-const RESIDENT: usize = 8 << 20;
+///
+/// An 8 MiB window parsed no faster but added its size to peak RSS.
+const RESIDENT: usize = 1 << 20;
 
 /// Blocks split from a mapped file.
 pub struct MappedBlocks {
