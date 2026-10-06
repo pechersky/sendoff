@@ -117,6 +117,15 @@ stay held out: on them record access (``get``, ``in``, ``len``, ``names``,
 ``to_dict``) got 5-18% faster and scan-bound work stayed within noise.
 ``maturin build --release`` still makes a correct, LTO-only wheel.
 
+The tests normally load a coverage-instrumented debug build of the checkout.
+To test a built wheel, put it ahead of the checkout; the report header names
+the ``sendoff.native`` under test:
+
+.. code-block:: console
+
+   python -m zipfile -e dist/sendoff-*.whl /tmp/sendoff-wheel
+   PYTHONPATH=/tmp/sendoff-wheel .venv/bin/pytest --import-mode=append --no-rust-coverage
+
 Native typing stubs
 -------------------
 
