@@ -1651,6 +1651,9 @@ def test_malformed_index_lines_raise_exception(
         ("M  V30 1 C 0 0 0 0", "M  V30 1 1 1", IndexError),
         ("M  V30 1 C 0 0 0 0", "M  V30 1 1 1 x", ValueError),
         ("M  V30 1 C 0 0 0 0", "M  V30 1 1 1 9", IndexError),
+        # A duplicated atom index outranks a missing one in the same bond.
+        ("M  V30 2 C 0 0 0 0", "M  V30 1 1 9 2", IndicesDuplicateError),
+        ("M  V30 2 C 0 0 0 0", "M  V30 1 1 2 9", IndicesDuplicateError),
     ],
 )
 def test_malformed_renumber_input_raises_exception(

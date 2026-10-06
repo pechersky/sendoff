@@ -309,6 +309,13 @@ fn validate_indices(
     Ok(())
 }
 
+/// The new index of an old atom index, unless several atoms share it.
+#[derive(Clone, Copy)]
+enum NewIndex {
+    Unique(usize),
+    Duplicate,
+}
+
 /// Atom and bond lines numbered from one in table order, and the counts
 /// line that declares them, to splice into the table.
 struct Renumbered {
@@ -330,7 +337,7 @@ impl Renumbered {
         let prefix = "M  V30 ";
         let (atom_start, atom_end) = atom_line_range(lines);
         let atom_lines = &lines[atom_start..atom_end];
-        let mut atom_index_mapping: HashMap<i64, Vec<usize>> = HashMap::new();
+        let mut atom_index_mapping = HashMap::with_capacity(atom_lines.len());
         let mut new_atom_lines = Vec::with_capacity(atom_lines.len());
         for (line_index, line) in atom_lines.iter().enumerate() {
             let fields: Vec<_> = line.split_whitespace().collect();
@@ -339,8 +346,8 @@ impl Renumbered {
             let new_index = line_index + 1;
             atom_index_mapping
                 .entry(old_index)
-                .or_default()
-                .push(new_index);
+                .and_modify(|index| *index = NewIndex::Duplicate)
+                .or_insert(NewIndex::Unique(new_index));
             // Like the Python slice line[n:], skip characters, not bytes.
             let skip_chars = prefix.chars().count() + old_field.chars().count();
             let rest = line
@@ -357,17 +364,15 @@ impl Renumbered {
             let fields: Vec<_> = line.split_whitespace().collect();
             let from_index = integer(field(&fields, 4, "bond atom index")?)?;
             let to_index = integer(field(&fields, 5, "bond atom index")?)?;
-            let from_mapping = atom_index_mapping
-                .get(&from_index)
-                .map_or(&[][..], Vec::as_slice);
-            let to_mapping = atom_index_mapping
-                .get(&to_index)
-                .map_or(&[][..], Vec::as_slice);
-            if from_mapping.len() > 1 || to_mapping.len() > 1 {
-                return Err(CTableError::Duplicate);
-            }
-            let (Some(new_from), Some(new_to)) = (from_mapping.first(), to_mapping.first()) else {
-                return Err(CTableError::MissingField("bonded atom"));
+            let (new_from, new_to) = match (
+                atom_index_mapping.get(&from_index),
+                atom_index_mapping.get(&to_index),
+            ) {
+                (Some(NewIndex::Duplicate), _) | (_, Some(NewIndex::Duplicate)) => {
+                    return Err(CTableError::Duplicate);
+                }
+                (Some(&NewIndex::Unique(from)), Some(&NewIndex::Unique(to))) => (from, to),
+                _ => return Err(CTableError::MissingField("bonded atom")),
             };
             let trailing = if line.ends_with('\n') { "\n" } else { "" };
             new_bond_lines.push(format!(
