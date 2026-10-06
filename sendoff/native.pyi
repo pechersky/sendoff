@@ -523,18 +523,12 @@ class _SDRecordIterator(Iterator[tuple[AnyStr, AnyStr]]):
     def __next__(self, /) -> tuple[AnyStr, AnyStr]: ...
 
 @overload
-def parse_sdf(
-    path: str | os.PathLike[str], *, mdl_contains: str | None = None
-) -> _SDBlockIterator[str]: ...
+def parse_sdf(path: str | os.PathLike[str]) -> _SDBlockIterator[str]: ...
 @overload
-def parse_sdf(
-    path: bytes | os.PathLike[bytes], *, mdl_contains: bytes | None = None
-) -> _SDBlockIterator[bytes]: ...
+def parse_sdf(path: bytes | os.PathLike[bytes]) -> _SDBlockIterator[bytes]: ...
 @overload
 def parse_sdf(
     path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-    *,
-    mdl_contains: str | bytes | None = None,
 ) -> _SDBlockIterator[Any]:
     """
     Lazily parse SDBlocks from an SDF path.
@@ -544,20 +538,11 @@ def parse_sdf(
     with universal newlines; bytes paths give bytes split on b"\\n" only.
     Use a bytes path for feeds that are not valid UTF-8.
 
-    `mdl_contains` keeps only blocks whose CTAB contains it, as
-    `block.mdl_contains(needle)` would, but skips the others before
-    building them: `write_sdf(out, parse_sdf(path, mdl_contains="STER"))`.
-
     Args:
         path: a str, bytes, or os.PathLike path
-        mdl_contains: CTAB substring every yielded block contains, in the
-            path's type
 
     Returns:
         An iterator of SDBlocks; `close()` closes the file early
-
-    Raises:
-        TypeError: if `mdl_contains` is not the path's type
     """
 
 @overload

@@ -199,7 +199,7 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -461,14 +514,23 @@
+@@ -461,14 +514,19 @@
          """
 
  @final
@@ -216,19 +216,15 @@
 +    def __next__(self, /) -> tuple[AnyStr, AnyStr]: ...
 +
 +@overload
-+def parse_sdf(
-+    path: str | os.PathLike[str], *, mdl_contains: str | None = None
-+) -> _SDBlockIterator[str]: ...
++def parse_sdf(path: str | os.PathLike[str]) -> _SDBlockIterator[str]: ...
 +@overload
-+def parse_sdf(
-+    path: bytes | os.PathLike[bytes], *, mdl_contains: bytes | None = None
-+) -> _SDBlockIterator[bytes]: ...
++def parse_sdf(path: bytes | os.PathLike[bytes]) -> _SDBlockIterator[bytes]: ...
 +@overload
  def parse_sdf(
      path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
-     *,
-@@ -498,10 +560,13 @@
-         TypeError: if `mdl_contains` is not the path's type
+ ) -> _SDBlockIterator[Any]:
+@@ -487,10 +545,13 @@
+         An iterator of SDBlocks; `close()` closes the file early
      """
 
 +@overload

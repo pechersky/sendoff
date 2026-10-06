@@ -6,7 +6,6 @@ use std::hash::{BuildHasherDefault, Hasher};
 use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
 
-use memchr::memmem;
 use pyo3::exceptions::{
     PyNotImplementedError, PyOSError, PyTypeError, PyUnicodeDecodeError, PyValueError,
 };
@@ -403,9 +402,6 @@ pub(crate) struct PySDBlockIterator {
     source: Source,
     kind: Option<Kind>,
     scanner: Scanner,
-    /// Skip blocks whose CTAB lacks this needle, before copying them.
-    /// Boxed because its SIMD state is more aligned than Python objects.
-    mdl_contains: Option<Box<memmem::Finder<'static>>>,
 }
 
 impl PySDBlockIterator {
@@ -414,7 +410,6 @@ impl PySDBlockIterator {
             source,
             kind: None,
             scanner: Scanner::default(),
-            mdl_contains: None,
         }
     }
 
@@ -437,29 +432,19 @@ impl PySDBlockIterator {
             source,
             kind,
             scanner,
-            mdl_contains,
         } = self;
-        loop {
-            match scanner.next_span(|tail| source.fill(py, kind, tail)) {
-                Ok(Some(span)) => {
-                    if let Some(needle) = mdl_contains
-                        && needle.find(scanner.view(&span).mdl()).is_none()
-                    {
-                        continue;
-                    }
-                    return Ok(Some(PySDBlock {
-                        block: scanner.block(&span),
-                        kind: kind.unwrap_or(Kind::Text),
-                    }));
-                }
-                Ok(None) => {
-                    self.close();
-                    return Ok(None);
-                }
-                Err(error) => {
-                    self.close();
-                    return Err(error);
-                }
+        match scanner.next_block(|tail| source.fill(py, kind, tail)) {
+            Ok(Some(block)) => Ok(Some(PySDBlock {
+                block,
+                kind: kind.unwrap_or(Kind::Text),
+            })),
+            Ok(None) => {
+                self.close();
+                Ok(None)
+            }
+            Err(error) => {
+                self.close();
+                Err(error)
             }
         }
     }
@@ -755,7 +740,7 @@ impl PySDBlock {
     #[pyo3(signature = (needle: "AnyStr"))]
     fn mdl_contains(&self, needle: &Bound<'_, PyAny>) -> PyResult<bool> {
         let needle = self.arg_bytes(needle, "needles")?;
-        Ok(memmem::find(self.block.mdl(), needle).is_some())
+        Ok(memchr::memmem::find(self.block.mdl(), needle).is_some())
     }
 
     /// Return the CTAB after the title, through `M  END`, as one value.
@@ -1202,65 +1187,22 @@ pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> P
 /// with universal newlines; bytes paths give bytes split on b"\n" only.
 /// Use a bytes path for feeds that are not valid UTF-8.
 ///
-/// `mdl_contains` keeps only blocks whose CTAB contains it, as
-/// `block.mdl_contains(needle)` would, but skips the others before
-/// building them: `write_sdf(out, parse_sdf(path, mdl_contains="STER"))`.
-///
 /// Args:
 ///     path: a str, bytes, or os.PathLike path
-///     mdl_contains: CTAB substring every yielded block contains, in the
-///         path's type
 ///
 /// Returns:
 ///     An iterator of SDBlocks; `close()` closes the file early
-///
-/// Raises:
-///     TypeError: if `mdl_contains` is not the path's type
 #[pyfunction]
-#[pyo3(signature = (
-    path: "str | bytes | os.PathLike[str] | os.PathLike[bytes]",
-    *,
-    mdl_contains: "str | bytes | None" = None,
-) -> "_SDBlockIterator[Any]")]
-pub(crate) fn parse_sdf(
-    path: &Bound<'_, PyAny>,
-    mdl_contains: Option<&Bound<'_, PyAny>>,
-) -> PyResult<PySDBlockIterator> {
-    let (path, filename, kind) = sdf_path(path)?;
-    let mut blocks = PySDBlockIterator::new(Source::Path {
-        path,
-        filename,
-        text: kind == Kind::Text,
-    });
-    if let Some(needle) = mdl_contains {
-        let needle = kind_bytes(needle, kind, "parse_sdf mdl_contains")?;
-        blocks.mdl_contains = Some(Box::new(memmem::Finder::new(needle).into_owned()));
-    }
-    Ok(blocks)
-}
-
-/// Return the path to open, the filename for errors, and the value kind
-/// of a str, bytes, or os.PathLike SDF path.
-fn sdf_path(path: &Bound<'_, PyAny>) -> PyResult<(PathBuf, Py<PyAny>, Kind)> {
+#[pyo3(signature = (path: "str | bytes | os.PathLike[str] | os.PathLike[bytes]") -> "_SDBlockIterator[Any]")]
+pub(crate) fn parse_sdf(path: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
     let os = PyModule::import(path.py(), "os")?;
     let filename = os.call_method1("fspath", (path,))?;
-    let kind = if filename.is_instance_of::<PyString>() {
-        Kind::Text
-    } else {
-        Kind::Bytes
-    };
+    let text = filename.is_instance_of::<PyString>();
     // fsdecode round-trips bytes paths losslessly through surrogateescape.
     let path = os.call_method1("fsdecode", (&filename,))?.extract()?;
-    Ok((path, filename.unbind(), kind))
-}
-
-/// Return the bytes of a str or bytes argument that must be of `kind`.
-fn kind_bytes<'a>(value: &'a Bound<'_, PyAny>, kind: Kind, what: &str) -> PyResult<&'a [u8]> {
-    match bytes_of(value)? {
-        Some((found, bytes)) if found == kind => Ok(bytes),
-        _ => Err(PyTypeError::new_err(match kind {
-            Kind::Text => format!("{what} must be str for a str path"),
-            Kind::Bytes => format!("{what} must be bytes for a bytes path"),
-        })),
-    }
+    Ok(PySDBlockIterator::new(Source::Path {
+        path,
+        filename: filename.unbind(),
+        text,
+    }))
 }
