@@ -289,6 +289,47 @@ def test_parse_sdf_text_paths_decode_utf8_on_access(tmp_path: Path) -> None:
     assert next(parse_sdf(os.fsencode(path))).records() == [(b"F", b"\xa6 bad")]
 
 
+def test_parse_sdf_mdl_contains_skips_other_blocks(tmp_path: Path) -> None:
+    """mdl_contains keeps the blocks block.mdl_contains would keep.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixtures.
+    """
+    sdf = (
+        "STER title\n\nM  END\n> <A>\nSTER\n\n$$$$\n"
+        "kept\n  1  0  0  0  0  0  0  0  0  0  1 V2000\nM  STE\nM  END\n$$$$\n"
+        "no ctab end\nSTER\n> <A>\n1\n\n$$$$\n"
+        "\n\nM  END\n$$$$\n"
+        "unterminated\nM  STER\nM  END"
+    )
+    path = tmp_path / "filter.sdf"
+    path.write_bytes(sdf.replace("\n", "\r\n").encode())
+
+    for needle in ("STER", "M  END\n", "STE", "", "\r", "absent"):
+        expected = [b.to_sdf() for b in parse_sdf(path) if b.mdl_contains(needle)]
+        found = [b.to_sdf() for b in parse_sdf(path, mdl_contains=needle)]
+        assert found == expected, needle
+        raw = os.fsencode(path)
+        expected_bytes = [
+            b.to_sdf() for b in parse_sdf(raw) if b.mdl_contains(needle.encode())
+        ]
+        found_bytes = [b.to_sdf() for b in parse_sdf(raw, mdl_contains=needle.encode())]
+        assert found_bytes == expected_bytes, needle
+    assert [b.title for b in parse_sdf(path, mdl_contains="STER")] == [
+        "no ctab end",
+        "unterminated",
+    ]
+    assert [b.title for b in parse_sdf(path, mdl_contains="M  STE")] == [
+        "kept",
+        "unterminated",
+    ]
+
+    with pytest.raises(TypeError, match="mdl_contains must be str for a str path"):
+        parse_sdf(path, mdl_contains=b"STER")
+    with pytest.raises(TypeError, match="must be bytes for a bytes path"):
+        parse_sdf(os.fsencode(path), mdl_contains="STER")
+
+
 def test_from_lines_reads_file_objects_in_chunks() -> None:
     """File objects are read with read1 or read rather than line iteration."""
 

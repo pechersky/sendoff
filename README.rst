@@ -61,6 +61,9 @@ Edit blocks and write them back:
 
    write_sdf("out.sdf", (tag(block) for block in parse_sdf("in.sdf")))
 
+   # Keep blocks whose CTAB has a charge line; the rest are skipped unbuilt.
+   write_sdf("charged.sdf", parse_sdf("in.sdf", mdl_contains="M  CHG"))
+
    block = SDBlock(Chem.MolToMolBlock(mol), {"ID": "X-1"})
    block.molblock = Chem.MolToMolBlock(other)  # new structure, same SD data
    block.to_sdf()  # the block as SDF text ending in $$$$

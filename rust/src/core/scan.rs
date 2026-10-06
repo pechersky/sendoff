@@ -42,7 +42,7 @@ impl Scanner {
         &mut self,
         fill: impl FnMut(&mut Tail<'_>) -> Result<bool, E>,
     ) -> Result<Option<Block>, E> {
-        Ok(self.next_span(fill)?.map(|span| self.block(span)))
+        Ok(self.next_span(fill)?.map(|span| self.block(&span)))
     }
 
     /// Like `next_block`, but view the block in the scanner's buffer, valid
@@ -51,7 +51,7 @@ impl Scanner {
         &mut self,
         fill: impl FnMut(&mut Tail<'_>) -> Result<bool, E>,
     ) -> Result<Option<BlockView<'_>>, E> {
-        Ok(self.next_span(fill)?.map(|span| self.view(span)))
+        Ok(self.next_span(fill)?.map(|span| self.view(&span)))
     }
 
     /// Return the next block's place in the buffer, filling as needed.
@@ -80,13 +80,13 @@ impl Scanner {
     }
 
     /// View a block returned by the last `next_span` call.
-    pub fn view(&self, span: Span) -> BlockView<'_> {
-        BlockView::new(&self.buf[span.range], span.delimiter)
+    pub fn view(&self, span: &Span) -> BlockView<'_> {
+        BlockView::new(&self.buf[span.range.clone()], span.delimiter)
     }
 
     /// Copy a block returned by the last `next_span` call.
-    pub fn block(&self, span: Span) -> Block {
-        Block::new(self.buf[span.range].to_vec(), span.delimiter)
+    pub fn block(&self, span: &Span) -> Block {
+        Block::new(self.buf[span.range.clone()].to_vec(), span.delimiter)
     }
 
     fn take_span(&mut self) -> Option<Span> {
