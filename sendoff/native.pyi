@@ -180,11 +180,20 @@ class SDBlock(Generic[AnyStr]):
             ValueError: if a record header has no `<name>`
         """
 
+    def __copy__(self, /) -> SDBlock[AnyStr]:
+        """
+        Return an independent copy; a block holds no other objects, so
+        `copy.copy` and `copy.deepcopy` are the same.
+        """
+
+    def __deepcopy__(self, memo: dict[int, Any], /) -> SDBlock[AnyStr]: ...
+    def __eq__(self, value: object, /) -> bool: ...
     def __len__(self, /) -> int:
         """
         The number of records, duplicates included: `len(block.records())`.
         """
 
+    def __ne__(self, value: object, /) -> bool: ...
     def __new__(
         cls,
         /,
@@ -207,6 +216,24 @@ class SDBlock(Generic[AnyStr]):
         Raises:
             ValueError: if `sdf` holds more than one block
             TypeError: if `sdf` is not str or bytes, or a record is not its type
+        """
+
+    def __reduce__(self, /) -> tuple[Any, ...]:
+        """
+        Pickle the block's exact state rather than its SDF text, which
+        does not always parse back to the same block.
+        """
+
+    def __repr__(self, /) -> str: ...
+    @classmethod
+    def _from_state(
+        cls, /, data: bytes, title_end: int, mdl_end: int, text: bool
+    ) -> SDBlock[Any]:
+        """
+        Rebuild a block pickled by `__reduce__`.
+
+        Raises:
+            ValueError: if the state cannot come from a block
         """
 
     def append_record(self, /, record_name: AnyStr, value: AnyStr) -> None:

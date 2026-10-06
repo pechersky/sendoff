@@ -21,8 +21,9 @@ The ``SDBlock`` API changed. Migrate 0.1.x code as follows:
 - ``SDBlock`` is no longer a dataclass. ``SDBlock(title, mdl, metadata)``
   becomes ``SDBlock(sdf, records)``, and ``SDBlock.from_block_lines(lines)``
   becomes ``SDBlock(str.join("", lines))``. ``parse_mdl`` and
-  ``parse_metadata`` are removed. Blocks compare by identity and cannot be
-  copied or pickled.
+  ``parse_metadata`` are removed. Blocks still compare by content and copy
+  and pickle, but pickles from 0.1.x do not load, and ``repr`` shows only the
+  title.
 - ``SDBlock.from_lines`` no longer takes a ``str`` or ``bytes``, which it
   iterated character by character: ``from_lines(text.splitlines(True))``
   becomes ``SDBlock.from_sdf(text)``. ``from_lines`` also takes file objects.

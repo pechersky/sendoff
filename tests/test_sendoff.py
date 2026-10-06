@@ -1,8 +1,10 @@
 # mypy: allow-untyped-decorators
 """Test sendoff parsing of metadata on generated SDFs."""
+import copy
 import errno
 import io
 import os
+import pickle
 import typing
 from itertools import chain
 from pathlib import Path
@@ -689,6 +691,120 @@ def test_constructor_parses_one_block() -> None:
         SDBlock(1)  # type: ignore[type-var]
     with pytest.raises(TypeError, match="record names must be str"):
         SDBlock(molblock, [(b"A", b"1")])  # type: ignore[type-var]
+
+
+def test_blocks_compare_by_content_and_are_unhashable() -> None:
+    """== compares kind and content, and blocks are mutable so unhashable."""
+    sdf = "t\n  prog\n\nM  END\n> <A>\n1\n\n$$$$\n"
+    block = SDBlock(sdf)
+    assert block == SDBlock(sdf) and not block != SDBlock(sdf)
+    assert block != SDBlock(sdf.encode())
+    assert SDBlock(sdf.encode()) == SDBlock(sdf.encode())
+    assert block != sdf and block != object()
+
+    edited = SDBlock(sdf)
+    edited.set_record("A", "2")
+    assert edited != block
+    edited.set_record("A", "1")
+    assert edited == block
+
+    # The same text parses differently when SD data follows an MDL
+    # without M  END, so equal text alone does not make equal blocks.
+    appended = SDBlock("t\n  prog\n")
+    appended.append_record("A", "1")
+    reparsed = SDBlock(appended.to_sdf())
+    assert reparsed.to_sdf() == appended.to_sdf()
+    assert (reparsed.records(), appended.records()) == ([], [("A", "1")])
+    assert reparsed != appended
+
+    with pytest.raises(TypeError, match="unhashable"):
+        hash(block)
+
+
+def _state_edge_blocks() -> list[SDBlock[str]]:
+    """Build blocks that SDBlock(block.to_sdf()) does not rebuild exactly.
+
+    Returns:
+        Edited and unusual blocks
+    """
+    delimiter_title = SDBlock("t\n  prog\n\nM  END\n> <A>\n1\n\n")
+    delimiter_title.title = "$$$$ not a delimiter"
+    no_end = SDBlock("t\n  prog\n")
+    no_end.append_record("A", "1")
+    padded = SDBlock(" t \n  prog\n\nM  END\n")
+    return [delimiter_title, no_end, padded, SDBlock("")]
+
+
+@pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
+def test_blocks_pickle_their_exact_state(protocol: int) -> None:
+    """Pickling keeps the kind and the state, even where text would not.
+
+    Args:
+        protocol: pickle protocol
+    """
+    sdf = "t\r\n  prog\r\n\r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$\r\n"
+    blocks: list[SDBlock[str] | SDBlock[bytes]] = [
+        SDBlock(sdf),
+        SDBlock(sdf.encode()),
+        SDBlock("caf\u00e9\nM  END\n"),
+        SDBlock(b"\xff\nM  END\n> <\xfe>\n\xfd\n\n"),
+        *_state_edge_blocks(),
+    ]
+    for block in blocks:
+        restored = pickle.loads(pickle.dumps(block, protocol))
+        assert restored == block and restored is not block
+        assert type(restored.title) is type(block.title)
+        assert restored.to_sdf() == block.to_sdf()
+        assert restored.records() == block.records()
+    assert pickle.loads(pickle.dumps(blocks, protocol)) == blocks
+
+
+def test_block_state_is_validated() -> None:
+    """Unpickling rejects state that no block has instead of panicking."""
+    from_state = SDBlock._from_state
+    assert from_state(b"t\n$$$$\n", 2, 2, True) == SDBlock("t\n")
+    for state in [
+        (b"", 0, 0, True),
+        (b"t\n", 2, 2, True),
+        (b"t\n$$$$", 2, 2, False),
+        (b"t\n$$$$\n", 1, 1, False),
+        (b"t\nx\n$$$$\n", 2, 3, False),
+        (b"t\nx\n$$$$\n", 4, 4, False),
+        (b"t\nM  END\n$$$$\n", 9, 2, False),
+        (b"t\nM  END\n$$$$\n", 2, 99, False),
+        (b"\xff\nM  END\n$$$$\n", 2, 9, True),
+    ]:
+        with pytest.raises(ValueError, match="invalid SDBlock state"):
+            from_state(*state)
+    assert from_state(b"\xff\nM  END\n$$$$\n", 2, 9, False).title == b"\xff"
+
+
+@pytest.mark.parametrize("copier", [copy.copy, copy.deepcopy])
+def test_block_copies_are_independent(
+    copier: typing.Callable[[SDBlock[str]], SDBlock[str]],
+) -> None:
+    """Copies, shallow or deep, are equal blocks that are edited separately.
+
+    Args:
+        copier: copy.copy or copy.deepcopy
+    """
+    for block in [SDBlock("t\nM  END\n> <A>\n1\n\n"), *_state_edge_blocks()]:
+        duplicate = copier(block)
+        assert duplicate == block and duplicate is not block
+        duplicate.append_record("B", "2")
+        duplicate.title = "other"
+        assert duplicate != block and "B" not in block
+    byte_block = SDBlock(b"t\nM  END\n")
+    assert copier(byte_block) == byte_block  # type: ignore[arg-type]
+    shared = SDBlock("t\n")
+    first, second = copy.deepcopy([shared, shared])
+    assert first is second and first is not shared
+
+
+def test_block_repr_shows_the_title() -> None:
+    """The repr shows the stripped title in the block's type."""
+    assert repr(SDBlock(" aspirin \nM  END\n")) == "<SDBlock title='aspirin'>"
+    assert repr(SDBlock(b"aspirin\nM  END\n")) == "<SDBlock title=b'aspirin'>"
 
 
 def test_from_sdf_parses_like_a_file(tmp_path: Path) -> None:

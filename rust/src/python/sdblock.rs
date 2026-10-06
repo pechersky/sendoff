@@ -496,7 +496,8 @@ impl PySDRecordIterator {
 ///
 /// `SDBlock[str]` blocks come from text input and `SDBlock[bytes]` blocks
 /// from binary input; names, values, and lines have the block's type.
-#[pyclass(name = "SDBlock", module = "sendoff.native")]
+#[pyclass(name = "SDBlock", module = "sendoff.native", eq, skip_from_py_object)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct PySDBlock {
     block: Block,
     kind: Kind,
@@ -850,6 +851,61 @@ impl PySDBlock {
     /// A block is true even without records, as before it had a length.
     fn __bool__(&self) -> bool {
         true
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        Ok(format!("<SDBlock title={}>", self.title(py)?.repr()?))
+    }
+
+    /// Return an independent copy; a block holds no other objects, so
+    /// `copy.copy` and `copy.deepcopy` are the same.
+    #[pyo3(signature = () -> "SDBlock[AnyStr]")]
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    #[pyo3(signature = (memo: "dict[int, Any]", /) -> "SDBlock[AnyStr]")]
+    fn __deepcopy__(&self, memo: &Bound<'_, PyAny>) -> Self {
+        let _ = memo;
+        self.clone()
+    }
+
+    /// Pickle the block's exact state rather than its SDF text, which
+    /// does not always parse back to the same block.
+    #[pyo3(signature = () -> "tuple[Any, ...]")]
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyTuple>> {
+        let py = slf.py();
+        let this = slf.borrow();
+        let (data, title_end, mdl_end) = this.block.parts();
+        let state = (
+            PyBytes::new(py, data),
+            title_end,
+            mdl_end,
+            this.kind == Kind::Text,
+        );
+        (slf.get_type().getattr(intern!(py, "_from_state"))?, state).into_pyobject(py)
+    }
+
+    /// Rebuild a block pickled by `__reduce__`.
+    ///
+    /// Raises:
+    ///     ValueError: if the state cannot come from a block
+    #[classmethod]
+    #[pyo3(signature = (
+        data: "bytes", title_end: "int", mdl_end: "int", text: "bool",
+    ) -> "SDBlock[Any]")]
+    fn _from_state(
+        _cls: &Bound<'_, PyType>,
+        data: &[u8],
+        title_end: usize,
+        mdl_end: usize,
+        text: bool,
+    ) -> PyResult<Self> {
+        let kind = if text { Kind::Text } else { Kind::Bytes };
+        Block::from_parts(data.to_vec(), title_end, mdl_end)
+            .filter(|block| !text || std::str::from_utf8(block.parts().0).is_ok())
+            .map(|block| Self { block, kind })
+            .ok_or_else(|| PyValueError::new_err("invalid SDBlock state"))
     }
 
     /// Whether any record is named `name`: `name in block.names()`.

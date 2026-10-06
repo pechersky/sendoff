@@ -219,7 +219,7 @@ const TRAILER: &[u8] = b"$$$$\n";
 ///
 /// `data` also ends with [`TRAILER`], so an unstripped block serializes
 /// as a single copy of `data`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
     data: Vec<u8>,
     title_end: usize,
@@ -254,6 +254,31 @@ impl Block {
             title_end,
             mdl_end,
         }
+    }
+
+    /// The data, ending with `$$$$\n`, and where the title and MDL end:
+    /// what `from_parts` rebuilds the block from.
+    ///
+    /// Re-parsing the serialized block does not always restore it: a title
+    /// can start with `$$$$`, and SD data can follow an MDL without
+    /// `M  END`.
+    pub fn parts(&self) -> (&[u8], usize, usize) {
+        (&self.data, self.title_end, self.mdl_end)
+    }
+
+    /// Rebuild a block from `parts`, or `None` if no block has them.
+    pub fn from_parts(data: Vec<u8>, title_end: usize, mdl_end: usize) -> Option<Self> {
+        let body_end = data.len().checked_sub(TRAILER.len())?;
+        let valid = data.ends_with(TRAILER)
+            && memchr(b'\n', &data) == title_end.checked_sub(1)
+            && title_end <= mdl_end
+            && mdl_end <= body_end
+            && data[mdl_end - 1] == b'\n';
+        valid.then_some(Self {
+            data,
+            title_end,
+            mdl_end,
+        })
     }
 
     /// Where the SD data ends and the trailer starts.
