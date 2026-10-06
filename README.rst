@@ -25,6 +25,47 @@ This package also tried to document the "canonical" ways metadata is handled by 
 packages. To wit, there are tests to monitor how, for example, rdkit deals with molecules
 that have multiline record values, or a "$$$$" molecule title.
 
+Usage
+-----
+
+.. code-block:: python
+
+   from rdkit import Chem
+   from sendoff.sdblock import SDBlock, parse_sdf, write_sdf
+
+   # str paths give SDBlock[str]; bytes paths give SDBlock[bytes], for feeds
+   # that are not valid UTF-8.
+   for block in parse_sdf("compounds.sdf"):
+       block.title
+       block.get("ID")  # the last value named "ID", or None
+       block.to_dict()  # every record, later duplicates winning
+       block.records()  # [(name, value), ...] in file order
+       block.mdl_contains("V3000")  # search the CTAB without building lines
+       mol = Chem.MolFromMolBlock(block.molblock)
+
+Many SDFs do not carry the same records on every block: ADMET Predictor
+exports, for one, have hundreds of record names, some on only part of the
+blocks. Access is per block, so ``get`` and ``to_dict`` assume no fixed columns.
+
+Edit blocks and write them back:
+
+.. code-block:: python
+
+   def tag(block):
+       block.set_record("Source", "vendor")  # replace in place, or append
+       block.remove_record("Internal note")
+       return block
+
+   write_sdf("out.sdf", (tag(block) for block in parse_sdf("in.sdf")))
+
+   block = SDBlock(Chem.MolToMolBlock(mol), {"ID": "X-1"})
+   block.molblock = Chem.MolToMolBlock(other)  # new structure, same SD data
+   block.to_sdf()  # the block as SDF text ending in $$$$
+   blocks = list(SDBlock.from_sdf(sdf_text))  # parse SDF held in memory
+
+``write_sdf`` to a path writes in large chunks with the GIL released, so prefer
+it to a ``block.write`` loop.
+
 Native typing stubs
 -------------------
 
