@@ -319,6 +319,13 @@ class SDBlock(Generic[AnyStr]):
         produced. Line iterables are consumed only up to each block's `$$$$`
         line, and the iterator does not close them.
 
+        Lines end at "\\n", and lines keep their endings, so CRLF input
+        writes back as CRLF. `from_lines(f)` gives the blocks
+        `from_lines(list(f))` does, except that a file opened with
+        `newline=""` also ends its lines at a lone "\\r", which chunks do not:
+        open such files in default text mode, which translates "\\r\\n" and
+        "\\r" to "\\n" as `parse_sdf` and `from_sdf` do for str input.
+
         Args:
             lines: homogeneous str or bytes lines separated by the `$$$$`
                 delimiter, or a text or binary file object
@@ -342,9 +349,10 @@ class SDBlock(Generic[AnyStr]):
         """
         Lazily parse SDBlocks from SDF str or bytes held in memory.
 
-        Equivalent to `from_lines(io.StringIO(sdf))` or
+        Equivalent to `from_lines(io.StringIO(sdf, newline=None))` or
         `from_lines(io.BytesIO(sdf))`, without splitting lines: str input
-        has universal newlines, and bytes are split on b"\\n" only.
+        has universal newlines, translated to "\\n", and bytes are split on
+        b"\\n" only.
 
         Args:
             sdf: SDF content as str or bytes
@@ -590,9 +598,10 @@ def parse_sdf(
     read in chunks. As with any mapped file, truncating the file while
     iterating can kill the process with SIGBUS, so write results to a new
     path. str paths give str values decoded as UTF-8 on access, with
-    universal newlines; bytes paths give bytes split on b"\\n" only. Use a
-    bytes path for feeds that are not valid UTF-8: from a str path, their
-    text raises UnicodeDecodeError with a note naming the block and record.
+    universal newlines translated to "\\n", as `open(path)` reads; bytes
+    paths give bytes split on b"\\n" only. Use a bytes path for feeds that
+    are not valid UTF-8: from a str path, their text raises
+    UnicodeDecodeError with a note naming the block and record.
 
     Args:
         path: a str, bytes, or os.PathLike path

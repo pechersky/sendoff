@@ -2,8 +2,11 @@
 
 Hypothesis generates SDF-shaped inputs (titles, MDL bodies with and without
 ``M  END``, record headers and malformed headers, multiline and blank values,
-``$$$$`` variants, LF/CRLF/CR endings, unterminated input) and every entry
-point must agree with ``tests/reference_sdblock.py`` block by block.
+``$$$$`` variants at and after the start of a line, LF/CRLF/CR endings,
+unterminated input) and every entry point must agree with
+``tests/reference_sdblock.py`` block by block. The readers must also agree
+with each other: mapped and streamed paths, file objects and their lines,
+including input past the read chunk and the map's resident window.
 
 The alphabet includes whitespace that only ``str.strip`` removes, such as
 ``\x1f`` and the ideographic space, but not ``str.splitlines`` breaks.
@@ -14,9 +17,10 @@ from __future__ import annotations
 import io
 import os
 import tempfile
+import threading
 from typing import Any, Callable, Iterable, Union
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from sendoff.sdblock import SDBlock, parse_sdf
@@ -52,6 +56,7 @@ line_content = st.one_of(
     st.sampled_from(SPECIAL),
     free_text,
     st.builds(lambda a, b: a + b, st.sampled_from(SPECIAL), free_text),
+    st.builds(lambda a, b: a + b, free_text, st.sampled_from(SPECIAL)),
 )
 value_line = st.one_of(free_text.filter(lambda s: s.strip() != ""), line_content)
 
@@ -388,3 +393,146 @@ def test_parse_sdf_matches_reference(lines: list[str]) -> None:
         assert_blocks_match(parse_sdf(path), text_reference, text=True)
         bytes_reference = list(ref_from_lines(io.BytesIO(data)))
         assert_blocks_match(parse_sdf(os.fsencode(path)), bytes_reference, text=False)
+
+
+# Sizes that change how readers buffer input: the chunk that file objects
+# and unmapped files are read in (CHUNK in rust/src/python/sdblock.rs), and
+# the input a map keeps resident behind its cursor (RESIDENT in
+# rust/src/core/mapped.rs), past twice which it drops pages.
+READ_CHUNK = 128 << 10
+MAP_RESIDENT = 1 << 20
+
+
+def snapshot(blocks: Iterable[SDBlock[Any]], text: bool) -> list[Any]:
+    """Return what tells blocks apart: what they write, and their records.
+
+    Args:
+        blocks: native blocks
+        text: whether the blocks hold str values
+
+    Returns:
+        One (written, records) pair per block.
+    """
+    return [(serialized(block, text), outcome(block.records)) for block in blocks]
+
+
+def piped(path: Union[str, bytes], data: bytes) -> list[SDBlock[Any]]:
+    """Parse ``data`` written through a named pipe, which is read, not mapped.
+
+    Args:
+        path: where to make the pipe; a bytes path parses bytes
+        data: the SDF content
+
+    Returns:
+        The blocks ``parse_sdf`` produces.
+    """
+    os.mkfifo(path)
+
+    def write() -> None:
+        with open(path, "wb") as pipe:
+            pipe.write(data)
+
+    writer = threading.Thread(target=write, daemon=True)
+    writer.start()
+    try:
+        return list(parse_sdf(path))
+    finally:
+        writer.join()
+        os.remove(path)
+
+
+def assert_readers_agree(text: str) -> None:
+    """Every reader splits ``text``, saved as UTF-8, into the same blocks.
+
+    Readers that decode text themselves translate universal newlines;
+    ``from_lines`` keeps the endings it is given, so it agrees with them
+    only through a file in default text mode. A file opened with
+    ``newline=""`` splits its own lines at a lone "\\r" too, so
+    ``from_lines(f)`` and ``from_lines(list(f))`` agree only without one.
+
+    Args:
+        text: SDF content
+    """
+    data = text.encode()
+    pipes = hasattr(os, "mkfifo")
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "input.sdf")
+        with open(path, "wb") as out:
+            out.write(data)
+        pipe = os.path.join(directory, "pipe.sdf")
+
+        def opened(**kwargs: Any) -> Any:
+            return open(path, encoding="utf-8", **kwargs)
+
+        with opened() as handle, opened() as lines:
+            translated = [
+                snapshot(parse_sdf(path), True),
+                snapshot(SDBlock.from_sdf(text), True),
+                snapshot(SDBlock.from_lines(io.StringIO(text, newline=None)), True),
+                snapshot(SDBlock.from_lines(handle), True),
+                snapshot(SDBlock.from_lines(list(lines)), True),
+            ]
+        if pipes:
+            translated.append(snapshot(piped(pipe, data), True))
+        assert all(blocks == translated[0] for blocks in translated)
+
+        with opened(newline="") as handle, opened(newline="") as lines:
+            kept = [
+                snapshot(SDBlock.from_lines(handle), True),
+                snapshot(SDBlock.from_lines(io.StringIO(text)), True),
+            ]
+            split_at_cr = snapshot(SDBlock.from_lines(list(lines)), True)
+        assert kept[0] == kept[1]
+        lone_cr = "\r" in text.replace("\r\n", "")
+        if not lone_cr:
+            assert split_at_cr == kept[0]
+        if "\r" not in text:
+            assert kept[0] == translated[0]
+
+        with open(path, "rb") as handle, open(path, "rb") as lines:
+            raw = [
+                snapshot(parse_sdf(os.fsencode(path)), False),
+                snapshot(SDBlock.from_sdf(data), False),
+                snapshot(SDBlock.from_lines(io.BytesIO(data)), False),
+                snapshot(SDBlock.from_lines(handle), False),
+                snapshot(SDBlock.from_lines(list(lines)), False),
+            ]
+        if pipes:
+            raw.append(snapshot(piped(os.fsencode(pipe), data), False))
+        assert all(blocks == raw[0] for blocks in raw)
+
+
+@examples
+@given(sdf_lines())
+def test_readers_agree(lines: list[str]) -> None:
+    """Paths, pipes, in-memory SDF, file objects, and lines split alike.
+
+    Args:
+        lines: generated lines with endings
+    """
+    assert_readers_agree(str.join("", lines))
+
+
+@settings(
+    max_examples=max(1, int(os.environ.get("SENDOFF_ORACLE_EXAMPLES", "300")) // 60),
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+@given(sdf_lines(), st.integers(0, 512))
+def test_readers_agree_past_buffer_sizes(lines: list[str], offset: int) -> None:
+    """Readers agree when input crosses chunk and map window boundaries.
+
+    A padding block puts the generated SDF ``offset`` characters before a
+    multiple of the read chunk, past twice the map's resident window.
+
+    Args:
+        lines: generated lines with endings
+        offset: where the generated SDF starts before the boundary
+    """
+    text = str.join("", lines)
+    assume(text)
+    head, tail = "pad\n", "\n$$$$\n"
+    fill = 2 * MAP_RESIDENT + READ_CHUNK - offset - len(head) - len(tail)
+    padding = head + ("x" * 79 + "\n") * (fill // 80) + "x" * (fill % 80) + tail
+    assert (len(padding) + offset) % READ_CHUNK == 0
+    assert_readers_agree(padding + text * 2)
