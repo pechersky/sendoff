@@ -427,19 +427,6 @@ INDEX_DEFECTS = {
 
 
 @pytest.fixture()
-def single_mol_v2000_sdf(tmp_path: Path) -> Path:
-    """Write a single molecule with no metadata to an sdf, forced to v2000.
-
-    Args:
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    return write_mols(tmp_path / "input.sdf", Chem.MolFromSmiles("C"))
-
-
-@pytest.fixture()
 def single_mol_v3000_sdf(tmp_path: Path) -> Path:
     """Write a single molecule with no metadata to an sdf, forced to v3000.
 
