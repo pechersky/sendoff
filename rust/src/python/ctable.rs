@@ -1,13 +1,6 @@
-use pyo3::exceptions::PyNotImplementedError;
 use pyo3::prelude::*;
 
-use crate::core::ctable::error::CTableError;
 use crate::core::ctable::{CTable, Section};
-
-pyo3::import_exception!(sendoff.ctable, IndicesDuplicateError);
-pyo3::import_exception!(sendoff.ctable, IndicesMismatchError);
-pyo3::import_exception!(sendoff.ctable, IndicesOutOfOrderError);
-pyo3::import_exception!(sendoff.ctable, MalformedCTableError);
 
 /// Handle a Connection table (CTAB) from a single molecule block.
 ///
@@ -191,24 +184,5 @@ impl PyCTable {
 
     pub(crate) fn fix_counts_for_block(&mut self) -> PyResult<()> {
         self.fix_counts()
-    }
-}
-
-impl From<CTableError> for PyErr {
-    fn from(error: CTableError) -> Self {
-        let message = error.to_string();
-        match error {
-            CTableError::Malformed { .. } => MalformedCTableError::new_err(message),
-            CTableError::NotImplemented(_) | CTableError::Unsupported { .. } => {
-                PyNotImplementedError::new_err(message)
-            }
-            CTableError::OutOfOrder { .. } => IndicesOutOfOrderError::new_err(message),
-            CTableError::Duplicate { .. } | CTableError::AmbiguousAtom { .. } => {
-                IndicesDuplicateError::new_err(message)
-            }
-            CTableError::Fewer { .. } | CTableError::More { .. } => {
-                IndicesMismatchError::new_err(message)
-            }
-        }
     }
 }

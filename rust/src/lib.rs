@@ -15,16 +15,16 @@ mod native {
     use crate::python::sdblock::PySDBlock as SDBlock;
 
     #[pymodule_export]
-    use crate::python::sdblock::PySDBlockIterator as _SDBlockIterator;
+    use crate::python::read::PySDBlockIterator as _SDBlockIterator;
 
     #[pymodule_export]
     use crate::python::sdblock::PySDRecordIterator as _SDRecordIterator;
 
     #[pymodule_export]
-    use crate::python::sdblock::parse_sdf;
+    use crate::python::read::parse_sdf;
 
     #[pymodule_export]
-    use crate::python::sdblock::write_sdf;
+    use crate::python::write::write_sdf;
 
     #[pymodule_export]
     #[allow(non_upper_case_globals)]

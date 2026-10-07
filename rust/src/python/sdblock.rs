@@ -1,227 +1,22 @@
-use std::borrow::Cow;
-use std::cell::{RefCell, RefMut};
-use std::collections::{HashMap, VecDeque};
-use std::fs::File;
-use std::hash::{BuildHasherDefault, Hasher};
-use std::io::{ErrorKind, Read, Write};
-use std::path::PathBuf;
+//! The `SDBlock` Python class and its record iterator.
 
-use pyo3::exceptions::{
-    PyNotImplementedError, PyOSError, PyTypeError, PyUnicodeDecodeError, PyValueError,
-};
+use std::borrow::Cow;
+
+use pyo3::exceptions::{PyNotImplementedError, PyTypeError, PyUnicodeDecodeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyIterator, PyList, PyString, PyTuple, PyType};
+use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyList, PyString, PyTuple, PyType};
 
 use crate::core::block::Block;
 use crate::core::lines::lines;
-use crate::core::mapped::MappedBlocks;
-use crate::core::newline::{
-    TRANSLATE_SLACK, missing_ending, title_newline, translate_newlines, translated,
-    universal_newlines,
-};
+use crate::core::newline::{translated, universal_newlines};
 use crate::core::record::Record;
-use crate::core::split::{Scanner, Tail, single_block};
+use crate::core::split::single_block;
 use crate::core::strip::Strip;
 use crate::python::ctable::PyCTable;
-
-/// Characters or bytes requested per `read` call, or split per batch from a
-/// mapped file. Blocks larger than this grow the scanner's buffer. Against
-/// 1 MiB, 128 KiB was as fast for paths and buffers, 25-30% faster for text
-/// file objects, and used less memory.
-const CHUNK: usize = 128 << 10;
-
-/// Bytes buffered before each write to a path. 64 KiB to 1 MiB timed the
-/// same, and 4 MiB was slower.
-const WRITE_CHUNK: usize = 256 << 10;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Text,
-    Bytes,
-}
-
-impl Kind {
-    fn value<'py>(self, py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
-        match self {
-            Kind::Text => PyString::from_bytes(py, bytes).map(Bound::into_any),
-            Kind::Bytes => Ok(PyBytes::new(py, bytes).into_any()),
-        }
-    }
-
-    /// Call `f` with a `Namer` that reuses name objects across blocks, or
-    /// creates new ones in a re-entrant call that finds the cache in use.
-    fn with_names<R>(self, f: impl FnOnce(&mut Namer<'_>) -> R) -> R {
-        NAMES.with(|cache| {
-            f(&mut Namer {
-                kind: self,
-                cache: cache.try_borrow_mut().ok(),
-                prev: NO_NAME,
-            })
-        })
-    }
-
-    /// The Python `strip()` that values of this kind follow.
-    fn strip(self) -> Strip {
-        match self {
-            Kind::Text => Strip::Str,
-            Kind::Bytes => Strip::Bytes,
-        }
-    }
-}
-
-/// Names cached per kind before the cache is emptied, which bounds what
-/// one-off names can hold on to.
-const MAX_NAMES: usize = 4096;
-/// Longer names are rare and are not cached.
-const MAX_CACHED_NAME: usize = 64;
-
-/// A fast hash for short record names, eight bytes at a time.
-#[derive(Default)]
-struct NameHasher(u64);
-
-impl Hasher for NameHasher {
-    fn write(&mut self, bytes: &[u8]) {
-        for chunk in bytes.chunks(8) {
-            let mut word = [0; 8];
-            word[..chunk.len()].copy_from_slice(chunk);
-            self.0 = (self.0.rotate_left(5) ^ u64::from_le_bytes(word))
-                .wrapping_mul(0x517c_c1b7_2722_0a95);
-        }
-    }
-
-    fn finish(&self) -> u64 {
-        // Fold the well-mixed high bits into the low bits buckets use.
-        self.0 ^ (self.0 >> 32)
-    }
-}
-
-/// Marks no cached name: the start of a block, or an unknown successor.
-const NO_NAME: u32 = u32::MAX;
-
-/// A cached record-name object.
-struct Name {
-    bytes: Box<[u8]>,
-    object: Py<PyAny>,
-    /// The name that followed this one when last seen, or `NO_NAME`.
-    next: u32,
-}
-
-/// Cached record names of one kind. Each links to the name that last
-/// followed it, so a block repeating an earlier record order finds its names
-/// by comparing bytes instead of hashing them, even when some records are
-/// missing or new.
-struct Names {
-    index: HashMap<Box<[u8]>, u32, BuildHasherDefault<NameHasher>>,
-    names: Vec<Name>,
-    /// The first name of the last block.
-    first: u32,
-}
-
-impl Default for Names {
-    fn default() -> Self {
-        Names {
-            index: HashMap::default(),
-            names: Vec::new(),
-            first: NO_NAME,
-        }
-    }
-}
-
-impl Names {
-    /// Return the index of the name `bytes`, caching a new object for it.
-    /// A full cache is emptied first, which resets `prev`.
-    fn find(&mut self, py: Python<'_>, kind: Kind, bytes: &[u8], prev: &mut u32) -> PyResult<u32> {
-        if let Some(&found) = self.index.get(bytes) {
-            return Ok(found);
-        }
-        let object = kind.value(py, bytes)?.unbind();
-        if self.names.len() >= MAX_NAMES {
-            // Releasing exact str and bytes objects runs no Python code, so
-            // it cannot re-enter the cache.
-            self.index.clear();
-            self.names.clear();
-            self.first = NO_NAME;
-            *prev = NO_NAME;
-        }
-        let found = self.names.len() as u32;
-        self.index.insert(bytes.into(), found);
-        self.names.push(Name {
-            bytes: bytes.into(),
-            object,
-            next: NO_NAME,
-        });
-        Ok(found)
-    }
-}
-
-thread_local! {
-    /// Record-name objects by their bytes, for text and then bytes names.
-    static NAMES: RefCell<[Names; 2]> = RefCell::default();
-}
-
-/// Record-name objects of one kind, from the cache when it is available.
-struct Namer<'a> {
-    kind: Kind,
-    cache: Option<RefMut<'a, [Names; 2]>>,
-    /// The previous cached name in this block, or `NO_NAME` at its start.
-    prev: u32,
-}
-
-impl Namer<'_> {
-    /// Return the object for the next record name of a block, read in order.
-    fn name<'py>(&mut self, py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
-        let Some(cache) = self.cache.as_deref_mut() else {
-            return self.kind.value(py, bytes);
-        };
-        if bytes.len() > MAX_CACHED_NAME {
-            return self.kind.value(py, bytes);
-        }
-        let names = &mut cache[self.kind as usize];
-        let predicted = match self.prev {
-            NO_NAME => names.first,
-            prev => names.names[prev as usize].next,
-        };
-        if let Some(name) = names.names.get(predicted as usize)
-            && *name.bytes == *bytes
-        {
-            self.prev = predicted;
-            return Ok(name.object.bind(py).clone());
-        }
-        let found = names.find(py, self.kind, bytes, &mut self.prev)?;
-        match self.prev {
-            NO_NAME => names.first = found,
-            prev => names.names[prev as usize].next = found,
-        }
-        self.prev = found;
-        Ok(names.names[found as usize].object.bind(py).clone())
-    }
-
-    /// Return the object for a record name read out of block order.
-    fn lookup<'py>(&mut self, py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
-        let Some(cache) = self.cache.as_deref_mut() else {
-            return self.kind.value(py, bytes);
-        };
-        if bytes.len() > MAX_CACHED_NAME {
-            return self.kind.value(py, bytes);
-        }
-        let names = &mut cache[self.kind as usize];
-        let mut unlinked = NO_NAME;
-        let found = names.find(py, self.kind, bytes, &mut unlinked)?;
-        Ok(names.names[found as usize].object.bind(py).clone())
-    }
-}
-
-/// Return the kind and UTF-8 or raw bytes of a str or bytes object.
-fn bytes_of<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<Option<(Kind, &'a [u8])>> {
-    if let Ok(text) = value.cast::<PyString>() {
-        Ok(Some((Kind::Text, text.to_str()?.as_bytes())))
-    } else if let Ok(bytes) = value.cast::<PyBytes>() {
-        Ok(Some((Kind::Bytes, bytes.as_bytes())))
-    } else {
-        Ok(None)
-    }
-}
+use crate::python::kind::{Kind, bytes_of, decode};
+use crate::python::names::Namer;
+use crate::python::read::{PySDBlockIterator, Source};
 
 /// Collect `(name, value)` pairs from a mapping or an iterable of pairs.
 fn record_pairs<'py>(
@@ -233,266 +28,6 @@ fn record_pairs<'py>(
         Err(_) => records.clone(),
     };
     items.try_iter()?.map(|item| item?.extract()).collect()
-}
-
-fn set_kind(kind: &mut Option<Kind>, found: Kind) -> PyResult<()> {
-    match kind {
-        Some(existing) if *existing != found => Err(PyTypeError::new_err(
-            "SDBlock.from_lines does not accept mixed str and bytes lines",
-        )),
-        _ => {
-            *kind = Some(found);
-            Ok(())
-        }
-    }
-}
-
-enum Source {
-    /// A Python iterable of str or bytes lines.
-    Lines(Py<PyIterator>),
-    /// A file object's bound `read1` or `read` method.
-    Reader(Py<PyAny>),
-    /// An in-memory str or bytes, copied out a chunk at a time from `pos`;
-    /// `text` translates newlines.
-    Buffer {
-        data: Py<PyAny>,
-        pos: usize,
-        text: bool,
-        pending_cr: bool,
-    },
-    /// A path to open on the first read; `text` translates newlines.
-    Path {
-        path: PathBuf,
-        filename: Py<PyAny>,
-        text: bool,
-    },
-    /// A file mapped from `Path`, split a batch of blocks at a time without
-    /// holding the GIL.
-    Mapped {
-        blocks: MappedBlocks,
-        batch: VecDeque<Block>,
-    },
-    /// A file opened from `Path` that does not map, read without holding
-    /// the GIL.
-    File {
-        file: File,
-        filename: Py<PyAny>,
-        text: bool,
-        pending_cr: bool,
-    },
-    Closed,
-}
-
-/// Build the `OSError` subclass Python's `open` would raise.
-fn os_error(py: Python<'_>, error: std::io::Error, filename: &Py<PyAny>) -> PyErr {
-    let Some(errno) = error.raw_os_error() else {
-        return error.into();
-    };
-    match PyModule::import(py, "os").and_then(|os| os.call_method1("strerror", (errno,))) {
-        Ok(strerror) => PyOSError::new_err((errno, strerror.unbind(), filename.clone_ref(py))),
-        Err(error) => error,
-    }
-}
-
-impl Source {
-    /// Open a `Path`, mapping the file when it maps.
-    fn open(&mut self, py: Python<'_>, kind: &mut Option<Kind>) -> PyResult<()> {
-        let Source::Path {
-            path,
-            filename,
-            text,
-        } = self
-        else {
-            return Ok(());
-        };
-        let file = File::open(&*path).map_err(|error| os_error(py, error, filename))?;
-        *kind = Some(if *text { Kind::Text } else { Kind::Bytes });
-        *self = match MappedBlocks::open(&file, *text) {
-            Some(blocks) => Source::Mapped {
-                blocks,
-                batch: VecDeque::new(),
-            },
-            None => Source::File {
-                file,
-                filename: filename.clone_ref(py),
-                text: *text,
-                pending_cr: false,
-            },
-        };
-        Ok(())
-    }
-
-    /// Append input to `tail`, returning `true` at end of input.
-    fn fill(
-        &mut self,
-        py: Python<'_>,
-        kind: &mut Option<Kind>,
-        tail: &mut Tail<'_>,
-    ) -> PyResult<bool> {
-        match self {
-            Source::Lines(lines) => {
-                let mut lines = lines.bind(py).clone();
-                // Lines given without an ending get the block's title line's.
-                let mut newline = None;
-                loop {
-                    let Some(line) = lines.next() else {
-                        return Ok(true);
-                    };
-                    let line = line?;
-                    let Some((found, bytes)) = bytes_of(&line)? else {
-                        return Err(PyTypeError::new_err(
-                            "SDBlock.from_lines lines must be str or bytes",
-                        ));
-                    };
-                    set_kind(kind, found)?;
-                    tail.extend(bytes);
-                    let newline = *newline.get_or_insert_with(|| title_newline(bytes));
-                    if !bytes.ends_with(b"\n") {
-                        tail.extend(missing_ending(bytes, newline));
-                    }
-                    // Stop at a delimiter so blocks are produced as lines arrive.
-                    if bytes.starts_with(b"$$$$") {
-                        return Ok(false);
-                    }
-                }
-            }
-            Source::Reader(read) => {
-                let chunk = read.bind(py).call1((CHUNK,))?;
-                let Some((found, bytes)) = bytes_of(&chunk)? else {
-                    return Err(PyTypeError::new_err(
-                        "SDBlock.from_lines file objects must read str or bytes",
-                    ));
-                };
-                if bytes.is_empty() {
-                    return Ok(true);
-                }
-                set_kind(kind, found)?;
-                tail.extend(bytes);
-                Ok(false)
-            }
-            Source::Buffer {
-                data,
-                pos,
-                text,
-                pending_cr,
-            } => {
-                let Some((_, bytes)) = bytes_of(data.bind(py))? else {
-                    unreachable!("Source::Buffer holds str or bytes");
-                };
-                let chunk = &bytes[*pos..bytes.len().min(*pos + CHUNK)];
-                *pos += chunk.len();
-                if *text {
-                    let space = tail.space(chunk.len() + TRANSLATE_SLACK);
-                    space[..chunk.len()].copy_from_slice(chunk);
-                    let len = translate_newlines(space, chunk.len(), pending_cr);
-                    tail.commit(len);
-                } else {
-                    tail.extend(chunk);
-                }
-                Ok(*pos == bytes.len())
-            }
-            Source::Path { .. } | Source::Mapped { .. } => {
-                unreachable!("PySDBlockIterator opens paths and splits mapped files")
-            }
-            Source::File {
-                file,
-                filename,
-                text,
-                pending_cr,
-            } => {
-                let space = tail.space(CHUNK + TRANSLATE_SLACK);
-                let read = loop {
-                    match py.detach(|| file.read(&mut space[..CHUNK])) {
-                        Err(error) if error.kind() == ErrorKind::Interrupted => {
-                            py.check_signals()?;
-                        }
-                        result => break result,
-                    }
-                };
-                let read = read.map_err(|error| os_error(py, error, filename))?;
-                let len = if *text {
-                    translate_newlines(space, read, pending_cr)
-                } else {
-                    read
-                };
-                tail.commit(len);
-                Ok(read == 0)
-            }
-            Source::Closed => Ok(true),
-        }
-    }
-}
-
-/// Lazily parse SDBlocks from an input source.
-#[pyclass(name = "_SDBlockIterator", module = "sendoff.native")]
-pub(crate) struct PySDBlockIterator {
-    source: Source,
-    kind: Option<Kind>,
-    scanner: Scanner,
-}
-
-impl PySDBlockIterator {
-    fn new(source: Source) -> Self {
-        Self {
-            source,
-            kind: None,
-            scanner: Scanner::default(),
-        }
-    }
-
-    fn of_kind(source: Source, kind: Kind) -> Self {
-        Self {
-            kind: Some(kind),
-            ..Self::new(source)
-        }
-    }
-
-    fn next_block(&mut self, py: Python<'_>) -> PyResult<Option<Block>> {
-        let Self {
-            source,
-            kind,
-            scanner,
-        } = self;
-        source.open(py, kind)?;
-        if let Source::Mapped { blocks, batch } = source {
-            if batch.is_empty() {
-                py.detach(|| blocks.split(CHUNK, batch));
-            }
-            return Ok(batch.pop_front());
-        }
-        scanner.next_block(|tail| source.fill(py, kind, tail))
-    }
-}
-
-#[pymethods]
-impl PySDBlockIterator {
-    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        slf
-    }
-
-    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<PySDBlock>> {
-        match self.next_block(py) {
-            Ok(Some(block)) => Ok(Some(PySDBlock {
-                block,
-                kind: self.kind.unwrap_or(Kind::Text),
-            })),
-            Ok(None) => {
-                self.close();
-                Ok(None)
-            }
-            Err(error) => {
-                self.close();
-                Err(error)
-            }
-        }
-    }
-
-    /// Stop iterating and release the input source, closing files that
-    /// `parse_sdf` opened.
-    fn close(&mut self) {
-        self.source = Source::Closed;
-        self.scanner = Scanner::default();
-    }
 }
 
 /// Lazily iterate over one block's SD data records.
@@ -515,14 +50,12 @@ impl PySDRecordIterator {
         }
         let block = self.block.borrow(py);
         let result = match block.block.next_record(&mut self.pos, block.kind.strip()) {
-            Ok(Some(record)) => block
-                .kind
-                .with_names(|names| names.lookup(py, record.name))
+            Ok(Some(record)) => Namer::with(block.kind, |names| names.lookup(py, record.name))
                 .and_then(|name| PyTuple::new(py, [name, block.kind.value(py, &record.value)?]))
                 .map_err(|error| block.noted(py, error, || reading_record(record.name)))
                 .map(Some),
             Ok(None) => Ok(None),
-            Err(error) => Err(PyValueError::new_err(error.to_string())),
+            Err(error) => Err(error.into()),
         };
         if !matches!(result, Ok(Some(_))) {
             self.finished = true;
@@ -538,8 +71,8 @@ impl PySDRecordIterator {
 #[pyclass(name = "SDBlock", module = "sendoff.native", eq, skip_from_py_object)]
 #[derive(Clone, PartialEq)]
 pub(crate) struct PySDBlock {
-    block: Block,
-    kind: Kind,
+    pub(super) block: Block,
+    pub(super) kind: Kind,
 }
 
 impl PySDBlock {
@@ -561,7 +94,12 @@ impl PySDBlock {
 
     /// Add to a decode error a note naming this block, what of it `action`
     /// was doing, and how to read other encodings.
-    fn noted(&self, py: Python<'_>, error: PyErr, action: impl FnOnce() -> String) -> PyErr {
+    pub(super) fn noted(
+        &self,
+        py: Python<'_>,
+        error: PyErr,
+        action: impl FnOnce() -> String,
+    ) -> PyErr {
         if error.is_instance_of::<PyUnicodeDecodeError>(py) {
             let title = String::from_utf8_lossy(self.block.title(Strip::Str));
             let note = format!("{} the SDBlock titled '{title}'. {DECODE_HINT}", action());
@@ -600,11 +138,6 @@ const DECODE_HINT: &str = "parse_sdf(os.fsencode(path)) reads such files as byte
 
 fn reading_record(name: &[u8]) -> String {
     format!("Reading record '{}' of", String::from_utf8_lossy(name))
-}
-
-fn decode<'a>(py: Python<'_>, bytes: &'a [u8]) -> PyResult<&'a str> {
-    std::str::from_utf8(bytes)
-        .map_err(|error| PyUnicodeDecodeError::new_err_from_utf8(py, bytes, error))
 }
 
 #[pymethods]
@@ -808,9 +341,7 @@ impl PySDBlock {
             Kind::Text => universal_newlines(molblock),
             Kind::Bytes => Cow::Borrowed(molblock),
         };
-        self.block
-            .set_molblock(&molblock)
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+        self.block.set_molblock(&molblock).map_err(PyErr::from)
     }
 
     /// Return the CTAB after the title, through `M  END`, as one value.
@@ -834,12 +365,8 @@ impl PySDBlock {
     fn records<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let list = PyList::empty(py);
         let mut pos = 0;
-        self.kind.with_names(|names| {
-            while let Some(record) = self
-                .block
-                .next_record(&mut pos, self.kind.strip())
-                .map_err(|error| PyValueError::new_err(error.to_string()))?
-            {
+        Namer::with(self.kind, |names| {
+            while let Some(record) = self.block.next_record(&mut pos, self.kind.strip())? {
                 list.append(self.record(py, names, &record)?)?;
             }
             Ok(list)
@@ -883,11 +410,7 @@ impl PySDBlock {
         let strip = self.kind.strip();
         let mut pos = 0;
         let mut found = None;
-        while let Some(header) = self
-            .block
-            .next_header(&mut pos, strip)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?
-        {
+        while let Some(header) = self.block.next_header(&mut pos, strip)? {
             if header.name == name {
                 found = Some(header.start);
             }
@@ -915,12 +438,8 @@ impl PySDBlock {
         let list = PyList::empty(py);
         let strip = self.kind.strip();
         let mut pos = 0;
-        self.kind.with_names(|names| {
-            while let Some(header) = self
-                .block
-                .next_header(&mut pos, strip)
-                .map_err(|error| PyValueError::new_err(error.to_string()))?
-            {
+        Namer::with(self.kind, |names| {
+            while let Some(header) = self.block.next_header(&mut pos, strip)? {
                 let name = names.name(py, header.name);
                 list.append(
                     name.map_err(|error| self.noted(py, error, || reading_record(header.name)))?,
@@ -934,12 +453,7 @@ impl PySDBlock {
     fn __len__(&self) -> PyResult<usize> {
         let strip = self.kind.strip();
         let (mut pos, mut count) = (0, 0);
-        while self
-            .block
-            .next_header(&mut pos, strip)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?
-            .is_some()
-        {
+        while self.block.next_header(&mut pos, strip)?.is_some() {
             count += 1;
         }
         Ok(count)
@@ -1025,11 +539,7 @@ impl PySDBlock {
         let name = self.arg_bytes(name, "record names")?;
         let strip = self.kind.strip();
         let (mut pos, mut seen) = (0, false);
-        while let Some(header) = self
-            .block
-            .next_header(&mut pos, strip)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?
-        {
+        while let Some(header) = self.block.next_header(&mut pos, strip)? {
             seen |= header.name == name;
         }
         Ok(seen)
@@ -1043,12 +553,8 @@ impl PySDBlock {
         let dict = PyDict::new(py);
         let strip = self.kind.strip();
         let mut pos = 0;
-        self.kind.with_names(|names| {
-            while let Some(record) = self
-                .block
-                .next_record(&mut pos, strip)
-                .map_err(|error| PyValueError::new_err(error.to_string()))?
-            {
+        Namer::with(self.kind, |names| {
+            while let Some(record) = self.block.next_record(&mut pos, strip)? {
                 let noted = |error| self.noted(py, error, || reading_record(record.name));
                 dict.set_item(
                     names.name(py, record.name).map_err(noted)?,
@@ -1128,7 +634,7 @@ impl PySDBlock {
         let value = self.arg_bytes(value, "values")?;
         self.block
             .set_record(name, value, self.kind.strip())
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+            .map_err(PyErr::from)
     }
 
     /// Remove every record named `name`.
@@ -1146,7 +652,7 @@ impl PySDBlock {
         let name = self.arg_bytes(name, "record names")?;
         self.block
             .remove_records(name, self.kind.strip())
-            .map_err(|error| PyValueError::new_err(error.to_string()))
+            .map_err(PyErr::from)
     }
 
     /// Replace all SD data with the given records.
@@ -1252,180 +758,4 @@ impl PySDBlock {
             .replace_mdl(ctable.lines_after_title().iter().map(String::as_bytes));
         Ok(())
     }
-}
-
-/// Where `write_sdf` sends serialized blocks, a chunk at a time.
-enum Sink<'py> {
-    File {
-        file: File,
-        filename: Py<PyAny>,
-    },
-    Handle {
-        write: Bound<'py, PyAny>,
-        kind: Option<Kind>,
-    },
-}
-
-impl Sink<'_> {
-    /// Check a block's kind before its serialization joins the chunk, and
-    /// return whether to write the block on its own.
-    ///
-    /// CPython stores and encodes ASCII str much faster than wider str, and
-    /// one non-ASCII character widens a whole str, so non-ASCII text goes
-    /// to a file object a block at a time, keeping ASCII chunks narrow.
-    fn accept(&mut self, py: Python<'_>, kind: Kind, serialized: &[u8]) -> PyResult<bool> {
-        match self {
-            // A file object's write validates text chunks as it decodes them.
-            Sink::Handle { kind: expected, .. } => {
-                set_kind(expected, kind).map_err(|_| {
-                    PyTypeError::new_err("write_sdf does not accept mixed str and bytes blocks")
-                })?;
-                Ok(kind == Kind::Text && !serialized.is_ascii())
-            }
-            Sink::File { .. } if kind == Kind::Text => decode(py, serialized).map(|_| false),
-            Sink::File { .. } => Ok(false),
-        }
-    }
-
-    fn write(&mut self, py: Python<'_>, chunk: &[u8]) -> PyResult<()> {
-        match self {
-            Sink::File { file, filename } => py
-                .detach(|| file.write_all(chunk))
-                .map_err(|error| os_error(py, error, filename)),
-            Sink::Handle { write, kind } => {
-                write.call1((kind.unwrap_or(Kind::Bytes).value(py, chunk)?,))?;
-                Ok(())
-            }
-        }
-    }
-}
-
-/// Write SDBlocks to a path or a file object, and return how many.
-///
-/// Blocks are written as `SDBlock.write` would, but 64-256 KiB at a time:
-/// to a path without holding the GIL, or to a file object with one
-/// `write` call per chunk, as str for text blocks or bytes for byte-backed
-/// ones. Text blocks must be valid UTF-8.
-///
-/// An error stops writing as it would a loop of `SDBlock.write` calls:
-/// the blocks before the failing one are written, a path keeps them, and
-/// the error propagates. A failed write may leave part of its chunk
-/// written.
-///
-/// Args:
-///     dest: a str, bytes, or os.PathLike path to create or truncate, or a
-///         text or binary file object
-///     blocks: an iterable of SDBlocks, all str or all bytes for a file
-///         object
-///
-/// Returns:
-///     The number of blocks written
-///
-/// Raises:
-///     TypeError: if `blocks` is not iterable, produces something other
-///         than an SDBlock, or mixes str and bytes blocks for a file object
-///     UnicodeDecodeError: for a str block that is not UTF-8
-///     OSError: if `dest` cannot be created or written
-#[pyfunction]
-#[pyo3(signature = (
-    dest: "str | bytes | os.PathLike[str] | os.PathLike[bytes] | _SupportsWrite[Any]",
-    blocks: "Iterable[SDBlock[Any]]",
-))]
-pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> PyResult<usize> {
-    let py = dest.py();
-    let blocks = blocks.try_iter()?;
-    let mut sink = match dest.getattr(intern!(py, "write")) {
-        Ok(write) => Sink::Handle { write, kind: None },
-        Err(_) => {
-            let os = PyModule::import(py, "os")?;
-            let filename = os.call_method1("fspath", (dest,))?;
-            let path: PathBuf = os.call_method1("fsdecode", (&filename,))?.extract()?;
-            let filename = filename.unbind();
-            let file = py
-                .detach(|| File::create(&path))
-                .map_err(|error| os_error(py, error, &filename))?;
-            Sink::File { file, filename }
-        }
-    };
-    // Chunks for a file object become new Python objects, which stay
-    // cheaper below malloc's mmap threshold.
-    let limit = match sink {
-        Sink::File { .. } => WRITE_CHUNK,
-        Sink::Handle { .. } => 64 << 10,
-    };
-    let mut chunk = Vec::with_capacity(2 * limit);
-    let mut count = 0;
-    // `chunk` holds only blocks not yet passed to a write, so after an
-    // error it holds the blocks before the failing one.
-    let result = (|| -> PyResult<()> {
-        for block in blocks {
-            let block = block?;
-            let block = block.cast::<PySDBlock>()?.borrow();
-            let start = chunk.len();
-            block.block.serialize_into(block.kind.strip(), &mut chunk);
-            let noted =
-                |error| block.noted(py, error, || format!("Writing block {count} (from 0),"));
-            let alone = sink
-                .accept(py, block.kind, &chunk[start..])
-                .map_err(|error| {
-                    chunk.truncate(start);
-                    noted(error)
-                })?;
-            if alone {
-                let mut written = Ok(());
-                if start > 0 {
-                    written = sink.write(py, &chunk[..start]);
-                }
-                // Text blocks that are not ASCII, which include any that
-                // are not UTF-8, are written alone, so a decode error is
-                // this block's.
-                let written = written.and_then(|()| sink.write(py, &chunk[start..]).map_err(noted));
-                chunk.clear();
-                written?;
-            } else if chunk.len() >= limit {
-                let written = sink.write(py, &chunk);
-                chunk.clear();
-                written?;
-            }
-            count += 1;
-        }
-        Ok(())
-    })();
-    if !chunk.is_empty() {
-        sink.write(py, &chunk)?;
-    }
-    result.map(|()| count)
-}
-
-/// Lazily parse SDBlocks from an SDF path.
-///
-/// The file is opened on the first `next()`. Regular files on local Linux
-/// filesystems are memory-mapped and split a batch of blocks at a time
-/// without holding the GIL; pipes, network filesystems, and other files are
-/// read in chunks. As with any mapped file, truncating the file while
-/// iterating can kill the process with SIGBUS, so write results to a new
-/// path. str paths give str values decoded as UTF-8 on access, with
-/// universal newlines translated to "\n", as `open(path)` reads; bytes
-/// paths give bytes split on b"\n" only. Use a bytes path for feeds that
-/// are not valid UTF-8: from a str path, their text raises
-/// UnicodeDecodeError with a note naming the block and record.
-///
-/// Args:
-///     path: a str, bytes, or os.PathLike path
-///
-/// Returns:
-///     An iterator of SDBlocks; `close()` releases the file early
-#[pyfunction]
-#[pyo3(signature = (path: "str | bytes | os.PathLike[str] | os.PathLike[bytes]") -> "_SDBlockIterator[Any]")]
-pub(crate) fn parse_sdf(path: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
-    let os = PyModule::import(path.py(), "os")?;
-    let filename = os.call_method1("fspath", (path,))?;
-    let text = filename.is_instance_of::<PyString>();
-    // fsdecode round-trips bytes paths losslessly through surrogateescape.
-    let path = os.call_method1("fsdecode", (&filename,))?.extract()?;
-    Ok(PySDBlockIterator::new(Source::Path {
-        path,
-        filename: filename.unbind(),
-        text,
-    }))
 }
