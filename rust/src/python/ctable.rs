@@ -108,8 +108,8 @@ impl PyCTable {
     /// 1-indexed order, keeping track of what maps to what.
     /// Then, renumber the bond lines, making sure to map the new atom indices
     /// properly.
-    /// At the end, regenerate the counts line to match the number of atom and bond
-    /// lines.
+    /// At the end, regenerate the counts line, num_atoms, and num_bonds to
+    /// match the number of atom and bond lines.
     /// This will run regardless of whether the indices are already valid.
     /// It cannot fix duplicate atom indices properly if the duplicate one
     /// occurs in the bond lines, and will raise an error.

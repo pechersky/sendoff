@@ -14,6 +14,7 @@ from typing import Generator, Iterable, Iterator, cast
 import pytest
 
 from sendoff.ctable import (
+    CTable,
     IndicesDuplicateError,
     IndicesMismatchError,
     IndicesOutOfOrderError,
@@ -1793,6 +1794,16 @@ def test_renumber_slices_atom_lines_by_character() -> None:
     block = v3000_block(atom="a b 1 \u4e2d")
     block.renumber_indices()
     assert "M  V30 1" in block.ctable().lines
+
+
+def test_renumber_refreshes_ctable_counts() -> None:
+    """Renumbering a CTable updates its counts to match its new lines."""
+    ctable = v3000_block(counts="M  V30 COUNTS 5 3 0 0 0").ctable()
+    assert (ctable.num_atoms, ctable.num_bonds) == (5, 3)
+    ctable.renumber_indices()
+    assert (ctable.num_atoms, ctable.num_bonds) == (2, 1)
+    reparsed = CTable(ctable.lines)
+    assert (reparsed.num_atoms, reparsed.num_bonds) == (2, 1)
 
 
 def test_ctable_lines_are_a_fresh_list() -> None:

@@ -163,13 +163,16 @@ impl CTable {
     ///
     /// Only V3000 tables are supported. Atom and bond lines are numbered in
     /// their current order, bond atom references are remapped, and the
-    /// rewritten counts line reflects the number of table lines. Lines are
-    /// only replaced on success.
+    /// rewritten counts line reflects the number of table lines, as do the
+    /// parsed counts. Lines are only replaced on success.
     pub fn renumber_indices(&mut self) -> Result<(), CTableError> {
         if self.format != CTableFormat::V3000 {
             return Err(CTableError::NotImplemented);
         }
         let renumbered = Renumbered::new(&self.lines, &self.counts)?;
+        renumbered.counts.trim().clone_into(&mut self.counts);
+        self.num_atoms = renumbered.atoms.len() as i64;
+        self.num_bonds = renumbered.bonds.len() as i64;
         self.lines = renumbered.splice(std::mem::take(&mut self.lines));
         Ok(())
     }
