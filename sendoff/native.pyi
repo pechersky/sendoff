@@ -94,8 +94,6 @@ class CTable:
         1-indexed order, keeping track of what maps to what.
         Then, renumber the bond lines, making sure to map the new atom indices
         properly, and keeping the rest of each line, such as CFG, as written.
-        Indices inside properties (bond ENDPTS, atom ATTCHORD) and in Sgroup
-        and collection blocks are not remapped.
         At the end, regenerate the counts line, num_atoms, and num_bonds to
         match the number of atom and bond lines.
         This will run regardless of whether the indices are already valid.
@@ -104,14 +102,17 @@ class CTable:
         The lines are then in-place replaced within the CTable object.
         Only implemented for V3000 tables.
 
-        This can break if the V3000 block has "-" terminated lines,
-            which means that the next line is a continuation of the previous.
+        Indices that other data refers to (atom ATTCHORD, bond ENDPTS,
+        SGROUP, COLLECTION, OBJ3D, and LINKNODE lines) are not remapped, so
+        renumbering refuses to change them. It also refuses "-" continued
+        atom or bond lines and CTABs nested in RGROUP or TEMPLATE blocks.
 
         Raises:
             IndicesDuplicateError: if there was a duplicate atom index, and it was used
                 somewhere in a bond line. Raised, because it is not clear which of the
                 original indices to use in the remapping.
-            NotImplementedError: if trying to renumber in a V2000 format table
+            NotImplementedError: if trying to renumber in a V2000 format table,
+                or a table that renumbering would corrupt, as above
         """
 
     def valid_atom_indices(self, /, strict: bool = False) -> bool:

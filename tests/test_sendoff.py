@@ -1684,6 +1684,8 @@ def v3000_block(
     atom: str = "M  V30 1 C 0 0 0 0",
     bond: str = "M  V30 1 1 1 2",
     counts: str = "M  V30 COUNTS 2 1 0 0 0",
+    extra: str = "",
+    after: str = "",
 ) -> SDBlock[str]:
     """Build a two-atom V3000 block with one replaceable line of each kind.
 
@@ -1691,6 +1693,8 @@ def v3000_block(
         atom: the first atom line
         bond: the only bond line
         counts: the V3000 counts line
+        extra: lines to add after the bond section, inside the CTAB
+        after: lines to add after the CTAB
 
     Returns:
         The parsed block.
@@ -1699,7 +1703,7 @@ def v3000_block(
         V3000_HEADER
         + f"M  V30 BEGIN CTAB\n{counts}\nM  V30 BEGIN ATOM\n{atom}\n"
         + "M  V30 2 O 0 0 0 0\nM  V30 END ATOM\nM  V30 BEGIN BOND\n"
-        + f"{bond}\nM  V30 END BOND\nM  V30 END CTAB\nM  END\n$$$$\n"
+        + f"{bond}\nM  V30 END BOND\n{extra}M  V30 END CTAB\n{after}M  END\n$$$$\n"
     )
     return next(SDBlock.from_lines(text.splitlines()))
 
@@ -1828,6 +1832,95 @@ def test_renumber_keeps_bond_properties() -> None:
     lines = block.ctable().lines
     assert "M  V30 1 C 0 0 0 0 CHG=1" in lines
     assert "M  V30 1 1 1 2 CFG=1  STBOX=1" in lines
+
+
+@pytest.mark.parametrize(
+    "atom, bond, extra, construct",
+    [
+        ("M  V30 {} C 0 0 0 0 ATTCHORD=(2 2 1)", "M  V30 1 1 {} 2", "", "ATTCHORD"),
+        (
+            "M  V30 {} C 0 0 0 0",
+            "M  V30 1 9 {} 2 ENDPTS=(1 2) ATTACH=ALL",
+            "",
+            "ENDPTS",
+        ),
+        (
+            "M  V30 {} C 0 0 0 0",
+            "M  V30 1 1 {} 2",
+            "M  V30 BEGIN SGROUP\nM  V30 1 SUP 0 ATOMS=(1 {})\nM  V30 END SGROUP\n",
+            "SGROUP",
+        ),
+        (
+            "M  V30 1 C 0 0 0 0",
+            "M  V30 {} 1 1 2",
+            "M  V30 begin sgroup\nM  V30 1 SUP 0 XBONDS=(1 {})\nM  V30 end sgroup\n",
+            "SGROUP",
+        ),
+        (
+            "M  V30 {} C 0 0 0 0",
+            "M  V30 1 1 {} 2",
+            "M  V30 BEGIN COLLECTION\nM  V30 MDLV30/STEABS ATOMS=(1 {})\n"
+            + "M  V30 END COLLECTION\n",
+            "COLLECTION",
+        ),
+        (
+            "M  V30 {} C 0 0 0 0",
+            "M  V30 1 1 {} 2",
+            "M  V30 LINKNODE 1 3 1 {} 2\n",
+            "LINKNODE",
+        ),
+    ],
+)
+def test_renumber_refuses_to_change_referenced_indices(
+    atom: str, bond: str, extra: str, construct: str
+) -> None:
+    """Renumbering refuses to change indices that it would not remap.
+
+    Args:
+        atom: the first atom line, formatted with its index
+        bond: the only bond line, formatted with an index to change
+        extra: lines referring to that index, formatted with it
+        construct: what the error names
+    """
+    block = v3000_block(atom.format(3), bond.format(3), extra=extra.format(3))
+    before = block.to_sdf()
+    with pytest.raises(NotImplementedError, match=construct):
+        block.renumber_indices()
+    assert block.to_sdf() == before
+    numbered = v3000_block(atom.format(1), bond.format(1), extra=extra.format(1))
+    before = numbered.to_sdf()
+    numbered.renumber_indices()
+    assert numbered.to_sdf() == before
+
+
+@pytest.mark.parametrize(
+    "atom, after, construct",
+    [
+        ("M  V30 1 C 0 0 0 0 -\nM  V30 CHG=1", "", "continued"),
+        (
+            "M  V30 1 C 0 0 0 0",
+            "M  V30 BEGIN RGROUP 1\nM  V30 BEGIN CTAB\nM  V30 COUNTS 1 0 0 0 0\n"
+            + "M  V30 BEGIN ATOM\nM  V30 1 C 0 0 0 0\nM  V30 END ATOM\n"
+            + "M  V30 END CTAB\nM  V30 END RGROUP\n",
+            "nested",
+        ),
+    ],
+)
+def test_renumber_refuses_tables_it_cannot_split(
+    atom: str, after: str, construct: str
+) -> None:
+    """Renumbering refuses continued lines and nested CTABs, even if numbered.
+
+    Args:
+        atom: the first atom line or lines
+        after: lines after the root CTAB
+        construct: what the error names
+    """
+    block = v3000_block(atom, after=after)
+    before = block.to_sdf()
+    with pytest.raises(NotImplementedError, match=construct):
+        block.renumber_indices()
+    assert block.to_sdf() == before
 
 
 def test_ctable_lines_are_a_fresh_list() -> None:

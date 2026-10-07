@@ -23,6 +23,8 @@ pub enum CTableError {
     UnknownFormat(String),
     /// The operation only supports V3000 tables.
     NotImplemented,
+    /// Renumbering would corrupt the named construct, so it refuses.
+    Unsupported(&'static str),
     /// Strict validation found an index out of one-based order.
     OutOfOrder,
     /// An index occurs twice, or a bond references a duplicated atom index.
@@ -220,6 +222,76 @@ pub fn parse_format(line: &str) -> Option<&str> {
     fields(line).next_back()
 }
 
+/// Whether `line` starts with `prefix`, ignoring ASCII case as V3000 does.
+fn starts_with_keyword(line: &str, prefix: &str) -> bool {
+    line.as_bytes()
+        .get(..prefix.len())
+        .is_some_and(|start| start.eq_ignore_ascii_case(prefix.as_bytes()))
+}
+
+/// Refuse tables whose lines renumbering cannot tell apart: `-` continued
+/// atom or bond lines, and CTABs nested in RGROUP or TEMPLATE blocks, whose
+/// atom sections would get the root CTAB's atoms.
+fn check_layout(
+    lines: &[String],
+    atom_lines: &[String],
+    bond_lines: &[String],
+) -> Result<(), CTableError> {
+    if atom_lines
+        .iter()
+        .chain(bond_lines)
+        .any(|line| line.trim_end_matches(['\r', '\n']).ends_with('-'))
+    {
+        return Err(CTableError::Unsupported("continued (-) atom or bond lines"));
+    }
+    let ctabs = lines
+        .iter()
+        .filter(|line| starts_with_keyword(line, "M  V30 BEGIN CTAB"))
+        .count();
+    if ctabs > 1 {
+        return Err(CTableError::Unsupported(
+            "CTABs nested in RGROUP or TEMPLATE blocks",
+        ));
+    }
+    Ok(())
+}
+
+/// Refuse to change indices that other data refers to, which renumbering
+/// does not remap: atom ATTCHORD and bond ENDPTS properties, and Sgroup,
+/// collection, 3D object, and link node lines.
+fn check_references(
+    lines: &[String],
+    atom_lines: &[String],
+    bond_lines: &[String],
+) -> Result<(), CTableError> {
+    let has_property = |lines: &[String], keyword: &str| {
+        lines.iter().any(|line| {
+            line.split_whitespace()
+                .any(|field| starts_with_keyword(field, keyword))
+        })
+    };
+    if has_property(atom_lines, "ATTCHORD=") {
+        return Err(CTableError::Unsupported("ATTCHORD atom references"));
+    }
+    if has_property(bond_lines, "ENDPTS=") {
+        return Err(CTableError::Unsupported("ENDPTS atom references"));
+    }
+    for (marker, construct) in [
+        ("M  V30 BEGIN SGROUP", "SGROUP atom and bond references"),
+        (
+            "M  V30 BEGIN COLLECTION",
+            "COLLECTION atom and bond references",
+        ),
+        ("M  V30 BEGIN OBJ3D", "OBJ3D atom references"),
+        ("M  V30 LINKNODE", "LINKNODE atom references"),
+    ] {
+        if lines.iter().any(|line| starts_with_keyword(line, marker)) {
+            return Err(CTableError::Unsupported(construct));
+        }
+    }
+    Ok(())
+}
+
 /// The offset in `line` just past `field`, a subslice of it.
 fn end_of(line: &str, field: &str) -> usize {
     field.as_ptr() as usize - line.as_ptr() as usize + field.len()
@@ -349,6 +421,10 @@ impl Renumbered {
         let prefix = "M  V30 ";
         let (atom_start, atom_end) = atom_line_range(lines);
         let atom_lines = &lines[atom_start..atom_end];
+        let (bond_start, bond_end) = bond_line_range(lines);
+        let bond_lines = &lines[bond_start..bond_end];
+        check_layout(lines, atom_lines, bond_lines)?;
+        let mut changed = false;
         let mut atom_index_mapping = HashMap::with_capacity(atom_lines.len());
         let mut new_atom_lines = Vec::with_capacity(atom_lines.len());
         for (line_index, line) in atom_lines.iter().enumerate() {
@@ -358,6 +434,7 @@ impl Renumbered {
                 .ok_or(CTableError::MissingField("atom index"))?;
             let old_index = integer(old_field)?;
             let new_index = line_index + 1;
+            changed |= usize::try_from(old_index) != Ok(new_index);
             atom_index_mapping
                 .entry(old_index)
                 .and_modify(|index| *index = NewIndex::Duplicate)
@@ -371,12 +448,11 @@ impl Renumbered {
             new_atom_lines.push(format!("{prefix}{new_index}{rest}"));
         }
 
-        let (bond_start, bond_end) = bond_line_range(lines);
-        let bond_lines = &lines[bond_start..bond_end];
         let mut new_bond_lines = Vec::with_capacity(bond_lines.len());
         for (line_index, line) in bond_lines.iter().enumerate() {
             let missing = || CTableError::MissingField("bond atom index");
-            let mut fields = line.split_whitespace().skip(3);
+            let mut fields = line.split_whitespace().skip(2);
+            changed |= fields.next().and_then(|field| field.parse().ok()) != Some(line_index + 1);
             let (Some(bond_type), Some(from_field)) = (fields.next(), fields.next()) else {
                 return Err(missing());
             };
@@ -400,6 +476,9 @@ impl Renumbered {
             ));
         }
 
+        if changed {
+            check_references(lines, atom_lines, bond_lines)?;
+        }
         let mut new_counts = format!(
             "{prefix}COUNTS {} {} ",
             new_atom_lines.len(),
