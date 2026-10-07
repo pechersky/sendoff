@@ -6,5 +6,5 @@ pub mod lines;
 pub mod mapped;
 pub mod newline;
 pub mod record;
-pub mod scan;
+pub mod split;
 pub mod strip;

@@ -10,7 +10,7 @@ use std::fs::File;
 use memmap2::Mmap;
 
 use crate::core::block::Block;
-use crate::core::scan::split_block;
+use crate::core::split::split_block;
 
 /// Input kept mapped in behind the cursor before older pages are dropped.
 ///

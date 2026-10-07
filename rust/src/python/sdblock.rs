@@ -16,9 +16,12 @@ use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyIterator, PyList, PyString,
 use crate::core::block::Block;
 use crate::core::lines::lines;
 use crate::core::mapped::MappedBlocks;
-use crate::core::newline::{missing_ending, title_newline};
+use crate::core::newline::{
+    TRANSLATE_SLACK, missing_ending, title_newline, translate_newlines, translated,
+    universal_newlines,
+};
 use crate::core::record::Record;
-use crate::core::scan::{Scanner, TRANSLATE_SLACK, Tail, single_block, translate_newlines};
+use crate::core::split::{Scanner, Tail, single_block};
 use crate::core::strip::Strip;
 use crate::python::ctable::PyCTable;
 
@@ -218,19 +221,6 @@ fn bytes_of<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<Option<(Kind, &'a [u8])
     } else {
         Ok(None)
     }
-}
-
-/// Translate `\r\n` and lone `\r` to `\n`, as text files read in Python.
-fn universal_newlines(bytes: &[u8]) -> Cow<'_, [u8]> {
-    if memchr::memchr(b'\r', bytes).is_none() {
-        return Cow::Borrowed(bytes);
-    }
-    let mut buffer = Vec::with_capacity(bytes.len() + TRANSLATE_SLACK);
-    buffer.extend_from_slice(bytes);
-    buffer.resize(bytes.len() + TRANSLATE_SLACK, 0);
-    let len = translate_newlines(&mut buffer, bytes.len(), &mut false);
-    buffer.truncate(len);
-    Cow::Owned(buffer)
 }
 
 /// Collect `(name, value)` pairs from a mapping or an iterable of pairs.
@@ -706,7 +696,7 @@ impl PySDBlock {
             ));
         };
         let data = match kind {
-            Kind::Text => universal_newlines(bytes).into_owned(),
+            Kind::Text => translated(bytes),
             Kind::Bytes => bytes.to_vec(),
         };
         let block = single_block(data).ok_or_else(|| {
