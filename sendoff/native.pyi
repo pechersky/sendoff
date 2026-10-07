@@ -248,7 +248,12 @@ class SDBlock(Generic[AnyStr]):
         does not always parse back to the same block.
         """
 
-    def __repr__(self, /) -> str: ...
+    def __repr__(self, /) -> str:
+        """
+        Show the stripped title; a str block's undecodable title bytes show
+        as U+FFFD instead of raising.
+        """
+
     @classmethod
     def _from_state(
         cls, /, data: bytes, title_end: int, mdl_end: int, text: bool

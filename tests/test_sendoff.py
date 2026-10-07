@@ -298,53 +298,144 @@ def test_parse_sdf_raises_open_errors_on_first_next(tmp_path: Path) -> None:
         parse_sdf(1)  # type: ignore[call-overload]
 
 
+# A str-path block with valid title but undecodable CTAB, value, and name,
+# and one with an undecodable title.
+LATIN1_BODY = (
+    b"first\n\xa6 src\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\nM  END\n"
+    b"> <F>\n\xa6 bad\n\n> <\xa6>\nv\n\n$$$$\n"
+)
+LATIN1_TITLE = b"\xa6\n\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\nM  END\n$$$$\n"
+DECODE_HINT = (
+    "parse_sdf(os.fsencode(path)) reads such files as bytes, and "
+    "SDBlock.from_lines(open(path, encoding=...)) decodes another encoding."
+)
+
+
 def test_parse_sdf_text_paths_decode_utf8_on_access(tmp_path: Path) -> None:
     """A non-UTF-8 feed still splits on a str path; only bad text raises.
-
-    The error notes what was read, the block, and how to read the file.
 
     Args:
         tmp_path: Temporary directory for the SDF fixture.
     """
     path = tmp_path / "latin1.sdf"
-    path.write_bytes(
-        b"first\n\nM  END\n> <F>\n\xa6 bad\n\n$$$$\nsecond\n\nM  END\n$$$$\n"
-    )
+    path.write_bytes(LATIN1_BODY + b"second\n\nM  END\n$$$$\n")
 
     blocks = list(parse_sdf(path))
 
     assert [block.title for block in blocks] == ["first", "second"]
-    first = blocks[0]
-    reads: list[typing.Callable[[], object]] = [
-        first.records,
-        first.to_dict,
-        lambda: first.get("F"),
-        lambda: list(first.iter_records()),
-    ]
-    for read in reads:
-        with pytest.raises(UnicodeDecodeError) as error:
-            read()
-        (note,) = error.value.__notes__
-        assert note.startswith("Reading record 'F' of the SDBlock titled 'first'.")
-        assert "parse_sdf(os.fsencode(path))" in note
-    with pytest.raises(UnicodeDecodeError) as error:
-        first.to_sdf()
-    assert error.value.__notes__[0].startswith("Writing the SDBlock titled 'first'.")
-    assert next(parse_sdf(os.fsencode(path))).records() == [(b"F", b"\xa6 bad")]
+    assert blocks[1].records() == []
+    assert next(parse_sdf(os.fsencode(path))).records()[0] == (b"F", b"\xa6 bad")
 
-    path.write_bytes(b"\xa6\n\nM  END\n$$$$\n")
+
+# What each SDBlock[str] accessor that decodes block bytes was reading, as
+# its UnicodeDecodeError's note says, and the block it reads.
+DECODING: dict[str, tuple[bytes, typing.Callable[[SDBlock[str]], object], str]] = {
+    "title": (LATIN1_TITLE, lambda block: block.title, "Reading the title of"),
+    "molblock": (LATIN1_BODY, lambda block: block.molblock, "Reading the molblock of"),
+    "mdl": (LATIN1_BODY, lambda block: block.mdl, "Reading the MDL of"),
+    "ctable": (LATIN1_BODY, lambda block: block.ctable(), "Reading the CTAB of"),
+    "fix_counts": (
+        LATIN1_BODY,
+        lambda block: block.fix_counts(),
+        "Reading the CTAB of",
+    ),
+    "renumber_indices": (
+        LATIN1_BODY,
+        lambda block: block.renumber_indices(),
+        "Reading the CTAB of",
+    ),
+    "records": (LATIN1_BODY, lambda block: block.records(), "Reading record 'F' of"),
+    "iter_records": (
+        LATIN1_BODY,
+        lambda block: list(block.iter_records()),
+        "Reading record 'F' of",
+    ),
+    "get": (LATIN1_BODY, lambda block: block.get("F"), "Reading record 'F' of"),
+    "to_dict": (LATIN1_BODY, lambda block: block.to_dict(), "Reading record 'F' of"),
+    "names": (LATIN1_BODY, lambda block: block.names(), "Reading record '\ufffd' of"),
+    "to_sdf": (LATIN1_BODY, lambda block: block.to_sdf(), "Writing"),
+    "write": (LATIN1_BODY, lambda block: block.write(io.StringIO()), "Writing"),
+}
+# Public SDBlock names that read no block text: constructors, record edits
+# that compare and write bytes, and counts parsed from ASCII digits.
+NOT_DECODING = {
+    "from_lines",
+    "from_sdf",
+    "append_record",
+    "set_record",
+    "remove_record",
+    "replace_records",
+    "num_atoms",
+    "num_bonds",
+}
+
+
+def test_decoding_accessors_are_listed() -> None:
+    """Every public SDBlock name is listed as decoding block text or not."""
+    public = {name for name in dir(SDBlock) if not name.startswith("_")}
+    assert public == DECODING.keys() | NOT_DECODING
+
+
+@pytest.mark.parametrize(
+    ("data", "read", "action"),
+    [
+        *DECODING.values(),
+        *(
+            (
+                LATIN1_BODY,
+                lambda block, dest=dest: write_sdf(dest, [block]),
+                "Writing block 0 (from 0),",
+            )
+            for dest in (io.StringIO(), os.devnull)
+        ),
+    ],
+    ids=[*DECODING, "write_sdf-handle", "write_sdf-path"],
+)
+def test_decode_errors_name_the_block_and_the_fix(
+    tmp_path: Path,
+    data: bytes,
+    read: typing.Callable[[SDBlock[str]], object],
+    action: str,
+) -> None:
+    """Each decoding accessor's UnicodeDecodeError notes the block and fix.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+        data: the non-UTF-8 SDF
+        read: the accessor call
+        action: what the note says was being done
+    """
+    path = tmp_path / "latin1.sdf"
+    path.write_bytes(data)
     (block,) = parse_sdf(path)
-    parts: dict[str, typing.Callable[[], object]] = {
-        "the title": lambda: block.title,
-        "the molblock": lambda: block.molblock,
-        "the CTAB": block.ctable,
-    }
-    for what, read in parts.items():
-        with pytest.raises(UnicodeDecodeError) as error:
-            read()
-        assert error.value.__notes__[0].startswith(
-            f"Reading {what} of the SDBlock titled '\ufffd'."
-        )
+    title = "\ufffd" if data is LATIN1_TITLE else "first"
+    with pytest.raises(UnicodeDecodeError) as error:
+        read(block)
+    assert error.value.__notes__ == [
+        f"{action} the SDBlock titled '{title}'. {DECODE_HINT}"
+    ]
+
+
+def test_byte_level_methods_work_on_undecodable_text(tmp_path: Path) -> None:
+    """Methods that read no block text work on a str block that is not UTF-8.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+    """
+    path = tmp_path / "latin1.sdf"
+    path.write_bytes(LATIN1_TITLE + LATIN1_BODY)
+    bad_title, block = parse_sdf(path)
+    assert repr(bad_title) == "<SDBlock title='\ufffd'>"
+    assert (block.num_atoms(), block.num_bonds()) == (0, 0)
+    assert len(block) == 2 and "F" in block and "G" not in block
+    block.set_record("F", "ok")
+    block.append_record("G", "1")
+    assert block.remove_record("G") == 1
+    assert block.__reduce__()[1][0].endswith(b"> <F>\nok\n\n> <\xa6>\nv\n\n$$$$\n")
+    block.replace_records({"F": "new"})
+    assert block.records() == [("F", "new")]
+    with pytest.raises(UnicodeDecodeError):
+        block.mdl
 
 
 def test_from_lines_reads_file_objects_in_chunks() -> None:

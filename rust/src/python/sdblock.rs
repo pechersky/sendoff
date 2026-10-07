@@ -948,8 +948,15 @@ impl PySDBlock {
         true
     }
 
+    /// Show the stripped title; a str block's undecodable title bytes show
+    /// as U+FFFD instead of raising.
     fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
-        Ok(format!("<SDBlock title={}>", self.title(py)?.repr()?))
+        let title = self.block.title(self.kind.strip());
+        let title = match self.kind {
+            Kind::Text => PyString::new(py, &String::from_utf8_lossy(title)).into_any(),
+            Kind::Bytes => PyBytes::new(py, title).into_any(),
+        };
+        Ok(format!("<SDBlock title={}>", title.repr()?))
     }
 
     /// Return an independent copy; a block holds no other objects, so
