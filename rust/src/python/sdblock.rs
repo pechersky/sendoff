@@ -1198,7 +1198,7 @@ impl PySDBlock {
     ///     NotImplementedError: for byte-backed SDBlocks
     fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
         let mut ctable = self.ctable(py)?;
-        ctable.renumber_indices_for_block(py)?;
+        ctable.renumber_indices_for_block()?;
         self.block
             .replace_mdl(ctable.lines_after_title().iter().map(String::as_bytes));
         Ok(())

@@ -1,7 +1,10 @@
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
 
 use crate::core::ctable;
+
+pyo3::import_exception!(sendoff.ctable, IndicesDuplicateError);
+pyo3::import_exception!(sendoff.ctable, IndicesMismatchError);
+pyo3::import_exception!(sendoff.ctable, IndicesOutOfOrderError);
 
 /// Handle a Connection table (CTAB) from a single molecule block.
 ///
@@ -72,11 +75,11 @@ impl PyCTable {
     /// Returns:
     ///     If all the checks pass, return True.
     #[pyo3(signature = (strict: "bool" = false))]
-    fn valid_atom_indices(&self, py: Python<'_>, strict: bool) -> PyResult<bool> {
+    fn valid_atom_indices(&self, strict: bool) -> PyResult<bool> {
         self.inner
             .valid_atom_indices(strict)
             .map(|()| true)
-            .map_err(|error| index_error(py, error, "atom"))
+            .map_err(error_to_py)
     }
 
     /// Validate that the bond lines match the counts line.
@@ -99,11 +102,11 @@ impl PyCTable {
     /// Returns:
     ///     If all the checks pass, return True.
     #[pyo3(signature = (strict: "bool" = false))]
-    fn valid_bond_indices(&self, py: Python<'_>, strict: bool) -> PyResult<bool> {
+    fn valid_bond_indices(&self, strict: bool) -> PyResult<bool> {
         self.inner
             .valid_bond_indices(strict)
             .map(|()| true)
-            .map_err(|error| index_error(py, error, "bond"))
+            .map_err(error_to_py)
     }
 
     /// Renumber the atom and bond indices in the block.
@@ -133,13 +136,8 @@ impl PyCTable {
     ///         or a table that renumbering would corrupt, as above
     ///     ValueError: if an ATOM or BOND section has no END line, or the root
     ///         CTAB has more than one of either
-    fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
-        self.inner.renumber_indices().map_err(|error| match error {
-            ctable::CTableError::Duplicate => {
-                custom_error(py, "IndicesDuplicateError", "atom index mapping in bond")
-            }
-            other => index_error(py, other, "atom"),
-        })
+    fn renumber_indices(&mut self) -> PyResult<()> {
+        self.inner.renumber_indices().map_err(error_to_py)
     }
 
     /// Set the counts line to the number of atom and bond lines.
@@ -168,8 +166,8 @@ impl PyCTable {
         &self.inner.lines[1..]
     }
 
-    pub(crate) fn renumber_indices_for_block(&mut self, py: Python<'_>) -> PyResult<()> {
-        self.renumber_indices(py)
+    pub(crate) fn renumber_indices_for_block(&mut self) -> PyResult<()> {
+        self.renumber_indices()
     }
 
     pub(crate) fn fix_counts_for_block(&mut self) -> PyResult<()> {
@@ -177,10 +175,11 @@ impl PyCTable {
     }
 }
 
-/// Map a structural CTable error to the exception main's Python raised.
+/// Map a CTable error to its Python exception.
 ///
-/// Truncated tables raise ValueError rather than main's StopIteration, which
-/// PEP 479 would turn into RuntimeError inside generators.
+/// Truncated tables raise ValueError rather than the StopIteration of the
+/// old pure-Python parser, which PEP 479 would turn into RuntimeError inside
+/// generators.
 pub(crate) fn error_to_py(error: ctable::CTableError) -> PyErr {
     use pyo3::exceptions::{PyIndexError, PyKeyError, PyNotImplementedError, PyValueError};
     match error {
@@ -205,35 +204,18 @@ pub(crate) fn error_to_py(error: ctable::CTableError) -> PyErr {
         } => {
             PyNotImplementedError::new_err(format!("{operation} does not support {construct} yet"))
         }
-        other => PyValueError::new_err(format!("{other:?}")),
-    }
-}
-
-fn index_error(py: Python<'_>, error: ctable::CTableError, noun: &str) -> PyErr {
-    match error {
-        ctable::CTableError::OutOfOrder => {
-            custom_error(py, "IndicesOutOfOrderError", &format!("{noun}s"))
+        ctable::CTableError::OutOfOrder(noun) => {
+            IndicesOutOfOrderError::new_err(format!("{noun}s"))
         }
-        ctable::CTableError::Duplicate => {
-            custom_error(py, "IndicesDuplicateError", &format!("{noun}s"))
+        ctable::CTableError::Duplicate(noun) => IndicesDuplicateError::new_err(format!("{noun}s")),
+        ctable::CTableError::AmbiguousAtom => {
+            IndicesDuplicateError::new_err("atom index mapping in bond")
         }
-        ctable::CTableError::Fewer => custom_error(
-            py,
-            "IndicesMismatchError",
-            &format!("fewer {noun} lines than count line"),
-        ),
-        ctable::CTableError::More => custom_error(
-            py,
-            "IndicesMismatchError",
-            &format!("more {noun} lines than count line"),
-        ),
-        other => error_to_py(other),
+        ctable::CTableError::Fewer(noun) => {
+            IndicesMismatchError::new_err(format!("fewer {noun} lines than count line"))
+        }
+        ctable::CTableError::More(noun) => {
+            IndicesMismatchError::new_err(format!("more {noun} lines than count line"))
+        }
     }
-}
-
-fn custom_error(py: Python<'_>, name: &str, message: &str) -> PyErr {
-    PyModule::import(py, "sendoff.ctable")
-        .and_then(|module| module.getattr(name))
-        .and_then(|class| class.call1((message,)))
-        .map_or_else(|error| error, PyErr::from_value)
 }

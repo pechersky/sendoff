@@ -34,14 +34,20 @@ pub enum CTableError {
     MissingLine(&'static str),
     /// The root CTAB has more than one line with this begin marker.
     RepeatedLine(&'static str),
-    /// Strict validation found an index out of one-based order.
-    OutOfOrder,
-    /// An index occurs twice, or a bond references a duplicated atom index.
-    Duplicate,
-    /// There are fewer unique indices than the counts line declares.
-    Fewer,
-    /// There are more unique indices than the counts line declares.
-    More,
+    /// Strict validation found an atom or bond index, as named, out of
+    /// one-based order.
+    OutOfOrder(&'static str),
+    /// An atom or bond index, as named, occurs twice.
+    Duplicate(&'static str),
+    /// There are fewer unique atom or bond indices, as named, than the counts
+    /// line declares.
+    Fewer(&'static str),
+    /// There are more unique atom or bond indices, as named, than the counts
+    /// line declares.
+    More(&'static str),
+    /// A bond references an atom index that several atoms share, so
+    /// renumbering cannot tell which atom it means.
+    AmbiguousAtom,
 }
 
 impl From<ParseIntError> for CTableError {
@@ -152,7 +158,7 @@ impl CTable {
             return Err(CTableError::NotImplemented);
         }
         let atoms = atom_section(&self.lines)?;
-        validate_indices(&self.lines[atoms], self.num_atoms as usize, strict)
+        validate_indices(&self.lines[atoms], self.num_atoms as usize, strict, "atom")
     }
 
     /// Validate raw bond lines against the parsed bond count.
@@ -166,7 +172,7 @@ impl CTable {
             return Err(CTableError::NotImplemented);
         }
         let bonds = bond_section(&self.lines)?;
-        validate_indices(&self.lines[bonds], self.num_bonds as usize, strict)
+        validate_indices(&self.lines[bonds], self.num_bonds as usize, strict, "bond")
     }
 
     /// Renumber atom and bond indices, replacing the stored lines on success.
@@ -404,6 +410,7 @@ fn validate_indices(
     lines: &[String],
     expected_count: usize,
     strict: bool,
+    noun: &'static str,
 ) -> Result<(), CTableError> {
     let mut seen_indices = HashSet::new();
     for (line_index, line) in lines.iter().enumerate() {
@@ -413,17 +420,17 @@ fn validate_indices(
                 .ok_or(CTableError::MissingField("index"))?,
         )?;
         if strict && (line_index + 1) as i64 != index {
-            return Err(CTableError::OutOfOrder);
+            return Err(CTableError::OutOfOrder(noun));
         }
         if !seen_indices.insert(index) {
-            return Err(CTableError::Duplicate);
+            return Err(CTableError::Duplicate(noun));
         }
     }
     if seen_indices.len() < expected_count {
-        return Err(CTableError::Fewer);
+        return Err(CTableError::Fewer(noun));
     }
     if seen_indices.len() > expected_count {
-        return Err(CTableError::More);
+        return Err(CTableError::More(noun));
     }
     Ok(())
 }
@@ -441,7 +448,7 @@ enum NewIndex {
 /// Atom and bond lines are numbered from one in their existing order, and
 /// bond atom references are remapped through the atom-index map; the rest of
 /// each line, such as bond `CFG` and the ending, stays as it was. Fail with
-/// `Duplicate` when duplicate atom indices make a bond's atom mapping
+/// `AmbiguousAtom` when duplicate atom indices make a bond's atom mapping
 /// ambiguous, and with `MissingField` when a bond references an absent atom.
 fn renumbered(
     lines: &[String],
@@ -491,7 +498,7 @@ fn renumbered(
             atom_index_mapping.get(&to_index),
         ) {
             (Some(NewIndex::Duplicate), _) | (_, Some(NewIndex::Duplicate)) => {
-                return Err(CTableError::Duplicate);
+                return Err(CTableError::AmbiguousAtom);
             }
             (Some(&NewIndex::Unique(from)), Some(&NewIndex::Unique(to))) => (from, to),
             _ => return Err(CTableError::MissingField("bonded atom")),
