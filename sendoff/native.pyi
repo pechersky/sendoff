@@ -79,7 +79,8 @@ class CTable:
         Raises:
             NotImplementedError: for a V2000 format table, "-" continued atom
                 or bond lines, or CTABs nested in RGROUP or TEMPLATE blocks
-            ValueError: if an ATOM or BOND section has no END line
+            ValueError: if an ATOM or BOND section has no END line, or the root
+                CTAB has more than one of either
         """
 
     @property
@@ -127,6 +128,8 @@ class CTable:
                 original indices to use in the remapping.
             NotImplementedError: if trying to renumber in a V2000 format table,
                 or a table that renumbering would corrupt, as above
+            ValueError: if an ATOM or BOND section has no END line, or the root
+                CTAB has more than one of either
         """
 
     def valid_atom_indices(self, /, strict: bool = False) -> bool:
@@ -145,6 +148,8 @@ class CTable:
             IndicesMismatchError: if number of atom lines does not match count line
             IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
             NotImplementedError: if trying to validate a V2000 format table
+            ValueError: if the ATOM section has no END line, or the root
+                CTAB has more than one ATOM section
 
         Returns:
             If all the checks pass, return True.
@@ -166,6 +171,8 @@ class CTable:
             IndicesMismatchError: if number of bond lines does not match count line
             IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
             NotImplementedError: if trying to validate a V2000 format table
+            ValueError: if the BOND section has no END line, or the root
+                CTAB has more than one BOND section
 
         Returns:
             If all the checks pass, return True.

@@ -32,6 +32,8 @@ pub enum CTableError {
     },
     /// A section has no line with this end marker.
     MissingLine(&'static str),
+    /// The root CTAB has more than one line with this begin marker.
+    RepeatedLine(&'static str),
     /// Strict validation found an index out of one-based order.
     OutOfOrder,
     /// An index occurs twice, or a bond references a duplicated atom index.
@@ -144,13 +146,13 @@ impl CTable {
     /// With `strict` enabled, indices must be one-based and in increasing
     /// order. The result distinguishes unsupported V2000 validation,
     /// out-of-order and duplicate indices, and fewer or more lines than the
-    /// count line. Lines are selected using the raw V3000 atom-section
-    /// boundaries.
+    /// count line. The atom lines are those of the root CTAB's ATOM section.
     pub fn valid_atom_indices(&self, strict: bool) -> Result<(), CTableError> {
         if self.format != CTableFormat::V3000 {
             return Err(CTableError::NotImplemented);
         }
-        validate_atom_indices(&self.lines, self.num_atoms as usize, strict)
+        let atoms = atom_section(&self.lines)?;
+        validate_indices(&self.lines[atoms], self.num_atoms as usize, strict)
     }
 
     /// Validate raw bond lines against the parsed bond count.
@@ -158,13 +160,13 @@ impl CTable {
     /// With `strict` enabled, indices must be one-based and in increasing
     /// order. The result distinguishes unsupported V2000 validation,
     /// out-of-order and duplicate indices, and fewer or more lines than the
-    /// count line. Lines are selected using the raw V3000 bond-section
-    /// boundaries.
+    /// count line. The bond lines are those of the root CTAB's BOND section.
     pub fn valid_bond_indices(&self, strict: bool) -> Result<(), CTableError> {
         if self.format != CTableFormat::V3000 {
             return Err(CTableError::NotImplemented);
         }
-        validate_bond_indices(&self.lines, self.num_bonds as usize, strict)
+        let bonds = bond_section(&self.lines)?;
+        validate_indices(&self.lines[bonds], self.num_bonds as usize, strict)
     }
 
     /// Renumber atom and bond indices, replacing the stored lines on success.
@@ -177,8 +179,10 @@ impl CTable {
         if self.format != CTableFormat::V3000 {
             return Err(CTableError::NotImplemented);
         }
-        let renumbered = Renumbered::new(&self.lines)?;
-        self.lines = renumbered.splice(std::mem::take(&mut self.lines));
+        let (atoms, bonds) = sections("renumbering", &self.lines)?;
+        let (mut new_atoms, mut new_bonds) = renumbered(&self.lines, atoms.clone(), bonds.clone())?;
+        self.lines[atoms].swap_with_slice(&mut new_atoms);
+        self.lines[bonds].swap_with_slice(&mut new_bonds);
         Ok(())
     }
 
@@ -191,14 +195,7 @@ impl CTable {
         if self.format != CTableFormat::V3000 {
             return Err(CTableError::NotImplemented);
         }
-        let atoms = section(&self.lines, "M  V30 BEGIN ATOM", "M  V30 END ATOM")?;
-        let bonds = section(&self.lines, "M  V30 BEGIN BOND", "M  V30 END BOND")?;
-        check_layout(
-            "fixing counts",
-            &self.lines,
-            &self.lines[atoms.clone()],
-            &self.lines[bonds.clone()],
-        )?;
+        let (atoms, bonds) = sections("fixing counts", &self.lines)?;
         let (atoms, bonds) = (atoms.len(), bonds.len());
         let line = &self.lines[V3000_COUNTS_LINE];
         let (atom_field, bond_field) = {
@@ -274,36 +271,37 @@ fn starts_with_keyword(line: &str, prefix: &str) -> bool {
         .is_some_and(|start| start.eq_ignore_ascii_case(prefix.as_bytes()))
 }
 
-/// Refuse tables whose atom and bond lines `operation` cannot tell apart:
-/// `-` continued atom or bond lines, and CTABs nested in RGROUP or TEMPLATE
-/// blocks, whose sections would be taken for the root CTAB's.
-fn check_layout(
+/// Find the root CTAB's atom and bond sections for `operation`, which edits
+/// a table line by line. Refuse tables it would get wrong: CTABs nested in
+/// RGROUP or TEMPLATE blocks, whose own atom and bond lines it would leave as
+/// they are, and `-` continued atom or bond lines, which it would take for
+/// atoms or bonds.
+fn sections(
     operation: &'static str,
     lines: &[String],
-    atom_lines: &[String],
-    bond_lines: &[String],
-) -> Result<(), CTableError> {
-    if atom_lines
-        .iter()
-        .chain(bond_lines)
-        .any(|line| line.trim_end_matches(['\r', '\n']).ends_with('-'))
-    {
-        return Err(CTableError::Unsupported {
+) -> Result<(Range<usize>, Range<usize>), CTableError> {
+    let unsupported = |construct| {
+        Err(CTableError::Unsupported {
             operation,
-            construct: "continued (-) atom or bond lines",
-        });
-    }
+            construct,
+        })
+    };
     let ctabs = lines
         .iter()
         .filter(|line| starts_with_keyword(line, "M  V30 BEGIN CTAB"))
         .count();
     if ctabs > 1 {
-        return Err(CTableError::Unsupported {
-            operation,
-            construct: "CTABs nested in RGROUP or TEMPLATE blocks",
-        });
+        return unsupported("CTABs nested in RGROUP or TEMPLATE blocks");
     }
-    Ok(())
+    let (atoms, bonds) = (atom_section(lines)?, bond_section(lines)?);
+    if lines[atoms.clone()]
+        .iter()
+        .chain(&lines[bonds.clone()])
+        .any(|line| line.trim_end_matches(['\r', '\n']).ends_with('-'))
+    {
+        return unsupported("continued (-) atom or bond lines");
+    }
+    Ok((atoms, bonds))
 }
 
 /// Refuse to change indices that other data refers to, which renumbering
@@ -358,85 +356,50 @@ fn end_of(line: &str, field: &str) -> usize {
     start_of(line, field) + field.len()
 }
 
-/// Return the range of lines between the `begin` and `end` marker lines,
-/// empty when there is no `begin` line.
-fn section(lines: &[String], begin: &str, end: &'static str) -> Result<Range<usize>, CTableError> {
-    let Some(start) = lines
+/// Return the range of root CTAB lines between the `begin` and `end` marker
+/// lines, empty when there is no `begin` line.
+///
+/// The root CTAB ends at the first `END CTAB` line; CTABs nested in RGROUP or
+/// TEMPLATE blocks follow it.
+fn section(
+    lines: &[String],
+    begin: &'static str,
+    end: &'static str,
+) -> Result<Range<usize>, CTableError> {
+    let root = lines
         .iter()
-        .position(|line| starts_with_keyword(line, begin))
-        .map(|index| index + 1)
-    else {
+        .position(|line| starts_with_keyword(line, "M  V30 END CTAB"))
+        .map_or(lines, |end| &lines[..end]);
+    let mut begins = root
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| starts_with_keyword(line, begin));
+    let Some((index, _)) = begins.next() else {
         return Ok(0..0);
     };
-    let len = lines[start..]
+    if begins.next().is_some() {
+        return Err(CTableError::RepeatedLine(begin));
+    }
+    let start = index + 1;
+    let len = root[start..]
         .iter()
         .position(|line| starts_with_keyword(line, end))
         .ok_or(CTableError::MissingLine(end))?;
     Ok(start..start + len)
 }
 
-/// Return the half-open range of raw atom lines in a CTable.
-///
-/// The atom range starts at line seven and ends before `END ATOM` when that
-/// marker exists. This preserves the legacy V2000 behavior of taking the
-/// remaining lines after the header.
-pub fn atom_line_range(lines: &[String]) -> (usize, usize) {
-    let start = 7.min(lines.len());
-    let end = lines
-        .iter()
-        .enumerate()
-        .skip(start)
-        .find_map(|(index, line)| line.starts_with("M  V30 END ATOM").then_some(index))
-        .unwrap_or(lines.len());
-    (start, end)
+/// The range of the root CTAB's atom lines.
+fn atom_section(lines: &[String]) -> Result<Range<usize>, CTableError> {
+    section(lines, "M  V30 BEGIN ATOM", "M  V30 END ATOM")
 }
 
-/// Return the half-open range of raw bond lines in a V3000 CTable.
-///
-/// If no `BEGIN BOND` marker exists, return an empty range at the end.
-pub fn bond_line_range(lines: &[String]) -> (usize, usize) {
-    let Some(start) = lines
-        .iter()
-        .position(|line| line.starts_with("M  V30 BEGIN BOND"))
-        .map(|index| index + 1)
-    else {
-        return (lines.len(), lines.len());
-    };
-    let end = lines
-        .iter()
-        .enumerate()
-        .skip(start)
-        .find_map(|(index, line)| line.starts_with("M  V30 END BOND").then_some(index))
-        .unwrap_or(lines.len());
-    (start, end)
+/// The range of the root CTAB's bond lines.
+fn bond_section(lines: &[String]) -> Result<Range<usize>, CTableError> {
+    section(lines, "M  V30 BEGIN BOND", "M  V30 END BOND")
 }
 
-/// Validate atom-line count and unique indices and, when strict, their order.
-///
-/// Each raw line's third whitespace-delimited token is parsed as its index.
-/// The number of unique indices is compared with `num_atoms`.
-pub fn validate_atom_indices(
-    lines: &[String],
-    num_atoms: usize,
-    strict: bool,
-) -> Result<(), CTableError> {
-    let (start, end) = atom_line_range(lines);
-    validate_indices(&lines[start..end], num_atoms, strict)
-}
-
-/// Validate bond-line count and unique indices and, when strict, their order.
-///
-/// Each raw line's third whitespace-delimited token is parsed as its index.
-/// The number of unique indices is compared with `num_bonds`.
-pub fn validate_bond_indices(
-    lines: &[String],
-    num_bonds: usize,
-    strict: bool,
-) -> Result<(), CTableError> {
-    let (start, end) = bond_line_range(lines);
-    validate_indices(&lines[start..end], num_bonds, strict)
-}
-
+/// Validate a section's count and unique indices and, when strict, their
+/// order. Each line's third whitespace-delimited token is its index.
 fn validate_indices(
     lines: &[String],
     expected_count: usize,
@@ -472,129 +435,75 @@ enum NewIndex {
     Duplicate,
 }
 
-/// Atom and bond lines numbered from one in table order, to splice into the
-/// table.
-struct Renumbered {
-    atoms: Vec<String>,
-    bonds: Vec<String>,
-}
-
-impl Renumbered {
-    /// Renumber the atom and bond lines of `lines`.
-    ///
-    /// Atom and bond lines are numbered from one in their existing order, and
-    /// bond atom references are remapped through the atom-index map; the
-    /// rest of each line, such as bond `CFG` and the ending, stays as it was.
-    /// Fail with
-    /// `Duplicate` when duplicate atom indices make a bond's atom mapping
-    /// ambiguous, and with `MissingField` when a bond references an absent
-    /// atom.
-    fn new(lines: &[String]) -> Result<Self, CTableError> {
-        let prefix = "M  V30 ";
-        let (atom_start, atom_end) = atom_line_range(lines);
-        let atom_lines = &lines[atom_start..atom_end];
-        let (bond_start, bond_end) = bond_line_range(lines);
-        let bond_lines = &lines[bond_start..bond_end];
-        check_layout("renumbering", lines, atom_lines, bond_lines)?;
-        let mut changed = false;
-        let mut atom_index_mapping = HashMap::with_capacity(atom_lines.len());
-        let mut new_atom_lines = Vec::with_capacity(atom_lines.len());
-        for (line_index, line) in atom_lines.iter().enumerate() {
-            let old_field = line
-                .split_whitespace()
-                .nth(2)
-                .ok_or(CTableError::MissingField("atom index"))?;
-            let old_index = integer(old_field)?;
-            let new_index = line_index + 1;
-            changed |= usize::try_from(old_index) != Ok(new_index);
-            atom_index_mapping
-                .entry(old_index)
-                .and_modify(|index| *index = NewIndex::Duplicate)
-                .or_insert(NewIndex::Unique(new_index));
-            // Like the Python slice line[n:], skip characters, not bytes.
-            let skip_chars = prefix.chars().count() + old_field.chars().count();
-            let rest = line
-                .char_indices()
-                .nth(skip_chars)
-                .map_or("", |(offset, _)| &line[offset..]);
-            new_atom_lines.push(format!("{prefix}{new_index}{rest}"));
-        }
-
-        let mut new_bond_lines = Vec::with_capacity(bond_lines.len());
-        for (line_index, line) in bond_lines.iter().enumerate() {
-            let missing = || CTableError::MissingField("bond atom index");
-            let mut fields = line.split_whitespace().skip(2);
-            changed |= fields.next().and_then(|field| field.parse().ok()) != Some(line_index + 1);
-            let (Some(bond_type), Some(from_field)) = (fields.next(), fields.next()) else {
-                return Err(missing());
-            };
-            let from_index = integer(from_field)?;
-            let to_field = fields.next().ok_or_else(missing)?;
-            let to_index = integer(to_field)?;
-            let tail = &line[end_of(line, to_field)..];
-            let (new_from, new_to) = match (
-                atom_index_mapping.get(&from_index),
-                atom_index_mapping.get(&to_index),
-            ) {
-                (Some(NewIndex::Duplicate), _) | (_, Some(NewIndex::Duplicate)) => {
-                    return Err(CTableError::Duplicate);
-                }
-                (Some(&NewIndex::Unique(from)), Some(&NewIndex::Unique(to))) => (from, to),
-                _ => return Err(CTableError::MissingField("bonded atom")),
-            };
-            new_bond_lines.push(format!(
-                "{prefix}{} {bond_type} {new_from} {new_to}{tail}",
-                line_index + 1,
-            ));
-        }
-
-        if changed {
-            check_references(lines, atom_lines, bond_lines)?;
-        }
-        Ok(Self {
-            atoms: new_atom_lines,
-            bonds: new_bond_lines,
-        })
+/// Renumber the atom lines in `atoms` and the bond lines in `bonds`, returning
+/// the new lines for each range.
+///
+/// Atom and bond lines are numbered from one in their existing order, and
+/// bond atom references are remapped through the atom-index map; the rest of
+/// each line, such as bond `CFG` and the ending, stays as it was. Fail with
+/// `Duplicate` when duplicate atom indices make a bond's atom mapping
+/// ambiguous, and with `MissingField` when a bond references an absent atom.
+fn renumbered(
+    lines: &[String],
+    atoms: Range<usize>,
+    bonds: Range<usize>,
+) -> Result<(Vec<String>, Vec<String>), CTableError> {
+    let prefix = "M  V30 ";
+    let (atom_lines, bond_lines) = (&lines[atoms], &lines[bonds]);
+    let mut changed = false;
+    let mut atom_index_mapping = HashMap::with_capacity(atom_lines.len());
+    let mut new_atom_lines = Vec::with_capacity(atom_lines.len());
+    for (line_index, line) in atom_lines.iter().enumerate() {
+        let old_field = line
+            .split_whitespace()
+            .nth(2)
+            .ok_or(CTableError::MissingField("atom index"))?;
+        let old_index = integer(old_field)?;
+        let new_index = line_index + 1;
+        changed |= usize::try_from(old_index) != Ok(new_index);
+        atom_index_mapping
+            .entry(old_index)
+            .and_modify(|index| *index = NewIndex::Duplicate)
+            .or_insert(NewIndex::Unique(new_index));
+        // Like the Python slice line[n:], skip characters, not bytes.
+        let skip_chars = prefix.chars().count() + old_field.chars().count();
+        let rest = line
+            .char_indices()
+            .nth(skip_chars)
+            .map_or("", |(offset, _)| &line[offset..]);
+        new_atom_lines.push(format!("{prefix}{new_index}{rest}"));
     }
 
-    /// Put the new lines in place of the atom and bond lines.
-    ///
-    /// Malformed marker sequences keep their established output: an `END`
-    /// line outside a section is kept twice, and every `END ATOM` or
-    /// `END BOND` line gets the new lines, which only the last one moves.
-    fn splice(mut self, lines: Vec<String>) -> Vec<String> {
-        let last_atom_end = lines
-            .iter()
-            .rposition(|line| line.starts_with("M  V30 END ATOM"));
-        let last_bond_end = lines
-            .iter()
-            .rposition(|line| line.starts_with("M  V30 END BOND"));
-        let mut new_lines = Vec::with_capacity(lines.len());
-        let mut appending = true;
-        for (index, line) in lines.into_iter().enumerate() {
-            let (new, last) = if line.starts_with("M  V30 END ATOM") {
-                (&mut self.atoms, last_atom_end)
-            } else if line.starts_with("M  V30 END BOND") {
-                (&mut self.bonds, last_bond_end)
-            } else {
-                if appending {
-                    appending = !(line.starts_with("M  V30 BEGIN ATOM")
-                        || line.starts_with("M  V30 BEGIN BOND"));
-                    new_lines.push(line);
-                }
-                continue;
-            };
-            if appending {
-                new_lines.push(line.clone());
+    let mut new_bond_lines = Vec::with_capacity(bond_lines.len());
+    for (line_index, line) in bond_lines.iter().enumerate() {
+        let missing = || CTableError::MissingField("bond atom index");
+        let mut fields = line.split_whitespace().skip(2);
+        changed |= fields.next().and_then(|field| field.parse().ok()) != Some(line_index + 1);
+        let (Some(bond_type), Some(from_field)) = (fields.next(), fields.next()) else {
+            return Err(missing());
+        };
+        let from_index = integer(from_field)?;
+        let to_field = fields.next().ok_or_else(missing)?;
+        let to_index = integer(to_field)?;
+        let tail = &line[end_of(line, to_field)..];
+        let (new_from, new_to) = match (
+            atom_index_mapping.get(&from_index),
+            atom_index_mapping.get(&to_index),
+        ) {
+            (Some(NewIndex::Duplicate), _) | (_, Some(NewIndex::Duplicate)) => {
+                return Err(CTableError::Duplicate);
             }
-            appending = true;
-            if Some(index) == last {
-                new_lines.append(new);
-            } else {
-                new_lines.extend_from_slice(new);
-            }
-            new_lines.push(line);
-        }
-        new_lines
+            (Some(&NewIndex::Unique(from)), Some(&NewIndex::Unique(to))) => (from, to),
+            _ => return Err(CTableError::MissingField("bonded atom")),
+        };
+        new_bond_lines.push(format!(
+            "{prefix}{} {bond_type} {new_from} {new_to}{tail}",
+            line_index + 1,
+        ));
     }
+
+    if changed {
+        check_references(lines, atom_lines, bond_lines)?;
+    }
+    Ok((new_atom_lines, new_bond_lines))
 }

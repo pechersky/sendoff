@@ -66,6 +66,8 @@ impl PyCTable {
     ///     IndicesMismatchError: if number of atom lines does not match count line
     ///     IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
     ///     NotImplementedError: if trying to validate a V2000 format table
+    ///     ValueError: if the ATOM section has no END line, or the root
+    ///         CTAB has more than one ATOM section
     ///
     /// Returns:
     ///     If all the checks pass, return True.
@@ -91,6 +93,8 @@ impl PyCTable {
     ///     IndicesMismatchError: if number of bond lines does not match count line
     ///     IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
     ///     NotImplementedError: if trying to validate a V2000 format table
+    ///     ValueError: if the BOND section has no END line, or the root
+    ///         CTAB has more than one BOND section
     ///
     /// Returns:
     ///     If all the checks pass, return True.
@@ -127,6 +131,8 @@ impl PyCTable {
     ///         original indices to use in the remapping.
     ///     NotImplementedError: if trying to renumber in a V2000 format table,
     ///         or a table that renumbering would corrupt, as above
+    ///     ValueError: if an ATOM or BOND section has no END line, or the root
+    ///         CTAB has more than one of either
     fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
         self.inner.renumber_indices().map_err(|error| match error {
             ctable::CTableError::Duplicate => {
@@ -145,7 +151,8 @@ impl PyCTable {
     /// Raises:
     ///     NotImplementedError: for a V2000 format table, "-" continued atom
     ///         or bond lines, or CTABs nested in RGROUP or TEMPLATE blocks
-    ///     ValueError: if an ATOM or BOND section has no END line
+    ///     ValueError: if an ATOM or BOND section has no END line, or the root
+    ///         CTAB has more than one of either
     fn fix_counts(&mut self) -> PyResult<()> {
         self.inner.fix_counts().map_err(error_to_py)
     }
@@ -188,6 +195,9 @@ pub(crate) fn error_to_py(error: ctable::CTableError) -> PyErr {
         ctable::CTableError::NotImplemented => PyNotImplementedError::new_err(()),
         ctable::CTableError::MissingLine(marker) => {
             PyValueError::new_err(format!("CTable has no {marker:?} line"))
+        }
+        ctable::CTableError::RepeatedLine(marker) => {
+            PyValueError::new_err(format!("CTable has more than one {marker:?} line"))
         }
         ctable::CTableError::Unsupported {
             operation,

@@ -1861,9 +1861,51 @@ def test_fix_counts_reads_section_markers() -> None:
     block = next(SDBlock.from_sdf(V3000_HEADER + ctab + "$$$$\n"))
     block.fix_counts()
     assert (block.num_atoms(), block.num_bonds()) == (0, 0)
-    unterminated = v3000_block().to_sdf().replace("M  V30 END BOND\n", "")
-    with pytest.raises(ValueError, match="END BOND"):
-        next(SDBlock.from_sdf(unterminated)).fix_counts()
+
+
+@pytest.mark.parametrize("section", ["ATOM", "BOND"])
+@pytest.mark.parametrize(
+    "operation", ["valid_indices", "renumber_indices", "fix_counts"]
+)
+def test_sections_need_one_begin_and_one_end_line(operation: str, section: str) -> None:
+    """An unterminated or repeated section raises ValueError and changes nothing.
+
+    Args:
+        operation: the method to call; valid_indices validates the section
+        section: the section to break
+    """
+    text = v3000_block().to_sdf()
+    begin, end = f"M  V30 BEGIN {section}\n", f"M  V30 END {section}\n"
+    for broken, message in [
+        (text.replace(end, ""), f'no "{end.strip()}" line'),
+        (text.replace(end, end + begin + end), f'more than one "{begin.strip()}"'),
+    ]:
+        block = next(SDBlock.from_sdf(broken))
+        if operation == "valid_indices":
+            call = getattr(block.ctable(), f"valid_{section.lower()}_indices")
+        else:
+            call = getattr(block, operation)
+        with pytest.raises(ValueError, match=message):
+            call()
+        assert block.to_sdf() == broken
+
+
+def test_sections_are_the_root_ctabs() -> None:
+    """Validation reads the root CTAB's sections, not those of nested CTABs."""
+    root = (
+        "M  V30 BEGIN CTAB\nM  V30 COUNTS 1 0 0 0 0\nM  V30 BEGIN ATOM\n"
+        + "M  V30 1 R# 0 0 0 0 RGROUPS=(1 1)\nM  V30 END ATOM\nM  V30 END CTAB\n"
+    )
+    rgroup = (
+        "M  V30 BEGIN RGROUP 1\nM  V30 BEGIN CTAB\nM  V30 COUNTS 2 1 0 0 0\n"
+        + "M  V30 BEGIN ATOM\nM  V30 1 C 0 0 0 0\nM  V30 2 C 0 0 0 0\n"
+        + "M  V30 END ATOM\nM  V30 BEGIN BOND\nM  V30 1 1 1 2\nM  V30 END BOND\n"
+        + "M  V30 END CTAB\nM  V30 END RGROUP\n"
+    )
+    text = V3000_HEADER + root + rgroup + "M  END\n$$$$\n"
+    ctable = next(SDBlock.from_sdf(text)).ctable()
+    assert ctable.valid_atom_indices(strict=True)
+    assert ctable.valid_bond_indices(strict=True)
 
 
 def test_fix_counts_needs_v3000_text(single_mol_v2000_sdf: Pathy) -> None:
