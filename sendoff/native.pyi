@@ -319,10 +319,16 @@ class SDBlock(Generic[AnyStr]):
         """
         Parse SDBlocks from homogeneous str or bytes lines or a file object.
 
-        File objects are read in 128 KiB chunks with `read1`, when available,
-        or `read`, so the handle's position runs ahead of the blocks
-        produced. Line iterables are consumed only up to each block's `$$$$`
-        line, and the iterator does not close them.
+        A file object, which has a `read1` or `read` method, is read in
+        128 KiB chunks with `read1`, when available, or `read`, so the
+        handle's position runs ahead of the blocks produced. Any other
+        iterable, such as a list or a generator, gives whole lines: each item
+        ends a line and may hold several. An item that does not end in "\\n"
+        gets its block's title line ending ("\\n" after a "\\r"), so an empty
+        item is an empty line; pass a stream's arbitrary chunks as a file
+        object instead. A block is produced once an item starts with `$$$$`
+        or the iterable ends, so line-by-line input is consumed only up to
+        each block's `$$$$` line; the iterator does not close iterables.
 
         Lines end at "\\n", and lines keep their endings, so CRLF input
         writes back as CRLF. `from_lines(f)` gives the blocks
@@ -339,7 +345,9 @@ class SDBlock(Generic[AnyStr]):
             An iterator that produces owned SDBlocks as input is consumed
 
         Raises:
-            TypeError: for a str or bytes argument; use `from_sdf` for those
+            TypeError: for a str or bytes argument (use `from_sdf` for those)
+                or a non-iterable; and, as blocks are produced, for items or
+                reads that are not str or bytes or that mix the two
         """
 
     @overload

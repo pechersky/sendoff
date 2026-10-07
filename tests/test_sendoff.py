@@ -9,7 +9,7 @@ import threading
 import typing
 from itertools import chain
 from pathlib import Path
-from typing import Generator, Iterable, Iterator, cast
+from typing import Generator, Iterator
 
 import pytest
 
@@ -134,11 +134,91 @@ def test_text_path_preserves_text_values(tmp_path: Path) -> None:
     assert block.records() == [("field", "value é")]
 
 
-def test_from_lines_rejects_mixed_text_and_bytes() -> None:
-    """A single line source cannot mix text and bytes."""
-    mixed_lines = cast(Iterable[str], [b"title\n", "M  END\n"])
-    with pytest.raises(TypeError, match="mixed str and bytes"):
-        list(SDBlock.from_lines(mixed_lines))
+class _Reads:
+    """A file object whose `read` returns each of `chunks`, then ""."""
+
+    def __init__(self, *chunks: object) -> None:
+        self.chunks = iter(chunks)
+
+    def read(self, size: int) -> object:
+        return next(self.chunks, "")
+
+
+@pytest.mark.parametrize(
+    ("lines", "message"),
+    [
+        ([1], "lines must be str or bytes"),
+        (["t\n", None], "lines must be str or bytes"),
+        ([b"t\n", "M  END\n"], "does not accept mixed str and bytes lines"),
+        (_Reads(["t\n"]), "file objects must read str or bytes"),
+        (_Reads("t\n", b"M  END\n"), "does not accept mixed str and bytes lines"),
+    ],
+    ids=["item", "later-item", "mixed-items", "read", "mixed-reads"],
+)
+def test_from_lines_rejects_items_as_blocks_are_produced(
+    lines: typing.Any, message: str
+) -> None:
+    """Items or reads that are not homogeneous str or bytes raise on advance.
+
+    Args:
+        lines: the bad input
+        message: the TypeError's message
+    """
+    blocks = SDBlock.from_lines(lines)
+    with pytest.raises(TypeError, match=f"^SDBlock.from_lines {message}$"):
+        next(blocks)
+
+
+@pytest.mark.parametrize(
+    ("lines", "message"),
+    [
+        (
+            "t\n",
+            "SDBlock.from_lines takes lines or a file object; use SDBlock.from_sdf",
+        ),
+        (
+            b"t\n",
+            "SDBlock.from_lines takes lines or a file object; use SDBlock.from_sdf",
+        ),
+        (5, "'int' object is not iterable"),
+    ],
+    ids=["str", "bytes", "non-iterable"],
+)
+def test_from_lines_rejects_arguments(lines: typing.Any, message: str) -> None:
+    """A str, bytes, or non-iterable argument raises at the call.
+
+    Args:
+        lines: the bad argument
+        message: the start of the TypeError's message
+    """
+    with pytest.raises(TypeError, match=f"^{message}"):
+        SDBlock.from_lines(lines)
+
+
+def test_from_lines_items_end_lines() -> None:
+    """Each item ends a line, completed like its block's title line."""
+    cases: dict[tuple[str, ...], list[str]] = {
+        ("t", "M  END", "$$$$"): ["t\nM  END\n$$$$\n"],
+        ("t\r\n", "M  END", "> <A>", "1", "", "$$$$"): [
+            "t\r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$\r\n"
+        ],
+        ("t\r", "M  END"): ["t\r\nM  END\r\n$$$$\r\n"],
+        ("t\n", "", "M  END\n"): ["t\n\nM  END\n$$$$\n"],
+        ("t\nM  END\n$$$$\nu\nM  END\n$$$$\n",): [
+            "t\nM  END\n$$$$\n",
+            "u\nM  END\n$$$$\n",
+        ],
+        ("t\n", "M  END\n$$$$\nu\n", "M  END"): [
+            "t\nM  END\n$$$$\n",
+            "u\nM  END\n$$$$\n",
+        ],
+    }
+    for lines, expected in cases.items():
+        assert [block.to_sdf() for block in SDBlock.from_lines(lines)] == expected
+        encoded = [line.encode() for line in lines]
+        assert [block.to_sdf() for block in SDBlock.from_lines(encoded)] == [
+            text.encode() for text in expected
+        ]
 
 
 def test_from_lines_yields_incrementally_and_retains_blocks() -> None:
@@ -460,17 +540,6 @@ def test_from_lines_reads_file_objects_in_chunks() -> None:
         b"Second",
     ]
     assert reader.sizes and min(reader.sizes) >= 1 << 16
-
-
-def test_from_lines_rejects_non_string_reads() -> None:
-    """A read method returning neither str nor bytes is a TypeError."""
-
-    class Reader:
-        def read(self, size: int) -> list[str]:
-            return ["First\n"]
-
-    with pytest.raises(TypeError, match="must read str or bytes"):
-        next(SDBlock.from_lines(Reader()))  # type: ignore[arg-type]
 
 
 def test_bytes_block_requires_binary_append_values() -> None:
@@ -1035,10 +1104,6 @@ def test_from_sdf_parses_like_a_file(tmp_path: Path) -> None:
         [("B", value)],
     ]
     assert list(SDBlock.from_sdf("")) == []
-    with pytest.raises(TypeError, match="use SDBlock.from_sdf"):
-        SDBlock.from_lines("text")
-    with pytest.raises(TypeError, match="use SDBlock.from_sdf"):
-        SDBlock.from_lines(b"bytes")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="str or bytes"):
         SDBlock.from_sdf(["lines"])  # type: ignore[call-overload]
 
