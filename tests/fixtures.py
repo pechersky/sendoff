@@ -216,6 +216,31 @@ def double_second_delimiter_titled_mol_sdf(
     )
 
 
+def write_record_mol(path: Path, writer: str, record: str, value: str) -> Path:
+    """Write a single molecule with one record to an sdf.
+
+    Args:
+        path: where to write the sdf
+        writer: "rdkitV2000", "rdkitV3000", or "sendoff" to append the record
+            to an RDKit V2000 block
+        record: the record name
+        value: the record value
+
+    Returns:
+        The path.
+    """
+    mol = Chem.MolFromSmiles("C")
+    if writer.startswith("rdkit"):
+        mol.SetProp(record, value)
+        return write_mols(path, mol, v3000=writer == "rdkitV3000")
+    blocks = list(parse_sdf(write_mols(path, mol)))
+    with open(path, "w") as handle:
+        for block in blocks:
+            block.append_record(record, value)
+            block.write(handle)
+    return path
+
+
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
 def single_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with only record value metadata to an sdf.
@@ -227,25 +252,7 @@ def single_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     Returns:
         Path to the sdf
     """
-    record, value = ("Record", "Value")
-    mol = Chem.MolFromSmiles("C")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.write(mol)
-    if request.param.startswith("rdkit"):
-        mols = list(Chem.SDMolSupplier(str(outpath)))
-        with Chem.SDWriter(str(outpath)) as outh:
-            sdw.SetForceV3000(request.param == "rdkitV3000")
-            for mol in mols:
-                mol.SetProp(record, value)
-                outh.write(mol)
-    elif request.param == "sendoff":
-        mols = list(parse_sdf(outpath))
-        with open(outpath, "w") as outh:
-            for mol in mols:
-                mol.append_record(record, value)
-                mol.write(outh)
-    return outpath
+    return write_record_mol(tmp_path / "input.sdf", request.param, "Record", "Value")
 
 
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
@@ -259,25 +266,7 @@ def single_delimiter_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> 
     Returns:
         Path to the sdf
     """
-    record, value = ("Record", "$$$$")
-    mol = Chem.MolFromSmiles("C")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.write(mol)
-    if request.param.startswith("rdkit"):
-        mols = list(Chem.SDMolSupplier(str(outpath)))
-        with Chem.SDWriter(str(outpath)) as outh:
-            sdw.SetForceV3000(request.param == "rdkitV3000")
-            for mol in mols:
-                mol.SetProp(record, value)
-                outh.write(mol)
-    elif request.param == "sendoff":
-        mols = list(parse_sdf(outpath))
-        with open(outpath, "w") as outh:
-            for mol in mols:
-                mol.append_record(record, value)
-                mol.write(outh)
-    return outpath
+    return write_record_mol(tmp_path / "input.sdf", request.param, "Record", "$$$$")
 
 
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
@@ -291,25 +280,9 @@ def single_multiline_record_mol_sdf(request: FixtureRequest, tmp_path: Path) -> 
     Returns:
         Path to the sdf
     """
-    record, value = ("Record", str.join("\n", map(str, [0, 1, 2, 3])))
-    mol = Chem.MolFromSmiles("C")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.write(mol)
-    if request.param.startswith("rdkit"):
-        mols = list(Chem.SDMolSupplier(str(outpath)))
-        with Chem.SDWriter(str(outpath)) as outh:
-            sdw.SetForceV3000(request.param == "rdkitV3000")
-            for mol in mols:
-                mol.SetProp(record, value)
-                outh.write(mol)
-    elif request.param == "sendoff":
-        mols = list(parse_sdf(outpath))
-        with open(outpath, "w") as outh:
-            for mol in mols:
-                mol.append_record(record, value)
-                mol.write(outh)
-    return outpath
+    return write_record_mol(
+        tmp_path / "input.sdf", request.param, "Record", "0\n1\n2\n3"
+    )
 
 
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
@@ -323,25 +296,7 @@ def single_empty_string_record_mol_sdf(request: FixtureRequest, tmp_path: Path) 
     Returns:
         Path to the sdf
     """
-    record, value = ("Record", "")
-    mol = Chem.MolFromSmiles("C")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.write(mol)
-    if request.param.startswith("rdkit"):
-        mols = list(Chem.SDMolSupplier(str(outpath)))
-        with Chem.SDWriter(str(outpath)) as outh:
-            sdw.SetForceV3000(request.param == "rdkitV3000")
-            for mol in mols:
-                mol.SetProp(record, value)
-                outh.write(mol)
-    elif request.param == "sendoff":
-        mols = list(parse_sdf(outpath))
-        with open(outpath, "w") as outh:
-            for mol in mols:
-                mol.append_record(record, value)
-                mol.write(outh)
-    return outpath
+    return write_record_mol(tmp_path / "input.sdf", request.param, "Record", "")
 
 
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
@@ -357,25 +312,7 @@ def single_multiline_record_name_mol_sdf(
     Returns:
         Path to the sdf
     """
-    record, value = ("Rec\nord", "Value")
-    mol = Chem.MolFromSmiles("C")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.write(mol)
-    if request.param.startswith("rdkit"):
-        mols = list(Chem.SDMolSupplier(str(outpath)))
-        with Chem.SDWriter(str(outpath)) as outh:
-            sdw.SetForceV3000(request.param == "rdkitV3000")
-            for mol in mols:
-                mol.SetProp(record, value)
-                outh.write(mol)
-    elif request.param == "sendoff":
-        mols = list(parse_sdf(outpath))
-        with open(outpath, "w") as outh:
-            for mol in mols:
-                mol.append_record(record, value)
-                mol.write(outh)
-    return outpath
+    return write_record_mol(tmp_path / "input.sdf", request.param, "Rec\nord", "Value")
 
 
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
@@ -391,25 +328,7 @@ def single_right_angle_bracket_record_name_mol_sdf(
     Returns:
         Path to the sdf
     """
-    record, value = ("Rec>ord", "Value")
-    mol = Chem.MolFromSmiles("C")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.write(mol)
-    if request.param.startswith("rdkit"):
-        mols = list(Chem.SDMolSupplier(str(outpath)))
-        with Chem.SDWriter(str(outpath)) as outh:
-            sdw.SetForceV3000(request.param == "rdkitV3000")
-            for mol in mols:
-                mol.SetProp(record, value)
-                outh.write(mol)
-    elif request.param == "sendoff":
-        mols = list(parse_sdf(outpath))
-        with open(outpath, "w") as outh:
-            for mol in mols:
-                mol.append_record(record, value)
-                mol.write(outh)
-    return outpath
+    return write_record_mol(tmp_path / "input.sdf", request.param, "Rec>ord", "Value")
 
 
 V3000_ATOMS = [
