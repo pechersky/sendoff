@@ -15,9 +15,11 @@ import pytest
 
 from sendoff.ctable import (
     CTable,
+    CTableError,
     IndicesDuplicateError,
     IndicesMismatchError,
     IndicesOutOfOrderError,
+    MalformedCTableError,
 )
 from sendoff.sdblock import Pathy, SDBlock, parse_sdf, write_sdf
 
@@ -1440,7 +1442,10 @@ def test_single_large_atom_index_strict_invalid_atom_indices(
     """
     mol: SDBlock[str] = next(parse_sdf(single_large_atom_index_v3000_sdf))
     ctable = mol.ctable()
-    with pytest.raises(IndicesOutOfOrderError, match="atoms"):
+    with pytest.raises(
+        IndicesOutOfOrderError,
+        match="CTable line 8: atom index 2101315825 is out of order",
+    ):
         ctable.valid_atom_indices(strict=True)
 
 
@@ -1475,7 +1480,10 @@ def test_single_large_bond_index_strict_invalid_bond_indices(
     """
     mol: SDBlock[str] = next(parse_sdf(single_large_bond_index_v3000_sdf))
     ctable = mol.ctable()
-    with pytest.raises(IndicesOutOfOrderError, match="bonds"):
+    with pytest.raises(
+        IndicesOutOfOrderError,
+        match="CTable line 19: bond index 2101315886 is out of order",
+    ):
         ctable.valid_bond_indices(strict=True)
 
 
@@ -1491,7 +1499,10 @@ def test_single_missing_atom_line_invalid_atom_indices(
     """
     mol: SDBlock[str] = next(parse_sdf(single_missing_atom_line_v3000_sdf))
     ctable = mol.ctable()
-    with pytest.raises(IndicesMismatchError, match="fewer atom lines than count line"):
+    with pytest.raises(
+        IndicesMismatchError,
+        match=r"fewer atom lines \(9\) than the counts line declares \(10\)",
+    ):
         ctable.valid_atom_indices()
 
 
@@ -1507,7 +1518,10 @@ def test_single_extra_atom_line_invalid_atom_indices(
     """
     mol: SDBlock[str] = next(parse_sdf(single_extra_atom_line_v3000_sdf))
     ctable = mol.ctable()
-    with pytest.raises(IndicesMismatchError, match="more atom lines than count line"):
+    with pytest.raises(
+        IndicesMismatchError,
+        match=r"more atom lines \(9\) than the counts line declares \(8\)",
+    ):
         ctable.valid_atom_indices()
 
 
@@ -1523,7 +1537,10 @@ def test_single_missing_bond_line_invalid_atom_indices(
     """
     mol: SDBlock[str] = next(parse_sdf(single_missing_bond_line_v3000_sdf))
     ctable = mol.ctable()
-    with pytest.raises(IndicesMismatchError, match="fewer bond lines than count line"):
+    with pytest.raises(
+        IndicesMismatchError,
+        match=r"fewer bond lines \(9\) than the counts line declares \(10\)",
+    ):
         ctable.valid_bond_indices()
 
 
@@ -1539,7 +1556,10 @@ def test_single_extra_bond_line_invalid_atom_indices(
     """
     mol: SDBlock[str] = next(parse_sdf(single_extra_bond_line_v3000_sdf))
     ctable = mol.ctable()
-    with pytest.raises(IndicesMismatchError, match="more bond lines than count line"):
+    with pytest.raises(
+        IndicesMismatchError,
+        match=r"more bond lines \(9\) than the counts line declares \(8\)",
+    ):
         ctable.valid_bond_indices()
 
 
@@ -1553,7 +1573,9 @@ def test_single_duplicate_atom_index_invalid_atom_indices(
     """
     mol: SDBlock[str] = next(parse_sdf(single_duplicate_atom_index_v3000_sdf))
     ctable = mol.ctable()
-    with pytest.raises(IndicesDuplicateError, match="atoms"):
+    with pytest.raises(
+        IndicesDuplicateError, match="CTable line 15: atom index 1 is a duplicate"
+    ):
         ctable.valid_atom_indices()
 
 
@@ -1567,7 +1589,9 @@ def test_single_duplicate_bond_index_invalid_bond_indices(
     """
     mol: SDBlock[str] = next(parse_sdf(single_duplicate_bond_index_v3000_sdf))
     ctable = mol.ctable()
-    with pytest.raises(IndicesDuplicateError, match="bonds"):
+    with pytest.raises(
+        IndicesDuplicateError, match="CTable line 26: bond index 1 is a duplicate"
+    ):
         ctable.valid_bond_indices()
 
 
@@ -1602,7 +1626,9 @@ def test_single_shuffled_atom_lines_strict_invalid_atom_indices(
     """
     mol: SDBlock[str] = next(parse_sdf(single_shuffled_atom_lines_v3000_sdf))
     ctable = mol.ctable()
-    with pytest.raises(IndicesOutOfOrderError, match="atoms"):
+    with pytest.raises(
+        IndicesOutOfOrderError, match="CTable line 14: atom index 8 is out of order"
+    ):
         ctable.valid_atom_indices(strict=True)
 
 
@@ -1637,7 +1663,9 @@ def test_single_shuffled_bond_lines_strict_invalid_bond_indices(
     """
     mol: SDBlock[str] = next(parse_sdf(single_shuffled_bond_lines_v3000_sdf))
     ctable = mol.ctable()
-    with pytest.raises(IndicesOutOfOrderError, match="bonds"):
+    with pytest.raises(
+        IndicesOutOfOrderError, match="CTable line 25: bond index 8 is out of order"
+    ):
         ctable.valid_bond_indices(strict=True)
 
 
@@ -1771,7 +1799,10 @@ def test_single_duplicate_atom_index_invalid_atom_indices_even_renumbering(
         single_duplicate_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
     """
     mol: SDBlock[str] = next(parse_sdf(single_duplicate_atom_index_v3000_sdf))
-    with pytest.raises(IndicesDuplicateError, match="atom index mapping in bond"):
+    with pytest.raises(
+        IndicesDuplicateError,
+        match="CTable line 19: bond atom 1 is the index of several atoms",
+    ):
         mol.renumber_indices()
 
 
@@ -1888,89 +1919,246 @@ def v3000_block(
     return next(SDBlock.from_lines(text.splitlines()))
 
 
-@pytest.mark.parametrize(
-    "text, error",
-    [
-        ("t\nM  END\n$$$$\n", ValueError),
-        (V3000_HEADER + "M  END\n$$$$\n", ValueError),
-        ("t\n\n\n   \nM  END\n$$$$\n", IndexError),
-        ("t\n\n\n  0  0  0     0  0            999 V9\nM  END\n$$$$\n", KeyError),
-        ("t\n\n\n  x  0  0     0  0            999 V2000\nM  END\n$$$$\n", ValueError),
-    ],
-)
-def test_malformed_ctable_header_raises_exception(
-    text: str, error: type[Exception]
-) -> None:
-    """Malformed CTable headers raise ordinary exceptions, not Rust panics.
+CTABLE_OPERATIONS = [
+    "ctable",
+    "num_atoms",
+    "num_bonds",
+    "valid_atom_indices",
+    "valid_bond_indices",
+    "renumber_indices",
+    "fix_counts",
+]
+
+
+def run_ctable_operation(block: SDBlock[str], operation: str) -> object:
+    """Run an SDBlock CTable operation, or a validation on the block's CTable.
 
     Args:
-        text: SDF text with a malformed CTable
-        error: the expected exception type
+        block: the block to read or change
+        operation: one of CTABLE_OPERATIONS
+
+    Returns:
+        What the operation returns.
     """
-    block = next(SDBlock.from_lines(text.splitlines()))
-    with pytest.raises(error):
-        block.num_atoms()
+    if operation.startswith("valid_"):
+        return getattr(block.ctable(), operation)()
+    return getattr(block, operation)()
 
 
-def test_malformed_v3000_counts_raises_index_error() -> None:
-    """A V3000 counts line without atom and bond fields raises IndexError."""
-    with pytest.raises(IndexError):
-        v3000_block(counts="M  V30 COUNTS 1").num_atoms()
+V3000_CTAB = "M  V30 BEGIN CTAB\n"
 
 
+@pytest.mark.parametrize("operation", CTABLE_OPERATIONS)
 @pytest.mark.parametrize(
-    "atom, bond, error",
+    "header, message",
     [
-        ("M  V30", "M  V30 1 1 1 2", IndexError),
-        ("M  V30 x C 0 0 0 0", "M  V30 1 1 1 2", ValueError),
-        ("M  V30 1 C 0 0 0 0", "M  V30", IndexError),
-        ("M  V30 1 C 0 0 0 0", "M  V30 x 1 1 2", ValueError),
+        ("t\n", "CTable line 3: missing; the table has only 2 lines"),
+        (V3000_HEADER, "CTable line 6: missing; the table has only 5 lines"),
+        ("t\n\n\n   \n", "CTable line 4: no format field"),
+        (
+            "t\n\n\n  0  0  0     0  0            999 V9\n",
+            'CTable line 4: format "V9" is not V2000 or V3000',
+        ),
+        (
+            "t\n\n\n  x  0  0     0  0            999 V2000\n",
+            'CTable line 4: atom count "  x" is not an integer',
+        ),
+        (
+            "t\n\n\n  0  y  0     0  0            999 V2000\n",
+            'CTable line 4: bond count "  y" is not an integer',
+        ),
+        (
+            V3000_HEADER + V3000_CTAB + "M  V30 COUNTS\n",
+            "CTable line 6: no atom count field",
+        ),
+        (
+            V3000_HEADER + V3000_CTAB + "M  V30 COUNTS 1\n",
+            "CTable line 6: no bond count field",
+        ),
+        (
+            V3000_HEADER + V3000_CTAB + "M  V30 COUNTS x 0 0 0 0\n",
+            'CTable line 6: atom count "x" is not an integer',
+        ),
+        (
+            V3000_HEADER + V3000_CTAB + "M  V30 COUNTS 0 y 0 0 0\n",
+            'CTable line 6: bond count "y" is not an integer',
+        ),
     ],
 )
-def test_malformed_index_lines_raise_exception(
-    atom: str, bond: str, error: type[Exception]
+def test_malformed_headers_fail_every_operation(
+    header: str, message: str, operation: str
 ) -> None:
-    """Atom and bond lines without integer indices raise ordinary exceptions.
+    """Every CTable operation reports a malformed header line by number.
 
     Args:
-        atom: the first atom line
-        bond: the only bond line
-        error: the expected exception type
+        header: the CTable lines before M  END
+        message: the expected error message
+        operation: one of CTABLE_OPERATIONS
     """
-    ctable = v3000_block(atom=atom, bond=bond).ctable()
-    with pytest.raises(error):
-        ctable.valid_atom_indices()
-        ctable.valid_bond_indices()
+    text = header + "M  END\n$$$$\n"
+    block = next(SDBlock.from_sdf(text))
+    with pytest.raises(MalformedCTableError) as raised:
+        run_ctable_operation(block, operation)
+    assert str(raised.value) == message
+    assert block.to_sdf() == text
 
 
+RENUMBERING = {"renumber_indices"}
+ATOM_INDICES = {"valid_atom_indices", "renumber_indices"}
+BOND_INDICES = {"valid_bond_indices", "renumber_indices"}
+CTableErrors = dict[str, tuple[type[Exception], str]]
+
+
+def malformed(operations: set[str], message: str) -> CTableErrors:
+    """Expect each of `operations` to raise MalformedCTableError(message).
+
+    Args:
+        operations: the operations that read the malformed line
+        message: the expected error message
+
+    Returns:
+        The expected error of each failing operation.
+    """
+    return {operation: (MalformedCTableError, message) for operation in operations}
+
+
+def ambiguous_bond(bond: str) -> tuple[dict[str, str], CTableErrors]:
+    """Expect errors for a bond to atom 2 when two atoms have index 2.
+
+    Args:
+        bond: the bond line, which names atom 2
+
+    Returns:
+        v3000_block arguments and the expected error of each failing operation.
+    """
+    return {"atom": "M  V30 2 C 0 0 0 0", "bond": bond}, {
+        "valid_atom_indices": (
+            IndicesDuplicateError,
+            "CTable line 9: atom index 2 is a duplicate",
+        ),
+        "renumber_indices": (
+            IndicesDuplicateError,
+            "CTable line 12: bond atom 2 is the index of several atoms",
+        ),
+    }
+
+
+@pytest.mark.parametrize("operation", CTABLE_OPERATIONS)
 @pytest.mark.parametrize(
-    "atom, bond, error",
+    "lines, errors",
     [
-        ("M  V30", "M  V30 1 1 1 2", IndexError),
-        ("M  V30 x C 0 0 0 0", "M  V30 1 1 1 2", ValueError),
-        ("M  V30 1 C 0 0 0 0", "M  V30 1 1 1", IndexError),
-        ("M  V30 1 C 0 0 0 0", "M  V30 1 1 1 x", ValueError),
-        ("M  V30 1 C 0 0 0 0", "M  V30 1 1 1 9", IndexError),
+        (
+            {"atom": "M  V30"},
+            malformed(ATOM_INDICES, "CTable line 8: no atom index field"),
+        ),
+        (
+            {"atom": "M  V30 x C 0 0 0 0"},
+            malformed(ATOM_INDICES, 'CTable line 8: atom index "x" is not an integer'),
+        ),
+        (
+            {"bond": "M  V30"},
+            malformed(BOND_INDICES, "CTable line 12: no bond index field"),
+        ),
+        (
+            {"bond": "M  V30 x 1 1 2"},
+            malformed(BOND_INDICES, 'CTable line 12: bond index "x" is not an integer'),
+        ),
+        (
+            {"bond": "M  V30 1"},
+            malformed(RENUMBERING, "CTable line 12: no bond type field"),
+        ),
+        (
+            {"bond": "M  V30 1 1"},
+            malformed(RENUMBERING, "CTable line 12: no first bond atom field"),
+        ),
+        (
+            {"bond": "M  V30 1 1 1"},
+            malformed(RENUMBERING, "CTable line 12: no second bond atom field"),
+        ),
+        (
+            {"bond": "M  V30 1 1 x 2"},
+            malformed(
+                RENUMBERING, 'CTable line 12: first bond atom "x" is not an integer'
+            ),
+        ),
+        (
+            {"bond": "M  V30 1 1 1 x"},
+            malformed(
+                RENUMBERING, 'CTable line 12: second bond atom "x" is not an integer'
+            ),
+        ),
+        (
+            {"bond": "M  V30 1 1 9 2"},
+            malformed(RENUMBERING, "CTable line 12: bond atom 9 is not an atom index"),
+        ),
+        (
+            {"bond": "M  V30 1 1 1 9"},
+            malformed(RENUMBERING, "CTable line 12: bond atom 9 is not an atom index"),
+        ),
         # A duplicated atom index outranks a missing one in the same bond.
-        ("M  V30 2 C 0 0 0 0", "M  V30 1 1 9 2", IndicesDuplicateError),
-        ("M  V30 2 C 0 0 0 0", "M  V30 1 1 2 9", IndicesDuplicateError),
+        ambiguous_bond("M  V30 1 1 9 2"),
+        ambiguous_bond("M  V30 1 1 2 9"),
     ],
 )
-def test_malformed_renumber_input_raises_exception(
-    atom: str, bond: str, error: type[Exception]
+def test_malformed_lines_fail_the_operations_that_read_them(
+    lines: dict[str, str], errors: CTableErrors, operation: str
 ) -> None:
-    """Renumbering malformed or dangling lines raises and leaves the block intact.
+    """Operations that read a bad atom or bond line report it; the rest work.
+
+    Failing operations leave the block as it was.
 
     Args:
-        atom: the first atom line
-        bond: the only bond line
-        error: the expected exception type
+        lines: v3000_block arguments that replace an atom or bond line
+        errors: the expected error type and message of each failing operation
+        operation: one of CTABLE_OPERATIONS
     """
-    block = v3000_block(atom=atom, bond=bond)
-    before = block.ctable().lines
-    with pytest.raises(error):
-        block.renumber_indices()
-    assert block.ctable().lines == before
+    block = v3000_block(**lines)
+    text = block.to_sdf()
+    if operation not in errors:
+        run_ctable_operation(block, operation)
+        return
+    error, message = errors[operation]
+    with pytest.raises(error) as raised:
+        run_ctable_operation(block, operation)
+    assert type(raised.value) is error
+    assert str(raised.value) == message
+    assert block.to_sdf() == text
+
+
+@pytest.mark.parametrize(
+    "operation, message",
+    [
+        ("valid_atom_indices", "validating atom indices"),
+        ("valid_bond_indices", "validating bond indices"),
+        ("renumber_indices", "renumbering"),
+        ("fix_counts", "fixing counts"),
+    ],
+)
+def test_v3000_operations_name_themselves_on_v2000_tables(
+    operation: str, message: str
+) -> None:
+    """V3000-only operations raise NotImplementedError, not a CTableError.
+
+    Args:
+        operation: one of CTABLE_OPERATIONS
+        message: the operation's name in the error message
+    """
+    text = "t\n\n\n  0  0  0     0  0            999 V2000\nM  END\n$$$$\n"
+    with pytest.raises(NotImplementedError) as raised:
+        run_ctable_operation(next(SDBlock.from_sdf(text)), operation)
+    assert str(raised.value) == f"{message} is only implemented for V3000 tables"
+
+
+def test_ctable_errors_are_value_errors() -> None:
+    """Every error about a table's contents is a CTableError and a ValueError."""
+    for error in (
+        MalformedCTableError,
+        IndicesDuplicateError,
+        IndicesMismatchError,
+        IndicesOutOfOrderError,
+    ):
+        assert issubclass(error, CTableError)
+    assert issubclass(CTableError, ValueError)
 
 
 def test_renumber_slices_atom_lines_by_character() -> None:
@@ -2032,25 +2220,34 @@ def test_fix_counts_reads_section_markers() -> None:
     "operation", ["valid_indices", "renumber_indices", "fix_counts"]
 )
 def test_sections_need_one_begin_and_one_end_line(operation: str, section: str) -> None:
-    """An unterminated or repeated section raises ValueError and changes nothing.
+    """An unterminated or repeated section is malformed and changes nothing.
 
     Args:
         operation: the method to call; valid_indices validates the section
         section: the section to break
     """
     text = v3000_block().to_sdf()
-    begin, end = f"M  V30 BEGIN {section}\n", f"M  V30 END {section}\n"
+    begin, end = f"M  V30 BEGIN {section}", f"M  V30 END {section}"
+    # The repeated begin line follows the section's end line.
+    begin_line, repeat_line = (7, 11) if section == "ATOM" else (11, 14)
     for broken, message in [
-        (text.replace(end, ""), f'no "{end.strip()}" line'),
-        (text.replace(end, end + begin + end), f'more than one "{begin.strip()}"'),
+        (
+            text.replace(end + "\n", ""),
+            f'CTable line {begin_line}: "{begin}" has no "{end}" line',
+        ),
+        (
+            text.replace(end + "\n", f"{end}\n{begin}\n{end}\n"),
+            f'CTable line {repeat_line}: more than one "{begin}" line in the root CTAB',
+        ),
     ]:
         block = next(SDBlock.from_sdf(broken))
         if operation == "valid_indices":
             call = getattr(block.ctable(), f"valid_{section.lower()}_indices")
         else:
             call = getattr(block, operation)
-        with pytest.raises(ValueError, match=message):
+        with pytest.raises(MalformedCTableError) as raised:
             call()
+        assert str(raised.value) == message
         assert block.to_sdf() == broken
 
 

@@ -1,10 +1,12 @@
+use pyo3::exceptions::PyNotImplementedError;
 use pyo3::prelude::*;
 
-use crate::core::ctable;
+use crate::core::ctable::{self, CTableError, Section};
 
 pyo3::import_exception!(sendoff.ctable, IndicesDuplicateError);
 pyo3::import_exception!(sendoff.ctable, IndicesMismatchError);
 pyo3::import_exception!(sendoff.ctable, IndicesOutOfOrderError);
+pyo3::import_exception!(sendoff.ctable, MalformedCTableError);
 
 /// Handle a Connection table (CTAB) from a single molecule block.
 ///
@@ -14,6 +16,11 @@ pyo3::import_exception!(sendoff.ctable, IndicesOutOfOrderError);
 /// The counts line is parsed to infer the format and the number of atoms.
 /// Note, the number of atoms in the counts line might not actually
 /// be the number of lines of atoms.
+///
+/// Errors about the table's contents are sendoff.ctable.CTableError, a
+/// ValueError; MalformedCTableError names the CTable line (the title is
+/// line 1). Operations a table's format or constructs do not support raise
+/// NotImplementedError.
 #[pyclass(name = "CTable", module = "sendoff.native")]
 pub(crate) struct PyCTable {
     inner: ctable::CTable,
@@ -27,6 +34,10 @@ impl PyCTable {
     ///     lines: an Iterable of str that comprises the CTAB
     ///         The title line is parsed in by the SDBlock, and should
     ///         be supplied as the first in lines.
+    ///
+    /// Raises:
+    ///     MalformedCTableError: if the table is shorter than its header,
+    ///         or its format or counts cannot be read
     #[new]
     #[pyo3(signature = (lines: "Iterable[str]"))]
     fn new(lines: &Bound<'_, PyAny>) -> PyResult<Self> {
@@ -65,21 +76,22 @@ impl PyCTable {
     ///     strict: the indices start with 1, and increment by one.
     ///
     /// Raises:
-    ///     IndicesDuplicateError: if an atom line met has an index seen before
+    ///     MalformedCTableError: if an atom line has no integer index, the
+    ///         ATOM section has no END line, or the root CTAB has more than
+    ///         one ATOM section
+    ///     IndicesDuplicateError: if an atom line has an index seen before
     ///     IndicesMismatchError: if number of atom lines does not match count line
     ///     IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
     ///     NotImplementedError: if trying to validate a V2000 format table
-    ///     ValueError: if the ATOM section has no END line, or the root
-    ///         CTAB has more than one ATOM section
     ///
     /// Returns:
     ///     If all the checks pass, return True.
     #[pyo3(signature = (strict: "bool" = false))]
     fn valid_atom_indices(&self, strict: bool) -> PyResult<bool> {
         self.inner
-            .valid_atom_indices(strict)
+            .valid_indices(Section::Atom, strict)
             .map(|()| true)
-            .map_err(error_to_py)
+            .map_err(PyErr::from)
     }
 
     /// Validate that the bond lines match the counts line.
@@ -92,21 +104,22 @@ impl PyCTable {
     ///     strict: the indices start with 1, and increment by one.
     ///
     /// Raises:
-    ///     IndicesDuplicateError: if an bond line met has an index seen before
+    ///     MalformedCTableError: if a bond line has no integer index, the
+    ///         BOND section has no END line, or the root CTAB has more than
+    ///         one BOND section
+    ///     IndicesDuplicateError: if a bond line has an index seen before
     ///     IndicesMismatchError: if number of bond lines does not match count line
     ///     IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
     ///     NotImplementedError: if trying to validate a V2000 format table
-    ///     ValueError: if the BOND section has no END line, or the root
-    ///         CTAB has more than one BOND section
     ///
     /// Returns:
     ///     If all the checks pass, return True.
     #[pyo3(signature = (strict: "bool" = false))]
     fn valid_bond_indices(&self, strict: bool) -> PyResult<bool> {
         self.inner
-            .valid_bond_indices(strict)
+            .valid_indices(Section::Bond, strict)
             .map(|()| true)
-            .map_err(error_to_py)
+            .map_err(PyErr::from)
     }
 
     /// Renumber the atom and bond indices in the block.
@@ -129,15 +142,17 @@ impl PyCTable {
     /// atom or bond lines and CTABs nested in RGROUP or TEMPLATE blocks.
     ///
     /// Raises:
+    ///     MalformedCTableError: if an atom or bond line is missing a field
+    ///         or has a non-integer index, a bond refers to an atom index that
+    ///         no atom line has, an ATOM or BOND section has no END line, or
+    ///         the root CTAB has more than one of either
     ///     IndicesDuplicateError: if there was a duplicate atom index, and it was used
     ///         somewhere in a bond line. Raised, because it is not clear which of the
     ///         original indices to use in the remapping.
     ///     NotImplementedError: if trying to renumber in a V2000 format table,
     ///         or a table that renumbering would corrupt, as above
-    ///     ValueError: if an ATOM or BOND section has no END line, or the root
-    ///         CTAB has more than one of either
     fn renumber_indices(&mut self) -> PyResult<()> {
-        self.inner.renumber_indices().map_err(error_to_py)
+        Ok(self.inner.renumber_indices()?)
     }
 
     /// Set the counts line to the number of atom and bond lines.
@@ -147,18 +162,19 @@ impl PyCTable {
     /// adding or removing atom or bond lines.
     ///
     /// Raises:
+    ///     MalformedCTableError: if the counts line has no atom or bond count
+    ///         field, an ATOM or BOND section has no END line, or the root
+    ///         CTAB has more than one of either
     ///     NotImplementedError: for a V2000 format table, "-" continued atom
     ///         or bond lines, or CTABs nested in RGROUP or TEMPLATE blocks
-    ///     ValueError: if an ATOM or BOND section has no END line, or the root
-    ///         CTAB has more than one of either
     fn fix_counts(&mut self) -> PyResult<()> {
-        self.inner.fix_counts().map_err(error_to_py)
+        Ok(self.inner.fix_counts()?)
     }
 }
 
 impl PyCTable {
     pub(crate) fn from_lines(lines: Vec<String>) -> PyResult<Self> {
-        let inner = ctable::CTable::parse(lines).map_err(error_to_py)?;
+        let inner = ctable::CTable::parse(lines)?;
         Ok(Self { inner })
     }
 
@@ -175,47 +191,21 @@ impl PyCTable {
     }
 }
 
-/// Map a CTable error to its Python exception.
-///
-/// Truncated tables raise ValueError rather than the StopIteration of the
-/// old pure-Python parser, which PEP 479 would turn into RuntimeError inside
-/// generators.
-pub(crate) fn error_to_py(error: ctable::CTableError) -> PyErr {
-    use pyo3::exceptions::{PyIndexError, PyKeyError, PyNotImplementedError, PyValueError};
-    match error {
-        ctable::CTableError::Truncated { needed, found } => PyValueError::new_err(format!(
-            "truncated CTable: needs at least {needed} lines, found {found}"
-        )),
-        ctable::CTableError::MissingField(name) => {
-            PyIndexError::new_err(format!("CTable line has no {name} field"))
-        }
-        ctable::CTableError::InvalidInteger(message) => PyValueError::new_err(message),
-        ctable::CTableError::UnknownFormat(token) => PyKeyError::new_err(token),
-        ctable::CTableError::NotImplemented => PyNotImplementedError::new_err(()),
-        ctable::CTableError::MissingLine(marker) => {
-            PyValueError::new_err(format!("CTable has no {marker:?} line"))
-        }
-        ctable::CTableError::RepeatedLine(marker) => {
-            PyValueError::new_err(format!("CTable has more than one {marker:?} line"))
-        }
-        ctable::CTableError::Unsupported {
-            operation,
-            construct,
-        } => {
-            PyNotImplementedError::new_err(format!("{operation} does not support {construct} yet"))
-        }
-        ctable::CTableError::OutOfOrder(noun) => {
-            IndicesOutOfOrderError::new_err(format!("{noun}s"))
-        }
-        ctable::CTableError::Duplicate(noun) => IndicesDuplicateError::new_err(format!("{noun}s")),
-        ctable::CTableError::AmbiguousAtom => {
-            IndicesDuplicateError::new_err("atom index mapping in bond")
-        }
-        ctable::CTableError::Fewer(noun) => {
-            IndicesMismatchError::new_err(format!("fewer {noun} lines than count line"))
-        }
-        ctable::CTableError::More(noun) => {
-            IndicesMismatchError::new_err(format!("more {noun} lines than count line"))
+impl From<CTableError> for PyErr {
+    fn from(error: CTableError) -> Self {
+        let message = error.to_string();
+        match error {
+            CTableError::Malformed { .. } => MalformedCTableError::new_err(message),
+            CTableError::NotImplemented(_) | CTableError::Unsupported { .. } => {
+                PyNotImplementedError::new_err(message)
+            }
+            CTableError::OutOfOrder { .. } => IndicesOutOfOrderError::new_err(message),
+            CTableError::Duplicate { .. } | CTableError::AmbiguousAtom { .. } => {
+                IndicesDuplicateError::new_err(message)
+            }
+            CTableError::Fewer { .. } | CTableError::More { .. } => {
+                IndicesMismatchError::new_err(message)
+            }
         }
     }
 }

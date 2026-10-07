@@ -56,6 +56,11 @@ class CTable:
     The counts line is parsed to infer the format and the number of atoms.
     Note, the number of atoms in the counts line might not actually
     be the number of lines of atoms.
+
+    Errors about the table's contents are sendoff.ctable.CTableError, a
+    ValueError; MalformedCTableError names the CTable line (the title is
+    line 1). Operations a table's format or constructs do not support raise
+    NotImplementedError.
     """
 
     def __new__(cls, /, lines: Iterable[str]) -> CTable:
@@ -66,6 +71,10 @@ class CTable:
             lines: an Iterable of str that comprises the CTAB
                 The title line is parsed in by the SDBlock, and should
                 be supplied as the first in lines.
+
+        Raises:
+            MalformedCTableError: if the table is shorter than its header,
+                or its format or counts cannot be read
         """
 
     def fix_counts(self, /) -> None:
@@ -77,10 +86,11 @@ class CTable:
         adding or removing atom or bond lines.
 
         Raises:
+            MalformedCTableError: if the counts line has no atom or bond count
+                field, an ATOM or BOND section has no END line, or the root
+                CTAB has more than one of either
             NotImplementedError: for a V2000 format table, "-" continued atom
                 or bond lines, or CTABs nested in RGROUP or TEMPLATE blocks
-            ValueError: if an ATOM or BOND section has no END line, or the root
-                CTAB has more than one of either
         """
 
     @property
@@ -123,13 +133,15 @@ class CTable:
         atom or bond lines and CTABs nested in RGROUP or TEMPLATE blocks.
 
         Raises:
+            MalformedCTableError: if an atom or bond line is missing a field
+                or has a non-integer index, a bond refers to an atom index that
+                no atom line has, an ATOM or BOND section has no END line, or
+                the root CTAB has more than one of either
             IndicesDuplicateError: if there was a duplicate atom index, and it was used
                 somewhere in a bond line. Raised, because it is not clear which of the
                 original indices to use in the remapping.
             NotImplementedError: if trying to renumber in a V2000 format table,
                 or a table that renumbering would corrupt, as above
-            ValueError: if an ATOM or BOND section has no END line, or the root
-                CTAB has more than one of either
         """
 
     def valid_atom_indices(self, /, strict: bool = False) -> bool:
@@ -144,12 +156,13 @@ class CTable:
             strict: the indices start with 1, and increment by one.
 
         Raises:
-            IndicesDuplicateError: if an atom line met has an index seen before
+            MalformedCTableError: if an atom line has no integer index, the
+                ATOM section has no END line, or the root CTAB has more than
+                one ATOM section
+            IndicesDuplicateError: if an atom line has an index seen before
             IndicesMismatchError: if number of atom lines does not match count line
             IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
             NotImplementedError: if trying to validate a V2000 format table
-            ValueError: if the ATOM section has no END line, or the root
-                CTAB has more than one ATOM section
 
         Returns:
             If all the checks pass, return True.
@@ -167,12 +180,13 @@ class CTable:
             strict: the indices start with 1, and increment by one.
 
         Raises:
-            IndicesDuplicateError: if an bond line met has an index seen before
+            MalformedCTableError: if a bond line has no integer index, the
+                BOND section has no END line, or the root CTAB has more than
+                one BOND section
+            IndicesDuplicateError: if a bond line has an index seen before
             IndicesMismatchError: if number of bond lines does not match count line
             IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
             NotImplementedError: if trying to validate a V2000 format table
-            ValueError: if the BOND section has no END line, or the root
-                CTAB has more than one BOND section
 
         Returns:
             If all the checks pass, return True.
@@ -286,6 +300,8 @@ class SDBlock(Generic[AnyStr]):
             lines without validation
 
         Raises:
+            MalformedCTableError: if the table is shorter than its header,
+                or its format or counts cannot be read
             NotImplementedError: for byte-backed SDBlocks
         """
 
@@ -296,7 +312,9 @@ class SDBlock(Generic[AnyStr]):
         Uses CTable.fix_counts and replaces this block's MDL lines.
 
         Raises:
-            NotImplementedError: for byte-backed SDBlocks
+            MalformedCTableError: as ctable and CTable.fix_counts raise
+            NotImplementedError: for byte-backed SDBlocks, or as
+                CTable.fix_counts raises
         """
 
     @overload
@@ -456,6 +474,9 @@ class SDBlock(Generic[AnyStr]):
         Get the number of atoms declared by the counts line.
 
         The count may differ from the number of atom lines.
+
+        Raises:
+            MalformedCTableError: as ctable raises
         """
 
     def num_bonds(self, /) -> int:
@@ -463,6 +484,9 @@ class SDBlock(Generic[AnyStr]):
         Get the number of bonds declared by the counts line.
 
         The count may differ from the number of bond lines.
+
+        Raises:
+            MalformedCTableError: as ctable raises
         """
 
     def records(self, /) -> list[tuple[AnyStr, AnyStr]]:
@@ -496,7 +520,10 @@ class SDBlock(Generic[AnyStr]):
         counts line stays as it is; see fix_counts.
 
         Raises:
-            NotImplementedError: for byte-backed SDBlocks
+            MalformedCTableError: as ctable and CTable.renumber_indices raise
+            IndicesDuplicateError: as CTable.renumber_indices raises
+            NotImplementedError: for byte-backed SDBlocks, or as
+                CTable.renumber_indices raises
         """
 
     def replace_records(

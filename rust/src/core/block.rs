@@ -615,7 +615,6 @@ impl Block {
         let found = owned.iter().take_while(|line| line.is_some()).count();
         let header = owned.each_ref().map(|line| line.as_deref().unwrap_or(""));
         ctable::parse_header(&header[..found])
-            .map(|(format, _, atoms, bonds)| (format, atoms, bonds))
     }
 }
 
@@ -799,6 +798,7 @@ fn record_name(field: &[u8]) -> Result<&[u8], MissingFieldName> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ctable::Malformed;
 
     fn block(text: &str, delimited: bool) -> Block {
         let delimiter = delimited.then(|| {
@@ -1135,9 +1135,9 @@ mod tests {
         assert_eq!(v3000.counts(), Ok((CTableFormat::V3000, 4, 5)));
         assert_eq!(
             block("t\nM  END\n", false).counts(),
-            Err(CTableError::Truncated {
-                needed: 3,
-                found: 2
+            Err(CTableError::Malformed {
+                line: 3,
+                problem: Malformed::Missing(2)
             })
         );
     }

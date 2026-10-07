@@ -4,19 +4,32 @@ from sendoff.native import CTable
 
 __all__ = [
     "CTable",
+    "CTableError",
+    "IndicesDuplicateError",
     "IndicesMismatchError",
     "IndicesOutOfOrderError",
-    "IndicesDuplicateError",
+    "MalformedCTableError",
 ]
 
 
-class IndicesMismatchError(Exception):
-    """When then number of atom or bond lines does not match the counts line."""
+class CTableError(ValueError):
+    """A connection table's contents break its format or its counts."""
 
 
-class IndicesOutOfOrderError(Exception):
-    """When then atom or bond lines are not in increasing index order."""
+class MalformedCTableError(CTableError):
+    """A connection table line breaks the format; the message names the line.
+
+    Lines are numbered from 1, the title being line 1.
+    """
 
 
-class IndicesDuplicateError(Exception):
-    """When then atom or bond lines have duplicate indices."""
+class IndicesMismatchError(CTableError):
+    """The number of atom or bond lines does not match the counts line."""
+
+
+class IndicesOutOfOrderError(CTableError):
+    """The atom or bond lines are not in increasing one-based index order."""
+
+
+class IndicesDuplicateError(CTableError):
+    """Atom or bond lines share an index."""

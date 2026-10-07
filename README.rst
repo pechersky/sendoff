@@ -70,6 +70,25 @@ it to a ``block.write`` loop. ``parse_sdf`` memory-maps regular files on local
 Linux filesystems, so write results to a new path: truncating a file while it
 is parsed crashes the process.
 
+CTable errors
+-------------
+
+``CTable`` and the ``SDBlock`` CTable methods raise the same exception for a
+problem whichever method meets it. All but ``NotImplementedError`` are
+``sendoff.ctable.CTableError``, a ``ValueError``:
+
+- ``MalformedCTableError``: a line breaks the format. The message names the
+  line, numbered from the title as line 1, as the block numbers it.
+- ``IndicesMismatchError``: fewer or more atom or bond lines than the counts
+  line declares.
+- ``IndicesOutOfOrderError``: with ``strict``, an index is not its one-based
+  position.
+- ``IndicesDuplicateError``: an index repeats, or renumbering meets a bond to
+  an atom index that several atoms share.
+- ``NotImplementedError``: the operation does not support the table: V2000
+  validation, renumbering, or ``fix_counts``, or constructs renumbering or
+  ``fix_counts`` would corrupt.
+
 Migrating from 0.1.x
 --------------------
 

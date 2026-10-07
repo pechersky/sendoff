@@ -16,7 +16,7 @@ use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyIterator, PyList, PyString,
 use crate::core::block::{self, Block, Record, Strip};
 use crate::core::mapped::MappedBlocks;
 use crate::core::scan::{Scanner, TRANSLATE_SLACK, Tail, single_block, translate_newlines};
-use crate::python::ctable::{PyCTable, error_to_py};
+use crate::python::ctable::PyCTable;
 
 /// Characters or bytes requested per `read` call, or split per batch from a
 /// mapped file. Blocks larger than this grow the scanner's buffer. Against
@@ -1186,6 +1186,8 @@ impl PySDBlock {
     ///     lines without validation
     ///
     /// Raises:
+    ///     MalformedCTableError: if the table is shorter than its header,
+    ///         or its format or counts cannot be read
     ///     NotImplementedError: for byte-backed SDBlocks
     fn ctable(&self, py: Python<'_>) -> PyResult<PyCTable> {
         self.require_text()?;
@@ -1204,16 +1206,22 @@ impl PySDBlock {
     /// Get the number of atoms declared by the counts line.
     ///
     /// The count may differ from the number of atom lines.
+    ///
+    /// Raises:
+    ///     MalformedCTableError: as ctable raises
     fn num_atoms(&self) -> PyResult<i64> {
-        let (_, atoms, _) = self.block.counts().map_err(error_to_py)?;
+        let (_, atoms, _) = self.block.counts()?;
         Ok(atoms)
     }
 
     /// Get the number of bonds declared by the counts line.
     ///
     /// The count may differ from the number of bond lines.
+    ///
+    /// Raises:
+    ///     MalformedCTableError: as ctable raises
     fn num_bonds(&self) -> PyResult<i64> {
-        let (_, _, bonds) = self.block.counts().map_err(error_to_py)?;
+        let (_, _, bonds) = self.block.counts()?;
         Ok(bonds)
     }
 
@@ -1223,7 +1231,10 @@ impl PySDBlock {
     /// counts line stays as it is; see fix_counts.
     ///
     /// Raises:
-    ///     NotImplementedError: for byte-backed SDBlocks
+    ///     MalformedCTableError: as ctable and CTable.renumber_indices raise
+    ///     IndicesDuplicateError: as CTable.renumber_indices raises
+    ///     NotImplementedError: for byte-backed SDBlocks, or as
+    ///         CTable.renumber_indices raises
     fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
         let mut ctable = self.ctable(py)?;
         ctable.renumber_indices_for_block()?;
@@ -1237,7 +1248,9 @@ impl PySDBlock {
     /// Uses CTable.fix_counts and replaces this block's MDL lines.
     ///
     /// Raises:
-    ///     NotImplementedError: for byte-backed SDBlocks
+    ///     MalformedCTableError: as ctable and CTable.fix_counts raise
+    ///     NotImplementedError: for byte-backed SDBlocks, or as
+    ///         CTable.fix_counts raises
     fn fix_counts(&mut self, py: Python<'_>) -> PyResult<()> {
         let mut ctable = self.ctable(py)?;
         ctable.fix_counts_for_block()?;
