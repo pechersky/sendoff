@@ -220,6 +220,11 @@ pub fn parse_format(line: &str) -> Option<&str> {
     fields(line).next_back()
 }
 
+/// The `\r` and `\n` characters that end `line`, if any.
+fn line_ending(line: &str) -> &str {
+    &line[line.trim_end_matches(['\r', '\n']).len()..]
+}
+
 /// Return the half-open range of raw atom lines in a CTable.
 ///
 /// The atom range starts at line seven and ends before `END ATOM` when that
@@ -431,7 +436,7 @@ impl Renumbered {
                     if !appending {
                         new_lines.pop();
                     }
-                    new_lines.push(self.counts.clone());
+                    new_lines.push(self.counts.clone() + line_ending(&line));
                 } else if appending {
                     appending = !(line.starts_with("M  V30 BEGIN ATOM")
                         || line.starts_with("M  V30 BEGIN BOND"));

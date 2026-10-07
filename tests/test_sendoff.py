@@ -1806,6 +1806,19 @@ def test_renumber_refreshes_ctable_counts() -> None:
     assert (reparsed.num_atoms, reparsed.num_bonds) == (2, 1)
 
 
+@pytest.mark.parametrize("ending", ["\n", ""])
+def test_renumber_keeps_line_endings(ending: str) -> None:
+    """Renumbering an already numbered table keeps its lines, endings included.
+
+    Args:
+        ending: what ends each line given to the CTable
+    """
+    lines = [line + ending for line in v3000_block().to_sdf().splitlines()[:-1]]
+    ctable = CTable(lines)
+    ctable.renumber_indices()
+    assert ctable.lines == lines
+
+
 def test_ctable_lines_are_a_fresh_list() -> None:
     """Each CTable.lines access is a new list that does not alias the table."""
     table = v3000_block(atom="a b 1 C").ctable()
