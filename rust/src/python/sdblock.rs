@@ -51,14 +51,16 @@ impl PySDRecordIterator {
             return Ok(None);
         }
         let block = self.block.borrow(py);
-        let result = match block.block.next_record(&mut self.pos, block.kind.strip()) {
-            Ok(Some(record)) => Namer::with(block.kind, |names| names.lookup(py, record.name))
+        let mut records = block.block.records_at(self.pos, block.kind.strip());
+        let result = match records.next() {
+            Some(Ok(record)) => Namer::with(block.kind, |names| names.lookup(py, record.name))
                 .and_then(|name| PyTuple::new(py, [name, block.kind.value(py, &record.value)?]))
                 .map_err(|error| block.noted(py, error, || reading_record(record.name)))
                 .map(Some),
-            Ok(None) => Ok(None),
-            Err(error) => Err(error.into()),
+            None => Ok(None),
+            Some(Err(error)) => Err(error.into()),
         };
+        self.pos = records.pos();
         if !matches!(result, Ok(Some(_))) {
             self.finished = true;
         }
@@ -393,10 +395,9 @@ impl PySDBlock {
     #[pyo3(signature = () -> "list[tuple[AnyStr, AnyStr]]")]
     fn records<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let list = PyList::empty(py);
-        let mut pos = 0;
         Namer::with(self.kind, |names| {
-            while let Some(record) = self.block.next_record(&mut pos, self.kind.strip())? {
-                list.append(self.record(py, names, &record)?)?;
+            for record in self.block.records(self.kind.strip()) {
+                list.append(self.record(py, names, &record?)?)?;
             }
             Ok(list)
         })
@@ -437,24 +438,22 @@ impl PySDBlock {
         let py = name.py();
         let name = self.arg_bytes(name, "record names")?;
         let strip = self.kind.strip();
-        let mut pos = 0;
         let mut found = None;
-        while let Some(header) = self.block.next_header(&mut pos, strip)? {
+        for header in self.block.headers(strip) {
+            let header = header?;
             if header.name == name {
                 found = Some(header.start);
             }
         }
-        let Some(mut start) = found else {
+        let Some(start) = found else {
             return Ok(default);
         };
-        match self.block.next_record(&mut start, strip) {
-            Ok(Some(record)) => self
-                .kind
-                .value(py, &record.value)
-                .map(Some)
-                .map_err(|error| self.noted(py, error, || reading_record(record.name))),
-            _ => unreachable!("a record was found here"),
-        }
+        let record = self.block.records_at(start, strip).next();
+        let record = record.and_then(Result::ok).expect("a record starts here");
+        self.kind
+            .value(py, &record.value)
+            .map(Some)
+            .map_err(|error| self.noted(py, error, || reading_record(record.name)))
     }
 
     /// Return the record names in input order, duplicates included.
@@ -465,10 +464,9 @@ impl PySDBlock {
     #[pyo3(signature = () -> "list[AnyStr]")]
     fn names<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let list = PyList::empty(py);
-        let strip = self.kind.strip();
-        let mut pos = 0;
         Namer::with(self.kind, |names| {
-            while let Some(header) = self.block.next_header(&mut pos, strip)? {
+            for header in self.block.headers(self.kind.strip()) {
+                let header = header?;
                 let name = names.name(py, header.name);
                 list.append(
                     name.map_err(|error| self.noted(py, error, || reading_record(header.name)))?,
@@ -480,9 +478,9 @@ impl PySDBlock {
 
     /// The number of records, duplicates included: `len(block.records())`.
     fn __len__(&self) -> PyResult<usize> {
-        let strip = self.kind.strip();
-        let (mut pos, mut count) = (0, 0);
-        while self.block.next_header(&mut pos, strip)?.is_some() {
+        let mut count = 0;
+        for header in self.block.headers(self.kind.strip()) {
+            header?;
             count += 1;
         }
         Ok(count)
@@ -566,10 +564,9 @@ impl PySDBlock {
     ///     ValueError: if a record header has no `<name>`
     fn __contains__(&self, name: &Bound<'_, PyAny>) -> PyResult<bool> {
         let name = self.arg_bytes(name, "record names")?;
-        let strip = self.kind.strip();
-        let (mut pos, mut seen) = (0, false);
-        while let Some(header) = self.block.next_header(&mut pos, strip)? {
-            seen |= header.name == name;
+        let mut seen = false;
+        for header in self.block.headers(self.kind.strip()) {
+            seen |= header?.name == name;
         }
         Ok(seen)
     }
@@ -580,11 +577,9 @@ impl PySDBlock {
     #[pyo3(signature = () -> "dict[AnyStr, AnyStr]")]
     fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
-        let strip = self.kind.strip();
-        let mut pos = 0;
         Namer::with(self.kind, |names| {
-            while let Some(record) = self.block.next_record(&mut pos, strip)? {
-                let (name, value) = self.record(py, names, &record)?;
+            for record in self.block.records(self.kind.strip()) {
+                let (name, value) = self.record(py, names, &record?)?;
                 dict.set_item(name, value)?;
             }
             Ok(dict)

@@ -18,13 +18,16 @@ impl fmt::Display for MissingFieldName {
     }
 }
 
-/// Where an SD data record starts, and its name.
+/// Where an SD data record lies, and its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Header<'a> {
     /// The field name between the header's first `<` and last `>`.
     pub name: &'a [u8],
     /// Offset of the header line in the SD data.
     pub start: usize,
+    /// Offset just past the record's run of lines and the blank line
+    /// ending it.
+    pub end: usize,
 }
 
 /// One SD data record borrowed from a block where possible.
@@ -51,51 +54,78 @@ pub fn push_record(data: &mut Vec<u8>, name: &[u8], value: &[u8], newline: &[u8]
     data.extend_from_slice(newline);
 }
 
-/// Parse the next record at or after `*pos` in `metadata`, as Python's
-/// groupby over stripped lines does: a run of non-blank lines whose first
-/// line starts with `> ` is a record; other runs are skipped.
-pub fn next_record<'a>(
+/// The records of SD data from an offset on, parsed as Python's groupby
+/// over stripped lines does: a run of non-blank lines whose first line
+/// starts with `> ` is a record; other runs are skipped.
+///
+/// A header without a name yields an error; iterating further resumes
+/// after it.
+pub struct Records<'a> {
     metadata: &'a [u8],
-    pos: &mut usize,
+    pos: usize,
     strip: Strip,
-) -> Result<Option<Record<'a>>, MissingFieldName> {
-    match strip {
-        Strip::Bytes => next_record_by::<true>(metadata, pos, trim),
-        Strip::Str => next_record_by::<true>(metadata, pos, trim_str),
+}
+
+impl<'a> Records<'a> {
+    /// Iterate over the records of `metadata` at or after `pos`.
+    #[inline]
+    pub fn new(metadata: &'a [u8], pos: usize, strip: Strip) -> Self {
+        Self {
+            metadata,
+            pos,
+            strip,
+        }
+    }
+
+    /// Where the search for the next record starts.
+    #[inline]
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+
+    /// Iterate over the headers alone, skipping the value lines unbuilt.
+    #[inline]
+    pub fn headers(self) -> Headers<'a> {
+        Headers(self)
+    }
+
+    #[inline(always)]
+    fn parse<const VALUE: bool>(&mut self) -> Option<Result<Record<'a>, MissingFieldName>> {
+        let mut lines = Lines::new(self.metadata, self.pos);
+        let found = match self.strip {
+            Strip::Bytes => record_in::<VALUE>(&mut lines, &trim),
+            Strip::Str => record_in::<VALUE>(&mut lines, &trim_str),
+        };
+        self.pos = lines.pos();
+        found.transpose()
     }
 }
 
-/// Like `next_record`, but skip the value.
-pub fn next_header<'a>(
-    metadata: &'a [u8],
-    pos: &mut usize,
-    strip: Strip,
-) -> Result<Option<Header<'a>>, MissingFieldName> {
-    let found = match strip {
-        Strip::Bytes => next_record_by::<false>(metadata, pos, trim),
-        Strip::Str => next_record_by::<false>(metadata, pos, trim_str),
-    };
-    found.map(|record| {
-        record.map(|record| Header {
+impl<'a> Iterator for Records<'a> {
+    type Item = Result<Record<'a>, MissingFieldName>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.parse::<true>()
+    }
+}
+
+/// The record headers of SD data, from `Records::headers`.
+pub struct Headers<'a>(Records<'a>);
+
+impl<'a> Iterator for Headers<'a> {
+    type Item = Result<Header<'a>, MissingFieldName>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let found = self.0.parse::<false>()?;
+        Some(found.map(|record| Header {
             name: record.name,
             start: record.start,
-        })
-    })
+            end: self.0.pos(),
+        }))
+    }
 }
 
 /// Parse the next record; without `VALUE`, skip the value lines unbuilt.
-#[inline]
-fn next_record_by<'a, const VALUE: bool>(
-    metadata: &'a [u8],
-    pos: &mut usize,
-    trim: impl Fn(&[u8]) -> &[u8],
-) -> Result<Option<Record<'a>>, MissingFieldName> {
-    let mut lines = Lines::new(metadata, *pos);
-    let found = record_in::<VALUE>(&mut lines, &trim);
-    *pos = lines.pos();
-    found
-}
-
 #[inline(always)]
 fn record_in<'a, const VALUE: bool>(
     lines: &mut Lines<'a>,
@@ -177,12 +207,9 @@ mod tests {
     use super::*;
 
     fn names(metadata: &str) -> Result<Vec<String>, MissingFieldName> {
-        let mut pos = 0;
-        let mut found = Vec::new();
-        while let Some(record) = next_record(metadata.as_bytes(), &mut pos, Strip::Bytes)? {
-            found.push(String::from_utf8(record.name.to_vec()).unwrap());
-        }
-        Ok(found)
+        Records::new(metadata.as_bytes(), 0, Strip::Bytes)
+            .map(|record| Ok(String::from_utf8(record?.name.to_vec()).unwrap()))
+            .collect()
     }
 
     #[test]
@@ -203,17 +230,26 @@ mod tests {
         ] {
             for strip in [Strip::Bytes, Strip::Str] {
                 let metadata = metadata.as_bytes();
-                let (mut pos, mut headers) = (0, Vec::new());
-                while let Some(header) = next_header(metadata, &mut pos, strip).unwrap() {
-                    headers.push((header.name, header.start, pos));
+                let headers: Vec<_> = Records::new(metadata, 0, strip)
+                    .headers()
+                    .map(|header| header.unwrap())
+                    .collect();
+                let mut records = Records::new(metadata, 0, strip);
+                let mut expected = Vec::new();
+                while let Some(record) = records.next() {
+                    let record = record.unwrap();
+                    expected.push(Header {
+                        name: record.name,
+                        start: record.start,
+                        end: records.pos(),
+                    });
                 }
-                let (mut pos, mut records) = (0, Vec::new());
-                while let Some(record) = next_record(metadata, &mut pos, strip).unwrap() {
-                    records.push((record.name, record.start, pos));
-                }
-                assert_eq!(headers, records);
+                assert_eq!(headers, expected);
             }
         }
-        assert!(next_header(b"> A\n1\n", &mut 0, Strip::Bytes).is_err());
+        let mut headers = Records::new(b"> A\n1\n\n> <B>\n", 0, Strip::Bytes).headers();
+        assert_eq!(headers.next(), Some(Err(MissingFieldName)));
+        assert_eq!(headers.next().unwrap().unwrap().name, b"B");
+        assert_eq!(headers.next(), None);
     }
 }

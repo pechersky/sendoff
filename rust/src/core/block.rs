@@ -18,7 +18,7 @@ use crate::core::lines::lines;
 use crate::core::newline::{
     CRLF_TRAILER, TRAILER, missing_ending, newline, title_newline, trailer,
 };
-use crate::core::record::{self, Header, MissingFieldName, Record, push_record};
+use crate::core::record::{Headers, MissingFieldName, Records, push_record};
 use crate::core::strip::Strip;
 
 static MEND: LazyLock<memmem::Finder<'static>> = LazyLock::new(|| memmem::Finder::new(b"\nM  END"));
@@ -321,10 +321,10 @@ impl Block {
     ) -> Result<usize, MissingFieldName> {
         let metadata = self.metadata();
         let mut spans = Vec::new();
-        let mut pos = 0;
-        while let Some(header) = record::next_header(metadata, &mut pos, strip)? {
+        for header in self.headers(strip) {
+            let header = header?;
             if header.name == name {
-                spans.push((header.start, pos));
+                spans.push((header.start, header.end));
             }
         }
         if spans.is_empty() {
@@ -369,22 +369,19 @@ impl Block {
         self.mdl_end = mdl_end;
     }
 
-    /// Parse the next record at or after `*pos` in the SD data.
-    pub fn next_record(
-        &self,
-        pos: &mut usize,
-        strip: Strip,
-    ) -> Result<Option<Record<'_>>, MissingFieldName> {
-        record::next_record(self.metadata(), pos, strip)
+    /// The records of the SD data at or after `pos`.
+    pub fn records_at(&self, pos: usize, strip: Strip) -> Records<'_> {
+        Records::new(self.metadata(), pos, strip)
     }
 
-    /// Like `next_record`, but skip the value.
-    pub fn next_header(
-        &self,
-        pos: &mut usize,
-        strip: Strip,
-    ) -> Result<Option<Header<'_>>, MissingFieldName> {
-        record::next_header(self.metadata(), pos, strip)
+    /// The records of the SD data.
+    pub fn records(&self, strip: Strip) -> Records<'_> {
+        self.records_at(0, strip)
+    }
+
+    /// The record headers of the SD data, skipping the values.
+    pub fn headers(&self, strip: Strip) -> Headers<'_> {
+        self.records(strip).headers()
     }
 
     /// The format and atom and bond counts declared by the MDL header.
@@ -421,41 +418,16 @@ mod tests {
     }
 
     fn records(block: &Block) -> Result<Vec<(String, String)>, MissingFieldName> {
-        let mut pos = 0;
-        let mut found = Vec::new();
-        while let Some(record) = block.next_record(&mut pos, Strip::Bytes)? {
-            found.push((
-                String::from_utf8(record.name.to_vec()).unwrap(),
-                String::from_utf8(record.value.into_owned()).unwrap(),
-            ));
-        }
-        Ok(found)
-    }
-
-    #[test]
-    fn record_names_match_records() {
-        for text in [
-            "t\nM  END\n> <A>\n1\n2\n\n> <B>\n\njunk\nmore\n\n> <A>\n3\n$$$$\n",
-            "t\nM  END\n\n\n> <A> (1)\n\u{3000}\n> <B>\n$$$$\n",
-            "t\nM  END\n$$$$\n",
-            "t\n> <A>\nM  END\n> <C>\nx\n$$$$\n",
-        ] {
-            let block = block(text, true);
-            for strip in [Strip::Bytes, Strip::Str] {
-                let (mut pos, mut names) = (0, Vec::new());
-                while let Some(header) = block.next_header(&mut pos, strip).unwrap() {
-                    names.push((header.name.to_vec(), header.start, pos));
-                }
-                let mut pos = 0;
-                let mut expected = Vec::new();
-                while let Some(record) = block.next_record(&mut pos, strip).unwrap() {
-                    expected.push((record.name.to_vec(), record.start, pos));
-                }
-                assert_eq!(names, expected, "{text:?}");
-            }
-        }
-        let missing = block("t\nM  END\n> A\n1\n$$$$\n", true);
-        assert!(missing.next_header(&mut 0, Strip::Bytes).is_err());
+        block
+            .records(Strip::Bytes)
+            .map(|record| {
+                let record = record?;
+                Ok((
+                    String::from_utf8(record.name.to_vec()).unwrap(),
+                    String::from_utf8(record.value.into_owned()).unwrap(),
+                ))
+            })
+            .collect()
     }
 
     #[test]
@@ -472,6 +444,8 @@ mod tests {
             written(&block),
             "t\r\nsrc\nM  END\n> <A>\n a \nb\n\n> <B>\n\n$$$$\n"
         );
+        let header_in_mdl = self::block("t\n> <A>\nM  END\n> <C>\nx\n$$$$\n", true);
+        assert_eq!(records(&header_in_mdl).unwrap(), [("C".into(), "x".into())]);
     }
 
     #[test]
@@ -672,12 +646,12 @@ mod tests {
         let text = "\u{3000}t\u{a0}\nM  END\n> <A>\u{2003}\n\u{3000}\n\u{1c}tail\n\n";
         let block = block(text, false);
         assert_eq!(block.title(Strip::Str), b"t");
-        let mut pos = 0;
-        let record = block.next_record(&mut pos, Strip::Str).unwrap().unwrap();
+        let mut records = block.records(Strip::Str);
+        let record = records.next().unwrap().unwrap();
         assert_eq!((record.name, &*record.value), (&b"A"[..], &b""[..]));
-        assert_eq!(block.next_record(&mut pos, Strip::Str), Ok(None));
+        assert_eq!(records.next(), None);
         assert_eq!(block.title(Strip::Bytes), "\u{3000}t\u{a0}".as_bytes());
-        let record = block.next_record(&mut 0, Strip::Bytes).unwrap().unwrap();
+        let record = block.records(Strip::Bytes).next().unwrap().unwrap();
         assert_eq!(record.name, b"A");
         assert_eq!(&*record.value, "\u{3000}\n\u{1c}tail".as_bytes());
     }
