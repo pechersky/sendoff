@@ -232,7 +232,8 @@ pub fn translate_newlines(space: &mut [u8], len: usize, pending_cr: &mut bool) -
     }
     // Scan each window once for `\r` instead of calling `memchr` per `\r`:
     // CRLF files have a `\r` every line, where per-call setup dominates.
-    // Writes stay below `read`, so bytes at or after `read` are unmodified.
+    // Writes stay below `read`, so bytes at or after `read` are unmodified,
+    // and every `\r` a window's mask finds is at or after `read`.
     let lane_end = space.len().saturating_sub(LANE);
     let mut base = 0;
     while base < len {
@@ -240,9 +241,7 @@ pub fn translate_newlines(space: &mut [u8], len: usize, pending_cr: &mut bool) -
         while mask != 0 {
             let cr = base + mask.trailing_zeros() as usize;
             mask &= mask - 1;
-            if cr < read {
-                continue;
-            }
+            debug_assert!(cr >= read);
             if read - write >= LANE && cr <= lane_end {
                 // Whole-lane copies are safe once writes trail reads by a
                 // lane: they only overwrite consumed input or bytes that
