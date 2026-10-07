@@ -458,35 +458,49 @@ def test_titled_mol_read(single_titled_mol_sdf: Pathy) -> None:
     assert mol.title == "Title"
 
 
-@pytest.mark.xfail  # sendoff does not support SDF titles that start with $$$$
-def test_first_delimiter_titled_mol_read(
-    double_first_delimiter_titled_mol_sdf: Pathy,
+def test_first_delimiter_title_ends_a_record(
+    double_first_delimiter_titled_mol_sdf: Path,
 ) -> None:
-    """SDF with 1st molecule delimiter titled, containing with expected titles.
+    """A $$$$ title line ends a record, as the CTfile spec requires.
+
+    The spec forbids $$$$ in a title and ends a compound at any line that
+    begins with $$$$, so the title line is an empty record of its own, and
+    the rest of that molecule is another block.
 
     Args:
         double_first_delimiter_titled_mol_sdf: pytest fixture of a Path to sdf
     """
-    supp = parse_sdf(double_first_delimiter_titled_mol_sdf)
-    mol: SDBlock[str] = next(supp)
-    other_mol: SDBlock[str] = next(supp)
-    assert mol.title == "$$$$"
-    assert other_mol.title == "Title"
+    blocks = list(parse_sdf(double_first_delimiter_titled_mol_sdf))
+    assert [block.title for block in blocks][::2] == ["", "Title"]
+    assert len(blocks) == 3
+    assert blocks[0].to_sdf() == "$$$$\n"
+    assert_rereads_alike(blocks)
 
 
-def test_second_delimiter_titled_mol_read(
-    double_second_delimiter_titled_mol_sdf: Pathy,
+def test_second_delimiter_title_ends_a_record(
+    double_second_delimiter_titled_mol_sdf: Path,
 ) -> None:
-    """SDF with 2nd molecule delimiter titled, containing with expected titles.
+    """A $$$$ title line after a record is a block of its own.
 
     Args:
         double_second_delimiter_titled_mol_sdf: pytest fixture of a Path to sdf
     """
-    supp = parse_sdf(double_second_delimiter_titled_mol_sdf)
-    other_mol: SDBlock[str] = next(supp)
-    mol: SDBlock[str] = next(supp)
-    assert other_mol.title == "Title"
-    assert mol.title == "$$$$"
+    blocks = list(parse_sdf(double_second_delimiter_titled_mol_sdf))
+    assert [block.title for block in blocks][:2] == ["Title", ""]
+    assert len(blocks) == 3
+    assert blocks[1].to_sdf() == "$$$$\n"
+    assert_rereads_alike(blocks)
+
+
+def assert_rereads_alike(blocks: list[SDBlock[str]]) -> None:
+    """Check that the written blocks read back as the same blocks.
+
+    Args:
+        blocks: parsed blocks
+    """
+    written = [block.to_sdf() for block in blocks]
+    reread = SDBlock.from_sdf(str.join("", written))
+    assert [block.to_sdf() for block in reread] == written
 
 
 def test_single_record_mol_read(single_record_mol_sdf: Pathy) -> None:
@@ -1025,18 +1039,19 @@ def test_text_strips_like_str_and_bytes_like_bytes() -> None:
     assert byte_block.records() == [(b"Record", b"\xc2\xa0Bytes\x1f")]
 
 
-@pytest.mark.xfail  # sendoff does not support metadata vals starting with $$$$
-def test_delimiter_record_mol_read(
-    single_delimiter_record_mol_sdf: Pathy,
+def test_delimiter_value_ends_a_record(
+    single_delimiter_record_mol_sdf: Path,
 ) -> None:
-    """An sdf of a delimiter record valued molecule contains the expected data.
+    """A $$$$ value line ends the record, as the CTfile spec requires.
 
     Args:
         single_delimiter_record_mol_sdf: pytest fixture of a Path to the sdf
     """
-    mol = next(parse_sdf(single_delimiter_record_mol_sdf))
-    records = list(mol.records())
-    assert ("Record", "$$$$") in records
+    blocks = list(parse_sdf(single_delimiter_record_mol_sdf))
+    assert blocks[0].records() == [("Record", "")]
+    assert str.join("", (block.to_sdf() for block in blocks)) == (
+        single_delimiter_record_mol_sdf.read_text()
+    )
 
 
 def test_multiline_record_mol_read(

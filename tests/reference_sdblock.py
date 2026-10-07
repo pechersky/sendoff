@@ -6,8 +6,11 @@ behavior changes that an unterminated final block is still yielded, that a
 block without ``M  END`` does not keep its ``$$$$`` line as MDL, and that line
 endings survive: a ``$$$$`` line that is exactly ``$$$$`` and a newline is kept,
 and lines the block writes or ends itself end like its title line (a line
-ending in a bare ``\r`` gets just ``\n``). Divergences that are
-accepted but not modeled here are kept out of the generated inputs instead.
+ending in a bare ``\r`` gets just ``\n``). A block whose first line starts
+with ``$$$$`` is an empty record, as the CTfile spec reads any such line as a
+terminator, rather than a ``$$$$`` title that each write doubled. Divergences
+that are accepted but not modeled here are kept out of the generated inputs
+instead.
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ class RefBlock(Generic[AnyStr]):
     trailer: AnyStr
     mdl: list[AnyStr] = field(default_factory=list)
     metadata: list[AnyStr] = field(default_factory=list)
+    titled: bool = True
 
     @classmethod
     def from_block_lines(cls, lines: list[AnyStr]) -> RefBlock[AnyStr]:
@@ -69,6 +73,8 @@ class RefBlock(Generic[AnyStr]):
         first = next(iterlines)
         mend, delimiter = _lit(first, "M  END"), _lit(first, "$$$$")
         trailer = delimiter + newline
+        if first.startswith(delimiter):
+            return cls(first[:0], newline, trailer, titled=False)
         if len(lines) > 1 and lines[-1] in (delimiter + lf, delimiter + crlf):
             trailer = lines[-1]
         mdl: list[AnyStr] = []
@@ -113,6 +119,7 @@ class RefBlock(Generic[AnyStr]):
             value: record value without a trailing newline
         """
         newline = self.newline
+        self.titled = True
         self.metadata.extend(
             [
                 _lit(name, "> <") + name + _lit(name, ">") + newline,
@@ -125,8 +132,11 @@ class RefBlock(Generic[AnyStr]):
         """Return the title and MDL lines as main's idiom joins them.
 
         Returns:
-            The stripped title, the title line's ending, and the MDL lines.
+            The stripped title, the title line's ending, and the MDL lines,
+            or nothing for an empty record.
         """
+        if not self.titled:
+            return self.title
         return self.title[:0].join([self.title, self.newline] + self.mdl)
 
     def serialize(self) -> AnyStr:
@@ -135,6 +145,8 @@ class RefBlock(Generic[AnyStr]):
         Returns:
             The serialized block.
         """
+        if not self.titled:
+            return self.trailer
         return self.title[:0].join(
             [self.title, self.newline] + self.mdl + self.metadata + [self.trailer]
         )

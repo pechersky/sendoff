@@ -373,12 +373,7 @@ mod tests {
             .collect();
         assert_eq!(
             serialized,
-            [
-                &b"a\n$$$$\n"[..],
-                b"b\n$$$$\n",
-                b"c\n$$$$\n",
-                b"$$$$\n$$$$\n"
-            ]
+            [&b"a\n$$$$\n"[..], b"b\n$$$$\n", b"c\n$$$$\n", b"$$$$\n"]
         );
         assert_eq!(split_complete(b"a\r$$$$\rb", false).len(), 1);
     }
@@ -391,7 +386,7 @@ mod tests {
             expected,
             [
                 ("a".into(), "a\nM  END\n> <X>\n1\n\n$$$$\n".into()),
-                ("$$$$x".into(), "$$$$x\n$$$$\n".into()),
+                (String::new(), "$$$$\n".into()),
                 ("b".into(), "b\nc\n$$$$\n".into()),
                 ("d".into(), "d\nM  END\n$$$$\n".into()),
             ]
@@ -414,7 +409,7 @@ mod tests {
             serialized(b"t\nM  END\n$$$$\n \n\t"),
             Some(b"t\nM  END\n$$$$\n".to_vec())
         );
-        assert_eq!(serialized(b"$$$$"), Some(b"$$$$\n$$$$\n".to_vec()));
+        assert_eq!(serialized(b"$$$$"), Some(b"$$$$\n".to_vec()));
         assert_eq!(serialized(b""), Some(b"\n$$$$\n".to_vec()));
         assert_eq!(serialized(b"t\n$$$$\nu\n"), None);
         assert_eq!(serialized(b"$$$$\n$$$$\n"), None);
