@@ -22,6 +22,41 @@ else:
     from _pytest.fixtures import FixtureRequest
 
 
+def write_mols(path: Path, *mols: Chem.Mol, v3000: bool = False) -> Path:
+    """Write molecules to an sdf with RDKit.
+
+    RDKit writes V3000 when forced to, and for molecules of more than 999 atoms.
+
+    Args:
+        path: where to write the sdf
+        mols: the molecules to write, in order
+        v3000: whether to force V3000
+
+    Returns:
+        The path.
+    """
+    with Chem.SDWriter(str(path)) as writer:
+        writer.SetForceV3000(v3000)
+        for mol in mols:
+            writer.write(mol)
+    return path
+
+
+def titled_mol(smiles: str, title: str) -> Chem.Mol:
+    """Parse a molecule from SMILES and give it a title.
+
+    Args:
+        smiles: the molecule
+        title: the title, written on the block's first line
+
+    Returns:
+        The molecule.
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    mol.SetProp("_Name", title)
+    return mol
+
+
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
 def single_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """Write a single molecule with no metadata to an sdf.
@@ -33,12 +68,11 @@ def single_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     Returns:
         Path to the sdf
     """
-    mol = Chem.MolFromSmiles("C")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.SetForceV3000(request.param == "rdkitV3000")
-        sdw.write(mol)
-    return outpath
+    return write_mols(
+        tmp_path / "input.sdf",
+        Chem.MolFromSmiles("C"),
+        v3000=request.param == "rdkitV3000",
+    )
 
 
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
@@ -52,97 +86,56 @@ def double_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     Returns:
         Path to the sdf
     """
-    methane = Chem.MolFromSmiles("C")
-    ethane = Chem.MolFromSmiles("CC")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.SetForceV3000(request.param == "rdkitV3000")
-        sdw.write(methane)
-        sdw.write(ethane)
-    return outpath
+    return write_mols(
+        tmp_path / "input.sdf",
+        Chem.MolFromSmiles("C"),
+        Chem.MolFromSmiles("CC"),
+        v3000=request.param == "rdkitV3000",
+    )
 
 
-@pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
-def single_0_atoms_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
-    """Write a single molecule with 0 atoms and no metadata to an sdf.
+class CountedMol(NamedTuple):
+    """An sdf of one molecule, and how many atoms and bonds it has.
 
-    This relies on the fact that RDKit does not write hydrogens by default.
+    Attributes:
+        path: Path to the sdf
+        atoms: the number of atoms
+        bonds: the number of bonds
+    """
+
+    path: Path
+    atoms: int
+    bonds: int
+
+
+# The SMILES, atom count, bond count, and whether to force V3000, of each
+# molecule. RDKit writes no hydrogens by default, and falls back to V3000 for
+# more than 999 atoms.
+COUNTED_MOLS = {
+    "0_atoms-V2000": ("", 0, 0, False),
+    "0_atoms-V3000": ("", 0, 0, True),
+    "star_atom-V2000": ("*", 1, 0, False),
+    "star_atom-V3000": ("*", 1, 0, True),
+    "999_atoms-V2000": ("C" * 999, 999, 998, False),
+    "999_atoms-V3000": ("C" * 999, 999, 998, True),
+    "1001_atoms": ("C" * 1001, 1001, 1000, False),
+}
+
+
+@pytest.fixture(params=COUNTED_MOLS)
+def counted_mol_sdf(request: FixtureRequest, tmp_path: Path) -> CountedMol:
+    """Write a single molecule with no metadata and known counts to an sdf.
 
     Args:
         request: pytest fixture configuration handling param passing
         tmp_path: pytest fixture for writing files to a temp directory
 
     Returns:
-        Path to the sdf
+        Path to the sdf, and the molecule's atom and bond counts
     """
-    mol = Chem.MolFromSmiles("C" * 0)
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.SetForceV3000(request.param == "rdkitV3000")
-        sdw.write(mol)
-    return outpath
-
-
-@pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
-def single_star_atom_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
-    """Write a single molecule with a single star atom and no metadata to an sdf.
-
-    This relies on the fact that RDKit does not write hydrogens by default.
-
-    Args:
-        request: pytest fixture configuration handling param passing
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    mol = Chem.MolFromSmiles("*")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.SetForceV3000(request.param == "rdkitV3000")
-        sdw.write(mol)
-    return outpath
-
-
-@pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
-def single_999_atoms_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
-    """Write a single molecule with 999 atoms and no metadata to an sdf.
-
-    This relies on the fact that RDKit does not write hydrogens by default.
-
-    Args:
-        request: pytest fixture configuration handling param passing
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    mol = Chem.MolFromSmiles("C" * 999)
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.SetForceV3000(request.param == "rdkitV3000")
-        sdw.write(mol)
-    return outpath
-
-
-@pytest.fixture
-def single_1001_atoms_mol_sdf(tmp_path: Path) -> Path:
-    """Write a single molecule with 1001 atoms and no metadata to an sdf.
-
-    This relies on the fact that RDKit does not write hydrogens by default,
-    and that RDKit falls back to V3000 for molecules of more than 999 atoms.
-
-    Args:
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    mol = Chem.MolFromSmiles("C" * 1001)
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.write(mol)
-    return outpath
+    smiles, atoms, bonds, v3000 = COUNTED_MOLS[request.param]
+    path = write_mols(tmp_path / "input.sdf", Chem.MolFromSmiles(smiles), v3000=v3000)
+    return CountedMol(path, atoms, bonds)
 
 
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
@@ -156,13 +149,11 @@ def single_titled_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     Returns:
         Path to the sdf
     """
-    mol = Chem.MolFromSmiles("C")
-    mol.SetProp("_Name", "Title")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.SetForceV3000(request.param == "rdkitV3000")
-        sdw.write(mol)
-    return outpath
+    return write_mols(
+        tmp_path / "input.sdf",
+        titled_mol("C", "Title"),
+        v3000=request.param == "rdkitV3000",
+    )
 
 
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
@@ -176,13 +167,11 @@ def single_delimiter_titled_mol_sdf(request: FixtureRequest, tmp_path: Path) -> 
     Returns:
         Path to the sdf
     """
-    mol = Chem.MolFromSmiles("C")
-    mol.SetProp("_Name", "$$$$")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.SetForceV3000(request.param == "rdkitV3000")
-        sdw.write(mol)
-    return outpath
+    return write_mols(
+        tmp_path / "input.sdf",
+        titled_mol("C", "$$$$"),
+        v3000=request.param == "rdkitV3000",
+    )
 
 
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
@@ -198,16 +187,12 @@ def double_first_delimiter_titled_mol_sdf(
     Returns:
         Path to the sdf
     """
-    mol = Chem.MolFromSmiles("C")
-    mol.SetProp("_Name", "$$$$")
-    other_mol = Chem.MolFromSmiles("CC")
-    other_mol.SetProp("_Name", "Title")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.SetForceV3000(request.param == "rdkitV3000")
-        sdw.write(mol)
-        sdw.write(other_mol)
-    return outpath
+    return write_mols(
+        tmp_path / "input.sdf",
+        titled_mol("C", "$$$$"),
+        titled_mol("CC", "Title"),
+        v3000=request.param == "rdkitV3000",
+    )
 
 
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000"])
@@ -223,16 +208,12 @@ def double_second_delimiter_titled_mol_sdf(
     Returns:
         Path to the sdf
     """
-    other_mol = Chem.MolFromSmiles("CC")
-    other_mol.SetProp("_Name", "Title")
-    mol = Chem.MolFromSmiles("C")
-    mol.SetProp("_Name", "$$$$")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.SetForceV3000(request.param == "rdkitV3000")
-        sdw.write(other_mol)
-        sdw.write(mol)
-    return outpath
+    return write_mols(
+        tmp_path / "input.sdf",
+        titled_mol("CC", "Title"),
+        titled_mol("C", "$$$$"),
+        v3000=request.param == "rdkitV3000",
+    )
 
 
 @pytest.fixture(params=["rdkitV2000", "rdkitV3000", "sendoff"])
@@ -536,12 +517,7 @@ def single_mol_v2000_sdf(tmp_path: Path) -> Path:
     Returns:
         Path to the sdf
     """
-    mol = Chem.MolFromSmiles("C")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.SetForceV3000(False)
-        sdw.write(mol)
-    return outpath
+    return write_mols(tmp_path / "input.sdf", Chem.MolFromSmiles("C"))
 
 
 @pytest.fixture()
@@ -554,9 +530,4 @@ def single_mol_v3000_sdf(tmp_path: Path) -> Path:
     Returns:
         Path to the sdf
     """
-    mol = Chem.MolFromSmiles("C")
-    outpath = tmp_path / "input.sdf"
-    with Chem.SDWriter(str(outpath)) as sdw:
-        sdw.SetForceV3000(True)
-        sdw.write(mol)
-    return outpath
+    return write_mols(tmp_path / "input.sdf", Chem.MolFromSmiles("C"), v3000=True)

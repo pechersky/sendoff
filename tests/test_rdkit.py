@@ -7,7 +7,7 @@ import pytest
 from rdkit import Chem
 
 from sendoff.sdblock import Pathy, parse_sdf
-from tests.fixtures import INDEX_DEFECTS
+from tests.fixtures import INDEX_DEFECTS, CountedMol
 
 
 def test_single_mol_read(single_mol_sdf: Pathy) -> None:
@@ -164,84 +164,17 @@ def test_right_angle_bracket_record_name_mol_read_data_at_modified_field(
     assert mol.GetProp("Rec") == "Value"
 
 
-def test_0_atoms_mol_num_atoms(single_0_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 0 atoms written parses as 0 atoms.
+def test_counts_mol_read(counted_mol_sdf: CountedMol) -> None:
+    """An sdf block parses with its molecule's atom and bond counts.
 
     Args:
-        single_0_atoms_mol_sdf: pytest fixture of a Path to the sdf
+        counted_mol_sdf: pytest fixture of a Path to the sdf, and its counts
     """
-    mol = next(Chem.SDMolSupplier(str(single_0_atoms_mol_sdf)))
-    assert mol.GetNumAtoms() == 0
-
-
-def test_star_atom_mol_num_atoms(single_star_atom_mol_sdf: Pathy) -> None:
-    """An sdf block with a single star atom written parses as 1 atom.
-
-    Args:
-        single_star_atom_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_star_atom_mol_sdf)))
-    assert mol.GetNumAtoms() == 1
-
-
-def test_999_atoms_mol_num_atoms(single_999_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 999 atoms written parses as 999 atoms.
-
-    Args:
-        single_999_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_999_atoms_mol_sdf)))
-    assert mol.GetNumAtoms() == 999
-
-
-def test_1001_atoms_mol_num_atoms(single_1001_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 1001 atoms written parses as 1001 atoms.
-
-    Args:
-        single_1001_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_1001_atoms_mol_sdf)))
-    assert mol.GetNumAtoms() == 1001
-
-
-def test_0_atoms_mol_num_bonds(single_0_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 0 atoms written parses as 0 bonds.
-
-    Args:
-        single_0_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_0_atoms_mol_sdf)))
-    assert mol.GetNumBonds() == 0
-
-
-def test_star_atom_mol_num_bonds(single_star_atom_mol_sdf: Pathy) -> None:
-    """An sdf block with a single star atom written parses as 0 bonds.
-
-    Args:
-        single_star_atom_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_star_atom_mol_sdf)))
-    assert mol.GetNumBonds() == 0
-
-
-def test_999_atoms_mol_num_bonds(single_999_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 999 atoms written parses as 998 bonds.
-
-    Args:
-        single_999_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_999_atoms_mol_sdf)))
-    assert mol.GetNumBonds() == 998
-
-
-def test_1001_atoms_mol_num_bonds(single_1001_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 1001 atoms written parses as 1000 bonds.
-
-    Args:
-        single_1001_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_1001_atoms_mol_sdf)))
-    assert mol.GetNumBonds() == 1000
+    mol = next(Chem.SDMolSupplier(str(counted_mol_sdf.path)))
+    assert (mol.GetNumAtoms(), mol.GetNumBonds()) == (
+        counted_mol_sdf.atoms,
+        counted_mol_sdf.bonds,
+    )
 
 
 @pytest.mark.parametrize(

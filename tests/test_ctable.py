@@ -13,87 +13,20 @@ from sendoff.ctable import (
     MalformedCTableError,
 )
 from sendoff.sdblock import Pathy, SDBlock, parse_sdf
-from tests.fixtures import INDEX_DEFECTS
+from tests.fixtures import INDEX_DEFECTS, CountedMol
 
 
-def test_0_atoms_mol_num_atoms(single_0_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 0 atoms written parses as 0 atoms.
-
-    Args:
-        single_0_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol: SDBlock[str] = next(parse_sdf(single_0_atoms_mol_sdf))
-    assert mol.num_atoms() == 0
-
-
-def test_star_atom_mol_num_atoms(single_star_atom_mol_sdf: Pathy) -> None:
-    """An sdf block with a single star atom written parses as 1 atom.
+def test_counts_mol_read(counted_mol_sdf: CountedMol) -> None:
+    """An sdf block parses with its molecule's atom and bond counts.
 
     Args:
-        single_star_atom_mol_sdf: pytest fixture of a Path to the sdf
+        counted_mol_sdf: pytest fixture of a Path to the sdf, and its counts
     """
-    mol: SDBlock[str] = next(parse_sdf(single_star_atom_mol_sdf))
-    assert mol.num_atoms() == 1
-
-
-def test_999_atoms_mol_num_atoms(single_999_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 999 atoms written parses as 999 atoms.
-
-    Args:
-        single_999_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol: SDBlock[str] = next(parse_sdf(single_999_atoms_mol_sdf))
-    assert mol.num_atoms() == 999
-
-
-def test_1001_atoms_mol_num_atoms(single_1001_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 1001 atoms written parses as 1001 atoms.
-
-    Args:
-        single_1001_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol: SDBlock[str] = next(parse_sdf(single_1001_atoms_mol_sdf))
-    assert mol.num_atoms() == 1001
-
-
-def test_0_atoms_mol_num_bonds(single_0_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 0 atoms written parses as 0 bonds.
-
-    Args:
-        single_0_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol: SDBlock[str] = next(parse_sdf(single_0_atoms_mol_sdf))
-    assert mol.num_bonds() == 0
-
-
-def test_star_atom_mol_num_bonds(single_star_atom_mol_sdf: Pathy) -> None:
-    """An sdf block with a single star atom written parses as 0 bonds.
-
-    Args:
-        single_star_atom_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol: SDBlock[str] = next(parse_sdf(single_star_atom_mol_sdf))
-    assert mol.num_bonds() == 0
-
-
-def test_999_atoms_mol_num_bonds(single_999_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 999 atoms written parses as 998 bonds.
-
-    Args:
-        single_999_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol: SDBlock[str] = next(parse_sdf(single_999_atoms_mol_sdf))
-    assert mol.num_bonds() == 998
-
-
-def test_1001_atoms_mol_num_bonds(single_1001_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 1001 atoms written parses as 1000 bonds.
-
-    Args:
-        single_1001_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol: SDBlock[str] = next(parse_sdf(single_1001_atoms_mol_sdf))
-    assert mol.num_bonds() == 1000
+    mol: SDBlock[str] = next(parse_sdf(counted_mol_sdf.path))
+    assert (mol.num_atoms(), mol.num_bonds()) == (
+        counted_mol_sdf.atoms,
+        counted_mol_sdf.bonds,
+    )
 
 
 def test_single_mol_v2000_sdf_valid_atom_indices_not_implemented(
