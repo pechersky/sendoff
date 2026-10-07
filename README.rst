@@ -99,6 +99,19 @@ but walks characters: ``any(s in line for line in block.mdl)`` is always
 read-only, so assign ``block.molblock`` to change the structure. The release
 notes list every change.
 
+Rust development checks
+-----------------------
+
+Ownership-focused Clippy lints are configured in ``Cargo.toml``. Pre-commit
+and GitHub Actions check all targets and features, treating warnings as errors:
+
+.. code-block:: console
+
+   cargo clippy --locked --all-targets --all-features -- -D warnings
+
+The shared VS Code settings make rust-analyzer run Clippy instead of
+``cargo check``, using the same lint configuration.
+
 Release wheels
 --------------
 

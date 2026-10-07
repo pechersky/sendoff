@@ -30,7 +30,8 @@ MANIFEST
 .secrets
 
 # IDE
-.vscode
+.vscode/*
+!.vscode/settings.json
 
 # Unit test / coverage reports
 htmlcov/

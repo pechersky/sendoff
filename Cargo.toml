@@ -35,6 +35,14 @@ pyo3 = { version = "=0.29.3", features = ["abi3-py311"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 
+[lints.clippy]
+redundant_clone = "warn"
+needless_collect = "warn"
+needless_pass_by_value = "warn"
+assigning_clones = "warn"
+implicit_clone = "warn"
+cloned_instead_of_copied = "warn"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

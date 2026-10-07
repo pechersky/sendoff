@@ -5,7 +5,7 @@ default_stages: [pre-commit]
 fail_fast: true
 
 ci:
-    # pre-commit.ci has no Rust toolchain; run these locally.
+    # pre-commit.ci has no Rust toolchain; Clippy also runs in GitHub Actions.
     skip: [cargo-fmt, cargo-clippy, native-stub]
 
 repos:
@@ -58,7 +58,7 @@ repos:
         pass_filenames: false
     -   id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --locked --all-targets -- -D warnings
+        entry: cargo clippy --locked --all-targets --all-features -- -D warnings
         language: system
         files: '(^Cargo\.(toml|lock)$|^rust/.*\.rs$)'
         pass_filenames: false
