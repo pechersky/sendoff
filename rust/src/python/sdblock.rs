@@ -81,6 +81,10 @@ pub(crate) struct PySDBlock {
 
 impl PySDBlock {
     /// The name and value objects of a record read in block order.
+    ///
+    /// Inlined into records() and to_dict(): called out of line once per
+    /// record, it cost those 2-3%.
+    #[inline(always)]
     fn record<'py>(
         &self,
         py: Python<'py>,
