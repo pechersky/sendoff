@@ -1,15 +1,8 @@
 """Reading and validating connection tables from SDFs."""
 
-from sendoff.native import CTable
+import sendoff.native as native
 
-__all__ = [
-    "CTable",
-    "CTableError",
-    "IndicesDuplicateError",
-    "IndicesMismatchError",
-    "IndicesOutOfOrderError",
-    "MalformedCTableError",
-]
+CTable = native.CTable
 
 
 class CTableError(ValueError):
