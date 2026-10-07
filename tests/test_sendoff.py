@@ -879,11 +879,13 @@ def test_block_state_is_validated() -> None:
         (b"t\nx\n$$$$\n", 4, 4, False),
         (b"t\nM  END\n$$$$\n", 9, 2, False),
         (b"t\nM  END\n$$$$\n", 2, 99, False),
-        (b"\xff\nM  END\n$$$$\n", 2, 9, True),
     ]:
         with pytest.raises(ValueError, match="invalid SDBlock state"):
             from_state(*state)
     assert from_state(b"\xff\nM  END\n$$$$\n", 2, 9, False).title == b"\xff"
+    # Text blocks from str paths decode on access, so may hold any bytes.
+    with pytest.raises(UnicodeDecodeError):
+        from_state(b"\xff\nM  END\n$$$$\n", 2, 9, True).title
 
 
 @pytest.mark.parametrize("copier", [copy.copy, copy.deepcopy])
@@ -971,8 +973,14 @@ def test_molblock_setter_replaces_the_structure_only() -> None:
     with pytest.raises(TypeError, match="molblocks must be str"):
         block.molblock = b"t\nM  END\n"  # type: ignore[assignment]
     assert block.molblock == "new\n  prog\n\nM  END\n"
+    block.molblock = "last\r\nM  END"
+    assert block.molblock == "last\nM  END\n"
 
     byte_block = next(SDBlock.from_lines([b"t\n", b"M  END\n", b"> <A>\n", b"1\n"]))
+    byte_block.molblock = b"b\r\nM  END"
+    assert byte_block.molblock == b"b\r\nM  END\r\n"
+    byte_block.molblock = b"b\nM  END\r"
+    assert byte_block.molblock == b"b\nM  END\r\n"
     byte_block.molblock = b"b\r\nM  END\r\n"
     assert byte_block.molblock == b"b\r\nM  END\r\n"
     assert byte_block.title == b"b"

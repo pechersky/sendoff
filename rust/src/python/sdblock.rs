@@ -789,7 +789,11 @@ impl PySDBlock {
     /// Replace the title line and CTAB, keeping the SD data.
     ///
     /// For example, `block.molblock = Chem.MolToMolBlock(mol)`. Text
-    /// molblocks have CRLF and CR line endings translated to LF.
+    /// molblocks have CRLF and CR line endings translated to LF, and a
+    /// molblock without a final newline gets its title line's ending. So
+    /// `block.molblock = block.molblock` strips the title, as the getter
+    /// does, translates a str block's title line and CTAB to LF, and
+    /// changes nothing else.
     ///
     /// Raises:
     ///     ValueError: if the molblock has no `M  END` line, has more than
@@ -993,8 +997,9 @@ impl PySDBlock {
         text: bool,
     ) -> PyResult<Self> {
         let kind = if text { Kind::Text } else { Kind::Bytes };
+        // Text blocks from str paths decode on access, so their state need
+        // not be UTF-8.
         Block::from_parts(data.to_vec(), title_end, mdl_end)
-            .filter(|block| !text || std::str::from_utf8(block.parts().0).is_ok())
             .map(|block| Self { block, kind })
             .ok_or_else(|| PyValueError::new_err("invalid SDBlock state"))
     }

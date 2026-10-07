@@ -14,8 +14,10 @@ The alphabet includes whitespace that only ``str.strip`` removes, such as
 
 from __future__ import annotations
 
+import copy
 import io
 import os
+import pickle
 import tempfile
 import threading
 from typing import Any, Callable, Iterable, Union
@@ -536,3 +538,72 @@ def test_readers_agree_past_buffer_sizes(lines: list[str], offset: int) -> None:
     padding = head + ("x" * 79 + "\n") * (fill // 80) + "x" * (fill % 80) + tail
     assert (len(padding) + offset) % READ_CHUNK == 0
     assert_readers_agree(padding + text * 2)
+
+
+def assert_round_trips(block: SDBlock[Any]) -> None:
+    """Assert copies, pickles, and molblock reassignment keep ``block`` as documented.
+
+    Args:
+        block: a block a reader produced
+    """
+    original = copy.copy(block)
+    text = bool(original.__reduce__()[1][3])
+    name: Any = "Z" if text else b"Z"
+    for duplicate in (
+        copy.copy(block),
+        copy.deepcopy(block),
+        pickle.loads(pickle.dumps(block)),
+    ):
+        assert duplicate == block and duplicate is not block
+        duplicate.append_record(name, name)
+        assert block == original
+    try:
+        molblock = block.molblock
+    except UnicodeDecodeError:
+        return
+    try:
+        block.molblock = molblock
+    except ValueError:
+        assert block == original
+        return
+    data, _, mdl_end, _ = block.__reduce__()[1]
+    old_data, _, old_mdl_end, _ = original.__reduce__()[1]
+    assert data[mdl_end:] == old_data[old_mdl_end:]
+    if text:
+        if "\r" in molblock.replace("\r\n", ""):
+            return  # translating a lone "\r" splits its line
+        expected = molblock.replace("\r\n", "\n")
+    else:
+        expected = molblock
+    assert block.molblock == expected
+    assert block.title == original.title
+    raw = old_data[:old_mdl_end]
+    if (expected.encode() if text else expected) == raw:
+        assert block == original
+    reassigned = copy.copy(block)
+    reassigned.molblock = block.molblock
+    assert reassigned == block
+
+
+@examples
+@given(sdf_lines())
+def test_blocks_round_trip(lines: list[str]) -> None:
+    """Blocks from every reader survive copy, pickle, and molblock = molblock.
+
+    Args:
+        lines: generated lines with endings
+    """
+    text = str.join("", lines)
+    blocks: list[SDBlock[Any]] = [
+        *SDBlock.from_lines(lines),
+        *SDBlock.from_sdf(text),
+        *SDBlock.from_lines(io.StringIO(text)),
+        *SDBlock.from_lines([line.encode() for line in lines]),
+    ]
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "latin1.sdf")
+        with open(path, "wb") as out:
+            out.write(text.encode().replace("\u00e9".encode(), b"\xe9"))
+        blocks.extend(parse_sdf(path))
+    for block in blocks:
+        assert_round_trips(block)
