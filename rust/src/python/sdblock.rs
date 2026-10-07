@@ -8,6 +8,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyList, PyString, PyTuple, PyType};
 
 use crate::core::block::Block;
+use crate::core::ctable::CTable;
+use crate::core::ctable::error::CTableError;
 use crate::core::lines::lines;
 use crate::core::newline::{translated, universal_newlines};
 use crate::core::record::Record;
@@ -76,20 +78,47 @@ pub(crate) struct PySDBlock {
 }
 
 impl PySDBlock {
+    /// The name and value objects of a record read in block order.
     fn record<'py>(
         &self,
         py: Python<'py>,
         names: &mut Namer<'_>,
         record: &Record<'_>,
-    ) -> PyResult<Bound<'py, PyTuple>> {
+    ) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
         let noted = |error| self.noted(py, error, || reading_record(record.name));
-        PyTuple::new(
-            py,
-            [
-                names.name(py, record.name).map_err(noted)?,
-                self.kind.value(py, &record.value).map_err(noted)?,
-            ],
-        )
+        Ok((
+            names.name(py, record.name).map_err(noted)?,
+            self.kind.value(py, &record.value).map_err(noted)?,
+        ))
+    }
+
+    /// Parse the title and MDL lines of a text block as a CTable.
+    fn parse_ctable(&self, py: Python<'_>) -> PyResult<CTable> {
+        self.require_text()?;
+        let noted = |error| self.noted(py, error, || "Reading the CTAB of".into());
+        let mut decoded = vec![
+            decode(py, self.block.title(Strip::Str))
+                .map_err(noted)?
+                .to_owned(),
+        ];
+        for line in lines(self.block.mdl()) {
+            decoded.push(decode(py, line).map_err(noted)?.to_owned());
+        }
+        Ok(CTable::parse(decoded)?)
+    }
+
+    /// Apply `edit` to the block's CTable, then replace the MDL lines with
+    /// the edited table's.
+    fn edit_ctable(
+        &mut self,
+        py: Python<'_>,
+        edit: impl FnOnce(&mut CTable) -> Result<(), CTableError>,
+    ) -> PyResult<()> {
+        let mut ctable = self.parse_ctable(py)?;
+        edit(&mut ctable)?;
+        self.block
+            .replace_mdl(ctable.lines[1..].iter().map(String::as_bytes));
+        Ok(())
     }
 
     /// Add to a decode error a note naming this block, what of it `action`
@@ -519,7 +548,7 @@ impl PySDBlock {
         mdl_end: usize,
         text: bool,
     ) -> PyResult<Self> {
-        let kind = if text { Kind::Text } else { Kind::Bytes };
+        let kind = Kind::of(text);
         // Text blocks from str paths decode on access, so their state need
         // not be UTF-8.
         Block::from_parts(data.to_vec(), title_end, mdl_end)
@@ -555,11 +584,8 @@ impl PySDBlock {
         let mut pos = 0;
         Namer::with(self.kind, |names| {
             while let Some(record) = self.block.next_record(&mut pos, strip)? {
-                let noted = |error| self.noted(py, error, || reading_record(record.name));
-                dict.set_item(
-                    names.name(py, record.name).map_err(noted)?,
-                    self.kind.value(py, &record.value).map_err(noted)?,
-                )?;
+                let (name, value) = self.record(py, names, &record)?;
+                dict.set_item(name, value)?;
             }
             Ok(dict)
         })
@@ -690,17 +716,7 @@ impl PySDBlock {
     ///         or its format or counts cannot be read
     ///     NotImplementedError: for byte-backed SDBlocks
     fn ctable(&self, py: Python<'_>) -> PyResult<PyCTable> {
-        self.require_text()?;
-        let noted = |error| self.noted(py, error, || "Reading the CTAB of".into());
-        let mut decoded = vec![
-            decode(py, self.block.title(Strip::Str))
-                .map_err(noted)?
-                .to_owned(),
-        ];
-        for line in lines(self.block.mdl()) {
-            decoded.push(decode(py, line).map_err(noted)?.to_owned());
-        }
-        PyCTable::from_lines(decoded)
+        Ok(self.parse_ctable(py)?.into())
     }
 
     /// Get the number of atoms declared by the counts line.
@@ -736,11 +752,7 @@ impl PySDBlock {
     ///     NotImplementedError: for byte-backed SDBlocks, or as
     ///         CTable.renumber_indices raises
     fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
-        let mut ctable = self.ctable(py)?;
-        ctable.renumber_indices_for_block()?;
-        self.block
-            .replace_mdl(ctable.lines_after_title().iter().map(String::as_bytes));
-        Ok(())
+        self.edit_ctable(py, CTable::renumber_indices)
     }
 
     /// Set the counts line to the number of atom and bond lines.
@@ -752,10 +764,6 @@ impl PySDBlock {
     ///     NotImplementedError: for byte-backed SDBlocks, or as
     ///         CTable.fix_counts raises
     fn fix_counts(&mut self, py: Python<'_>) -> PyResult<()> {
-        let mut ctable = self.ctable(py)?;
-        ctable.fix_counts_for_block()?;
-        self.block
-            .replace_mdl(ctable.lines_after_title().iter().map(String::as_bytes));
-        Ok(())
+        self.edit_ctable(py, CTable::fix_counts)
     }
 }

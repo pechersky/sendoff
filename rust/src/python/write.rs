@@ -2,14 +2,13 @@
 
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
 
 use pyo3::exceptions::PyTypeError;
 use pyo3::intern;
 use pyo3::prelude::*;
 
-use crate::python::errors::os_error;
 use crate::python::kind::{Kind, decode, same_kind};
+use crate::python::os::{fs_path, os_error};
 use crate::python::sdblock::PySDBlock;
 
 /// Bytes buffered before each write to a path. 64 KiB to 1 MiB timed the
@@ -101,9 +100,7 @@ pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> P
     let mut sink = match dest.getattr(intern!(py, "write")) {
         Ok(write) => Sink::Handle { write, kind: None },
         Err(_) => {
-            let os = PyModule::import(py, "os")?;
-            let filename = os.call_method1("fspath", (dest,))?;
-            let path: PathBuf = os.call_method1("fsdecode", (&filename,))?.extract()?;
+            let (filename, path) = fs_path(dest)?;
             let filename = filename.unbind();
             let file = py
                 .detach(|| File::create(&path))

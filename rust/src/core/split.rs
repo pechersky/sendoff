@@ -210,6 +210,7 @@ impl Tail<'_> {
 mod tests {
     use super::*;
     use crate::core::strip::Strip;
+    use crate::core::testing::xorshift;
 
     fn scanned(input: &[u8], chunk: usize) -> Vec<Block> {
         let mut scanner = Scanner::default();
@@ -267,13 +268,7 @@ mod tests {
             b" ",
             b"\n$$$$\r\n",
         ];
-        let mut state = 0x2545_F491_4F6C_DD1D_u64;
-        let mut next = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut next = xorshift(0x2545_F491_4F6C_DD1D_u64);
         for _ in 0..3000 {
             let len = (next() % 60) as usize;
             let input: Vec<u8> = (0..len)

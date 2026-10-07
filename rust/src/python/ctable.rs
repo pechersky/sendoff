@@ -39,7 +39,7 @@ impl PyCTable {
             .try_iter()?
             .map(|line| line?.extract::<String>())
             .collect::<PyResult<Vec<_>>>()?;
-        Self::from_lines(lines)
+        Ok(CTable::parse(lines)?.into())
     }
 
     /// Return a copy of the original connection-table lines.
@@ -168,21 +168,8 @@ impl PyCTable {
     }
 }
 
-impl PyCTable {
-    pub(crate) fn from_lines(lines: Vec<String>) -> PyResult<Self> {
-        let inner = CTable::parse(lines)?;
-        Ok(Self { inner })
-    }
-
-    pub(crate) fn lines_after_title(&self) -> &[String] {
-        &self.inner.lines[1..]
-    }
-
-    pub(crate) fn renumber_indices_for_block(&mut self) -> PyResult<()> {
-        self.renumber_indices()
-    }
-
-    pub(crate) fn fix_counts_for_block(&mut self) -> PyResult<()> {
-        self.fix_counts()
+impl From<CTable> for PyCTable {
+    fn from(inner: CTable) -> Self {
+        Self { inner }
     }
 }

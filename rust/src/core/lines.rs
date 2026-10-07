@@ -141,16 +141,12 @@ impl<'a> Iterator for Lines<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::testing::xorshift;
 
     fn random_bytes(len: usize, seed: u64, alphabet: &[u8]) -> Vec<u8> {
-        let mut state = seed | 1;
+        let mut next = xorshift(seed);
         (0..len)
-            .map(|_| {
-                state ^= state << 13;
-                state ^= state >> 7;
-                state ^= state << 17;
-                alphabet[(state % alphabet.len() as u64) as usize]
-            })
+            .map(|_| alphabet[(next() % alphabet.len() as u64) as usize])
             .collect()
     }
 

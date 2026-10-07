@@ -8,3 +8,5 @@ pub mod newline;
 pub mod record;
 pub mod split;
 pub mod strip;
+#[cfg(test)]
+mod testing;

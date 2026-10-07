@@ -13,8 +13,8 @@ use crate::core::block::Block;
 use crate::core::mapped::MappedBlocks;
 use crate::core::newline::{TRANSLATE_SLACK, missing_ending, title_newline, translate_newlines};
 use crate::core::split::{Scanner, Tail};
-use crate::python::errors::os_error;
 use crate::python::kind::{Kind, bytes_of, same_kind};
+use crate::python::os::{fs_path, os_error};
 use crate::python::sdblock::PySDBlock;
 
 /// Characters or bytes requested per `read` call, or split per batch from a
@@ -84,7 +84,7 @@ impl Source {
             return Ok(());
         };
         let file = File::open(&*path).map_err(|error| os_error(py, error, filename))?;
-        *kind = Some(if *text { Kind::Text } else { Kind::Bytes });
+        *kind = Some(Kind::of(*text));
         *self = match MappedBlocks::open(&file, *text) {
             Some(blocks) => Source::Mapped {
                 blocks,
@@ -294,11 +294,8 @@ impl PySDBlockIterator {
 #[pyfunction]
 #[pyo3(signature = (path: "str | bytes | os.PathLike[str] | os.PathLike[bytes]") -> "_SDBlockIterator[Any]")]
 pub(crate) fn parse_sdf(path: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
-    let os = PyModule::import(path.py(), "os")?;
-    let filename = os.call_method1("fspath", (path,))?;
+    let (filename, path) = fs_path(path)?;
     let text = filename.is_instance_of::<PyString>();
-    // fsdecode round-trips bytes paths losslessly through surrogateescape.
-    let path = os.call_method1("fsdecode", (&filename,))?.extract()?;
     Ok(PySDBlockIterator::new(Source::Path {
         path,
         filename: filename.unbind(),

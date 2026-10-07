@@ -136,6 +136,7 @@ pub fn universal_newlines(bytes: &[u8]) -> Cow<'_, [u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::testing::xorshift;
 
     fn chunked(input: &[u8], chunk: usize, slack: usize) -> Vec<u8> {
         let mut out = Vec::new();
@@ -166,13 +167,7 @@ mod tests {
 
     #[test]
     fn translation_matches_replace_for_random_input_and_chunks() {
-        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
-        let mut next = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut next = xorshift(0x9E37_79B9_7F4A_7C15_u64);
         for _ in 0..1000 {
             // Dense and sparse line endings exercise short and multi-lane runs.
             let sparseness = [4, 40][(next() % 2) as usize];

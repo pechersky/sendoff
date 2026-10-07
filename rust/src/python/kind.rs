@@ -15,6 +15,11 @@ pub(super) enum Kind {
 }
 
 impl Kind {
+    /// The kind of str input if `text`, else of bytes input.
+    pub(super) fn of(text: bool) -> Self {
+        if text { Kind::Text } else { Kind::Bytes }
+    }
+
     /// A str or bytes object of this kind holding `bytes`.
     pub(super) fn value<'py>(self, py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
         match self {
