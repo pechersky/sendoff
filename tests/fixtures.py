@@ -1,7 +1,8 @@
 # mypy: allow-untyped-decorators
 """Provide fixtures of SDFs with well- or misbehaved metadata."""
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import pytest
 from rdkit import Chem
@@ -430,485 +431,99 @@ def single_right_angle_bracket_record_name_mol_sdf(
     return outpath
 
 
-@pytest.fixture()
-def single_large_atom_index_v3000_sdf(tmp_path: Path) -> Path:
-    """Write a single molecule to a v3000 sdf with large atom indices.
+V3000_ATOMS = [
+    "C 87.71 -95.64 0 0",
+    "C 87.71 -81.29 0 0",
+    "C 100.18 -74.09 0 0",
+    "C 100.18 -59.69 0 0",
+    "C 87.71 -52.49 0 0",
+    "C 75.24 -59.69 0 0",
+    "C 75.24 -74.09 0 0",
+    "C 87.71 -38.09 0 0",
+    "O 100.18 -30.89 0 0",
+]
 
-    Args:
-        tmp_path: pytest fixture for writing files to a temp directory
 
-    Returns:
-        Path to the sdf
+# Each bond's type and the positions, from 1, of its two atoms in V3000_ATOMS.
+V3000_BONDS = [
+    (1, 1, 2),
+    (1, 2, 3),
+    (2, 3, 4),
+    (1, 4, 5),
+    (2, 5, 6),
+    (1, 6, 7),
+    (2, 7, 2),
+    (1, 5, 8),
+    (2, 8, 9),
+]
+
+
+class V3000Mol(NamedTuple):
+    """A 9-atom V3000 molecule, whose counts and indices tests can break.
+
+    Attributes:
+        counts: the atom and bond counts on the COUNTS line
+        atom_ids: the index of each atom in V3000_ATOMS
+        bond_ids: the index of each bond in V3000_BONDS
+        atom_order: the positions in V3000_ATOMS, from 0, in line order
+        bond_order: the positions in V3000_BONDS, from 0, in line order
     """
-    sdf_text = """
+
+    counts: tuple[int, int] = (9, 9)
+    atom_ids: Sequence[int] = range(1, 10)
+    bond_ids: Sequence[int] = range(1, 10)
+    atom_order: Sequence[int] = range(9)
+    bond_order: Sequence[int] = range(9)
+
+    def sdf(self) -> str:
+        """Write the molecule as an untitled sdf block without metadata.
+
+        Returns:
+            The sdf text.
+        """
+        atoms = [f"M  V30 {self.atom_ids[i]} {V3000_ATOMS[i]}" for i in self.atom_order]
+        bonds = []
+        for i in self.bond_order:
+            kind, first, second = V3000_BONDS[i]
+            first_id, second_id = self.atom_ids[first - 1], self.atom_ids[second - 1]
+            bonds.append(f"M  V30 {self.bond_ids[i]} {kind} {first_id} {second_id}")
+        lines = [
+            "",
+            "",
+            "",
+            "  0  0  0     0  0            999 V3000",
+            "M  V30 BEGIN CTAB",
+            "M  V30 COUNTS {} {} 0 0 0".format(*self.counts),
+            "M  V30 BEGIN ATOM",
+            *atoms,
+            "M  V30 END ATOM",
+            "M  V30 BEGIN BOND",
+            *bonds,
+            "M  V30 END BOND",
+            "M  V30 END CTAB",
+            "M  END",
+            "$$$$",
+        ]
+        return str.join("", (line + "\n" for line in lines))
 
 
-  0  0  0     0  0            999 V3000
-M  V30 BEGIN CTAB
-M  V30 COUNTS 9 9 0 0 0
-M  V30 BEGIN ATOM
-M  V30 2101315825 C 87.71 -95.64 0 0
-M  V30 2101315840 C 87.71 -81.29 0 0
-M  V30 2101315860 C 100.18 -74.09 0 0
-M  V30 2101315861 C 100.18 -59.69 0 0
-M  V30 2101315862 C 87.71 -52.49 0 0
-M  V30 2101315863 C 75.24 -59.69 0 0
-M  V30 2101315864 C 75.24 -74.09 0 0
-M  V30 2101315865 C 87.71 -38.09 0 0
-M  V30 2101315866 O 100.18 -30.89 0 0
-M  V30 END ATOM
-M  V30 BEGIN BOND
-M  V30 1 1 2101315825 2101315840
-M  V30 2 1 2101315840 2101315860
-M  V30 3 2 2101315860 2101315861
-M  V30 4 1 2101315861 2101315862
-M  V30 5 2 2101315862 2101315863
-M  V30 6 1 2101315863 2101315864
-M  V30 7 2 2101315864 2101315840
-M  V30 8 1 2101315862 2101315865
-M  V30 9 2 2101315865 2101315866
-M  V30 END BOND
-M  V30 END CTAB
-M  END
-$$$$
-
-"""
-    outpath = tmp_path / "input.sdf"
-    with open(outpath, "w") as outh:
-        outh.write(sdf_text)
-    return outpath
+SEVENTH_AND_EIGHTH_SWAPPED = (0, 1, 2, 3, 4, 5, 7, 6, 8)
 
 
-@pytest.fixture()
-def single_large_bond_index_v3000_sdf(tmp_path: Path) -> Path:
-    """Write a single molecule to a v3000 sdf with large bond indices.
-
-    Args:
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    sdf_text = """
-
-
-  0  0  0     0  0            999 V3000
-M  V30 BEGIN CTAB
-M  V30 COUNTS 9 9 0 0 0
-M  V30 BEGIN ATOM
-M  V30 1 C 87.71 -95.64 0 0
-M  V30 2 C 87.71 -81.29 0 0
-M  V30 3 C 100.18 -74.09 0 0
-M  V30 4 C 100.18 -59.69 0 0
-M  V30 5 C 87.71 -52.49 0 0
-M  V30 6 C 75.24 -59.69 0 0
-M  V30 7 C 75.24 -74.09 0 0
-M  V30 8 C 87.71 -38.09 0 0
-M  V30 9 O 100.18 -30.89 0 0
-M  V30 END ATOM
-M  V30 BEGIN BOND
-M  V30 2101315886 1 1 2
-M  V30 2101315911 1 2 3
-M  V30 2101315912 2 3 4
-M  V30 2101315913 1 4 5
-M  V30 2101315914 2 5 6
-M  V30 2101315915 1 6 7
-M  V30 2101315916 2 7 2
-M  V30 2101315917 1 5 8
-M  V30 2101315918 2 8 9
-M  V30 END BOND
-M  V30 END CTAB
-M  END
-$$$$
-"""
-    outpath = tmp_path / "input.sdf"
-    with open(outpath, "w") as outh:
-        outh.write(sdf_text)
-    return outpath
-
-
-@pytest.fixture()
-def single_missing_atom_line_v3000_sdf(tmp_path: Path) -> Path:
-    """Write a single molecule to a v3000 sdf with a missing atom line.
-
-    Args:
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    sdf_text = """
-
-
-  0  0  0     0  0            999 V3000
-M  V30 BEGIN CTAB
-M  V30 COUNTS 10 9 0 0 0
-M  V30 BEGIN ATOM
-M  V30 1 C 87.71 -95.64 0 0
-M  V30 2 C 87.71 -81.29 0 0
-M  V30 3 C 100.18 -74.09 0 0
-M  V30 4 C 100.18 -59.69 0 0
-M  V30 5 C 87.71 -52.49 0 0
-M  V30 6 C 75.24 -59.69 0 0
-M  V30 7 C 75.24 -74.09 0 0
-M  V30 8 C 87.71 -38.09 0 0
-M  V30 9 O 100.18 -30.89 0 0
-M  V30 END ATOM
-M  V30 BEGIN BOND
-M  V30 1 1 1 2
-M  V30 2 1 2 3
-M  V30 3 2 3 4
-M  V30 4 1 4 5
-M  V30 5 2 5 6
-M  V30 6 1 6 7
-M  V30 7 2 7 2
-M  V30 8 1 5 8
-M  V30 9 2 8 9
-M  V30 END BOND
-M  V30 END CTAB
-M  END
-$$$$
-"""
-    outpath = tmp_path / "input.sdf"
-    with open(outpath, "w") as outh:
-        outh.write(sdf_text)
-    return outpath
-
-
-@pytest.fixture()
-def single_extra_atom_line_v3000_sdf(tmp_path: Path) -> Path:
-    """Write a single molecule to a v3000 sdf with an extra atom line.
-
-    Args:
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    sdf_text = """
-
-
-  0  0  0     0  0            999 V3000
-M  V30 BEGIN CTAB
-M  V30 COUNTS 8 9 0 0 0
-M  V30 BEGIN ATOM
-M  V30 1 C 87.71 -95.64 0 0
-M  V30 2 C 87.71 -81.29 0 0
-M  V30 3 C 100.18 -74.09 0 0
-M  V30 4 C 100.18 -59.69 0 0
-M  V30 5 C 87.71 -52.49 0 0
-M  V30 6 C 75.24 -59.69 0 0
-M  V30 7 C 75.24 -74.09 0 0
-M  V30 8 C 87.71 -38.09 0 0
-M  V30 9 O 100.18 -30.89 0 0
-M  V30 END ATOM
-M  V30 BEGIN BOND
-M  V30 1 1 1 2
-M  V30 2 1 2 3
-M  V30 3 2 3 4
-M  V30 4 1 4 5
-M  V30 5 2 5 6
-M  V30 6 1 6 7
-M  V30 7 2 7 2
-M  V30 8 1 5 8
-M  V30 9 2 8 9
-M  V30 END BOND
-M  V30 END CTAB
-M  END
-$$$$
-"""
-    outpath = tmp_path / "input.sdf"
-    with open(outpath, "w") as outh:
-        outh.write(sdf_text)
-    return outpath
-
-
-@pytest.fixture()
-def single_missing_bond_line_v3000_sdf(tmp_path: Path) -> Path:
-    """Write a single molecule to a v3000 sdf with a missing bond line.
-
-    Args:
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    sdf_text = """
-
-
-  0  0  0     0  0            999 V3000
-M  V30 BEGIN CTAB
-M  V30 COUNTS 9 10 0 0 0
-M  V30 BEGIN ATOM
-M  V30 1 C 87.71 -95.64 0 0
-M  V30 2 C 87.71 -81.29 0 0
-M  V30 3 C 100.18 -74.09 0 0
-M  V30 4 C 100.18 -59.69 0 0
-M  V30 5 C 87.71 -52.49 0 0
-M  V30 6 C 75.24 -59.69 0 0
-M  V30 7 C 75.24 -74.09 0 0
-M  V30 8 C 87.71 -38.09 0 0
-M  V30 9 O 100.18 -30.89 0 0
-M  V30 END ATOM
-M  V30 BEGIN BOND
-M  V30 1 1 1 2
-M  V30 2 1 2 3
-M  V30 3 2 3 4
-M  V30 4 1 4 5
-M  V30 5 2 5 6
-M  V30 6 1 6 7
-M  V30 7 2 7 2
-M  V30 8 1 5 8
-M  V30 9 2 8 9
-M  V30 END BOND
-M  V30 END CTAB
-M  END
-$$$$
-"""
-    outpath = tmp_path / "input.sdf"
-    with open(outpath, "w") as outh:
-        outh.write(sdf_text)
-    return outpath
-
-
-@pytest.fixture()
-def single_extra_bond_line_v3000_sdf(tmp_path: Path) -> Path:
-    """Write a single molecule to a v3000 sdf with an extra bond line.
-
-    Args:
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    sdf_text = """
-
-
-  0  0  0     0  0            999 V3000
-M  V30 BEGIN CTAB
-M  V30 COUNTS 9 8 0 0 0
-M  V30 BEGIN ATOM
-M  V30 1 C 87.71 -95.64 0 0
-M  V30 2 C 87.71 -81.29 0 0
-M  V30 3 C 100.18 -74.09 0 0
-M  V30 4 C 100.18 -59.69 0 0
-M  V30 5 C 87.71 -52.49 0 0
-M  V30 6 C 75.24 -59.69 0 0
-M  V30 7 C 75.24 -74.09 0 0
-M  V30 8 C 87.71 -38.09 0 0
-M  V30 9 O 100.18 -30.89 0 0
-M  V30 END ATOM
-M  V30 BEGIN BOND
-M  V30 1 1 1 2
-M  V30 2 1 2 3
-M  V30 3 2 3 4
-M  V30 4 1 4 5
-M  V30 5 2 5 6
-M  V30 6 1 6 7
-M  V30 7 2 7 2
-M  V30 8 1 5 8
-M  V30 9 2 8 9
-M  V30 END BOND
-M  V30 END CTAB
-M  END
-$$$$
-"""
-    outpath = tmp_path / "input.sdf"
-    with open(outpath, "w") as outh:
-        outh.write(sdf_text)
-    return outpath
-
-
-@pytest.fixture()
-def single_duplicate_atom_index_v3000_sdf(tmp_path: Path) -> Path:
-    """Write a single molecule to a v3000 sdf with a duplicate atom index.
-
-    Args:
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    sdf_text = """
-
-
-  0  0  0     0  0            999 V3000
-M  V30 BEGIN CTAB
-M  V30 COUNTS 9 9 0 0 0
-M  V30 BEGIN ATOM
-M  V30 1 C 87.71 -95.64 0 0
-M  V30 2 C 87.71 -81.29 0 0
-M  V30 3 C 100.18 -74.09 0 0
-M  V30 4 C 100.18 -59.69 0 0
-M  V30 5 C 87.71 -52.49 0 0
-M  V30 6 C 75.24 -59.69 0 0
-M  V30 7 C 75.24 -74.09 0 0
-M  V30 1 C 87.71 -38.09 0 0
-M  V30 9 O 100.18 -30.89 0 0
-M  V30 END ATOM
-M  V30 BEGIN BOND
-M  V30 1 1 1 2
-M  V30 2 1 2 3
-M  V30 3 2 3 4
-M  V30 4 1 4 5
-M  V30 5 2 5 6
-M  V30 6 1 6 7
-M  V30 7 2 7 2
-M  V30 8 1 5 1
-M  V30 9 2 1 9
-M  V30 END BOND
-M  V30 END CTAB
-M  END
-$$$$
-    """
-    outpath = tmp_path / "input.sdf"
-    with open(outpath, "w") as outh:
-        outh.write(sdf_text)
-    return outpath
-
-
-@pytest.fixture()
-def single_duplicate_bond_index_v3000_sdf(tmp_path: Path) -> Path:
-    """Write a single molecule to a v3000 sdf with a duplicate bond index.
-
-    Args:
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    sdf_text = """
-
-
-  0  0  0     0  0            999 V3000
-M  V30 BEGIN CTAB
-M  V30 COUNTS 9 9 0 0 0
-M  V30 BEGIN ATOM
-M  V30 1 C 87.71 -95.64 0 0
-M  V30 2 C 87.71 -81.29 0 0
-M  V30 3 C 100.18 -74.09 0 0
-M  V30 4 C 100.18 -59.69 0 0
-M  V30 5 C 87.71 -52.49 0 0
-M  V30 6 C 75.24 -59.69 0 0
-M  V30 7 C 75.24 -74.09 0 0
-M  V30 8 C 87.71 -38.09 0 0
-M  V30 9 O 100.18 -30.89 0 0
-M  V30 END ATOM
-M  V30 BEGIN BOND
-M  V30 1 1 1 2
-M  V30 2 1 2 3
-M  V30 3 2 3 4
-M  V30 4 1 4 5
-M  V30 5 2 5 6
-M  V30 6 1 6 7
-M  V30 7 2 7 2
-M  V30 1 1 5 8
-M  V30 9 2 8 9
-M  V30 END BOND
-M  V30 END CTAB
-M  END
-$$$$
-"""
-    outpath = tmp_path / "input.sdf"
-    with open(outpath, "w") as outh:
-        outh.write(sdf_text)
-    return outpath
-
-
-@pytest.fixture()
-def single_shuffled_atom_lines_v3000_sdf(tmp_path: Path) -> Path:
-    """Write a single molecule to a v3000 sdf with atom lines not in index order.
-
-    Args:
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    sdf_text = """
-
-
-  0  0  0     0  0            999 V3000
-M  V30 BEGIN CTAB
-M  V30 COUNTS 9 9 0 0 0
-M  V30 BEGIN ATOM
-M  V30 1 C 87.71 -95.64 0 0
-M  V30 2 C 87.71 -81.29 0 0
-M  V30 3 C 100.18 -74.09 0 0
-M  V30 4 C 100.18 -59.69 0 0
-M  V30 5 C 87.71 -52.49 0 0
-M  V30 6 C 75.24 -59.69 0 0
-M  V30 8 C 87.71 -38.09 0 0
-M  V30 7 C 75.24 -74.09 0 0
-M  V30 9 O 100.18 -30.89 0 0
-M  V30 END ATOM
-M  V30 BEGIN BOND
-M  V30 1 1 1 2
-M  V30 2 1 2 3
-M  V30 3 2 3 4
-M  V30 4 1 4 5
-M  V30 5 2 5 6
-M  V30 6 1 6 7
-M  V30 7 2 7 2
-M  V30 8 1 5 8
-M  V30 9 2 8 9
-M  V30 END BOND
-M  V30 END CTAB
-M  END
-$$$$
-"""
-    outpath = tmp_path / "input.sdf"
-    with open(outpath, "w") as outh:
-        outh.write(sdf_text)
-    return outpath
-
-
-@pytest.fixture()
-def single_shuffled_bond_lines_v3000_sdf(tmp_path: Path) -> Path:
-    """Write a single molecule to a v3000 sdf with bond lines not in index order.
-
-    Args:
-        tmp_path: pytest fixture for writing files to a temp directory
-
-    Returns:
-        Path to the sdf
-    """
-    sdf_text = """
-
-
-  0  0  0     0  0            999 V3000
-M  V30 BEGIN CTAB
-M  V30 COUNTS 9 9 0 0 0
-M  V30 BEGIN ATOM
-M  V30 1 C 87.71 -95.64 0 0
-M  V30 2 C 87.71 -81.29 0 0
-M  V30 3 C 100.18 -74.09 0 0
-M  V30 4 C 100.18 -59.69 0 0
-M  V30 5 C 87.71 -52.49 0 0
-M  V30 6 C 75.24 -59.69 0 0
-M  V30 7 C 75.24 -74.09 0 0
-M  V30 8 C 87.71 -38.09 0 0
-M  V30 9 O 100.18 -30.89 0 0
-M  V30 END ATOM
-M  V30 BEGIN BOND
-M  V30 1 1 1 2
-M  V30 2 1 2 3
-M  V30 3 2 3 4
-M  V30 4 1 4 5
-M  V30 5 2 5 6
-M  V30 6 1 6 7
-M  V30 8 1 5 8
-M  V30 7 2 7 2
-M  V30 9 2 8 9
-M  V30 END BOND
-M  V30 END CTAB
-M  END
-$$$$
-"""
-    outpath = tmp_path / "input.sdf"
-    with open(outpath, "w") as outh:
-        outh.write(sdf_text)
-    return outpath
+INDEX_DEFECTS = {
+    "large_atom_index": V3000Mol(
+        atom_ids=(2101315825, 2101315840, *range(2101315860, 2101315867))
+    ),
+    "large_bond_index": V3000Mol(bond_ids=(2101315886, *range(2101315911, 2101315919))),
+    "missing_atom_line": V3000Mol(counts=(10, 9)),
+    "extra_atom_line": V3000Mol(counts=(8, 9)),
+    "missing_bond_line": V3000Mol(counts=(9, 10)),
+    "extra_bond_line": V3000Mol(counts=(9, 8)),
+    "duplicate_atom_index": V3000Mol(atom_ids=(1, 2, 3, 4, 5, 6, 7, 1, 9)),
+    "duplicate_bond_index": V3000Mol(bond_ids=(1, 2, 3, 4, 5, 6, 7, 1, 9)),
+    "shuffled_atom_lines": V3000Mol(atom_order=SEVENTH_AND_EIGHTH_SWAPPED),
+    "shuffled_bond_lines": V3000Mol(bond_order=SEVENTH_AND_EIGHTH_SWAPPED),
+}
 
 
 @pytest.fixture()
