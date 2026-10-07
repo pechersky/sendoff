@@ -11,7 +11,9 @@ use std::sync::LazyLock;
 
 use memchr::{memchr, memmem};
 
-use crate::core::ctable::{self, CTableError, CTableFormat};
+use crate::core::ctable::CTableFormat;
+use crate::core::ctable::error::CTableError;
+use crate::core::ctable::header::{HEADER_LINES, parse_header};
 use crate::core::lines::lines;
 use crate::core::newline::{
     CRLF_TRAILER, TRAILER, missing_ending, newline, title_newline, trailer,
@@ -393,18 +395,17 @@ impl Block {
         let mut source = std::iter::once(&b""[..])
             .chain(lines(self.mdl()))
             .map(String::from_utf8_lossy);
-        let owned: [Option<Cow<'_, str>>; ctable::HEADER_LINES] =
-            std::array::from_fn(|_| source.next());
+        let owned: [Option<Cow<'_, str>>; HEADER_LINES] = std::array::from_fn(|_| source.next());
         let found = owned.iter().take_while(|line| line.is_some()).count();
         let header = owned.each_ref().map(|line| line.as_deref().unwrap_or(""));
-        ctable::parse_header(&header[..found])
+        parse_header(&header[..found])
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ctable::Malformed;
+    use crate::core::ctable::error::Malformed;
 
     fn block(text: &str, delimited: bool) -> Block {
         let delimiter = delimited.then(|| {

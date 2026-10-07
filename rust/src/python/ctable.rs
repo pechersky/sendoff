@@ -1,7 +1,8 @@
 use pyo3::exceptions::PyNotImplementedError;
 use pyo3::prelude::*;
 
-use crate::core::ctable::{self, CTableError, Section};
+use crate::core::ctable::error::CTableError;
+use crate::core::ctable::{CTable, Section};
 
 pyo3::import_exception!(sendoff.ctable, IndicesDuplicateError);
 pyo3::import_exception!(sendoff.ctable, IndicesMismatchError);
@@ -23,7 +24,7 @@ pyo3::import_exception!(sendoff.ctable, MalformedCTableError);
 /// NotImplementedError.
 #[pyclass(name = "CTable", module = "sendoff.native")]
 pub(crate) struct PyCTable {
-    inner: ctable::CTable,
+    inner: CTable,
 }
 
 #[pymethods]
@@ -176,7 +177,7 @@ impl PyCTable {
 
 impl PyCTable {
     pub(crate) fn from_lines(lines: Vec<String>) -> PyResult<Self> {
-        let inner = ctable::CTable::parse(lines)?;
+        let inner = CTable::parse(lines)?;
         Ok(Self { inner })
     }
 
