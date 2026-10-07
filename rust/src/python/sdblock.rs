@@ -13,9 +13,13 @@ use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyIterator, PyList, PyString, PyTuple, PyType};
 
-use crate::core::block::{self, Block, Record, Strip};
+use crate::core::block::Block;
+use crate::core::lines::lines;
 use crate::core::mapped::MappedBlocks;
+use crate::core::newline::{missing_ending, title_newline};
+use crate::core::record::Record;
 use crate::core::scan::{Scanner, TRANSLATE_SLACK, Tail, single_block, translate_newlines};
+use crate::core::strip::Strip;
 use crate::python::ctable::PyCTable;
 
 /// Characters or bytes requested per `read` call, or split per batch from a
@@ -352,9 +356,9 @@ impl Source {
                     };
                     set_kind(kind, found)?;
                     tail.extend(bytes);
-                    let newline = *newline.get_or_insert_with(|| block::title_newline(bytes));
+                    let newline = *newline.get_or_insert_with(|| title_newline(bytes));
                     if !bytes.ends_with(b"\n") {
-                        tail.extend(block::missing_ending(bytes, newline));
+                        tail.extend(missing_ending(bytes, newline));
                     }
                     // Stop at a delimiter so blocks are produced as lines arrive.
                     if bytes.starts_with(b"$$$$") {
@@ -1192,15 +1196,15 @@ impl PySDBlock {
     fn ctable(&self, py: Python<'_>) -> PyResult<PyCTable> {
         self.require_text()?;
         let noted = |error| self.noted(py, error, || "Reading the CTAB of".into());
-        let mut lines = vec![
+        let mut decoded = vec![
             decode(py, self.block.title(Strip::Str))
                 .map_err(noted)?
                 .to_owned(),
         ];
-        for line in block::lines(self.block.mdl()) {
-            lines.push(decode(py, line).map_err(noted)?.to_owned());
+        for line in lines(self.block.mdl()) {
+            decoded.push(decode(py, line).map_err(noted)?.to_owned());
         }
-        PyCTable::from_lines(lines)
+        PyCTable::from_lines(decoded)
     }
 
     /// Get the number of atoms declared by the counts line.

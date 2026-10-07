@@ -12,186 +12,41 @@ use std::sync::LazyLock;
 use memchr::{memchr, memmem};
 
 use crate::core::ctable::{self, CTableError, CTableFormat};
-use crate::core::lines::Lines;
+use crate::core::lines::lines;
+use crate::core::newline::{
+    CRLF_TRAILER, TRAILER, missing_ending, newline, title_newline, trailer,
+};
+use crate::core::record::{self, Header, MissingFieldName, Record, push_record};
+use crate::core::strip::Strip;
 
 static MEND: LazyLock<memmem::Finder<'static>> = LazyLock::new(|| memmem::Finder::new(b"\nM  END"));
-
-/// Whether a byte is whitespace for Python's `bytes.strip()`.
-#[inline]
-pub fn is_space(byte: u8) -> bool {
-    matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'\x0b' | b'\x0c')
-}
-
-/// Strip whitespace from both ends like Python's `bytes.strip()`.
-#[inline]
-pub fn trim(bytes: &[u8]) -> &[u8] {
-    trim_ascii_by(bytes, is_space)
-}
-
-#[inline]
-fn trim_ascii_by(bytes: &[u8], is_space: impl Fn(u8) -> bool) -> &[u8] {
-    let Some(start) = bytes.iter().position(|&byte| !is_space(byte)) else {
-        return &[];
-    };
-    let end = bytes
-        .iter()
-        .rposition(|&byte| !is_space(byte))
-        .map_or(start, |index| index + 1);
-    &bytes[start..end]
-}
-
-/// Whether an ASCII byte is whitespace for Python's `str.strip()`.
-#[inline]
-fn is_str_space(byte: u8) -> bool {
-    is_space(byte) || matches!(byte, b'\x1c'..=b'\x1f')
-}
-
-/// The UTF-8 length of a non-ASCII `str.isspace()` character starting
-/// `bytes`, or 0.
-#[inline]
-fn wide_space_prefix(bytes: &[u8]) -> usize {
-    match bytes {
-        [0xc2, 0x85 | 0xa0, ..] => 2,
-        [0xe1, 0x9a, 0x80, ..]
-        | [0xe2, 0x80, 0x80..=0x8a | 0xa8 | 0xa9 | 0xaf, ..]
-        | [0xe2, 0x81, 0x9f, ..]
-        | [0xe3, 0x80, 0x80, ..] => 3,
-        _ => 0,
-    }
-}
-
-/// The UTF-8 length of a non-ASCII `str.isspace()` character ending
-/// `bytes`, or 0.
-#[inline]
-fn wide_space_suffix(bytes: &[u8]) -> usize {
-    match bytes {
-        [.., 0xc2, 0x85 | 0xa0] => 2,
-        [.., 0xe1, 0x9a, 0x80]
-        | [.., 0xe2, 0x80, 0x80..=0x8a | 0xa8 | 0xa9 | 0xaf]
-        | [.., 0xe2, 0x81, 0x9f]
-        | [.., 0xe3, 0x80, 0x80] => 3,
-        _ => 0,
-    }
-}
-
-/// Strip whitespace from both ends of UTF-8 like Python's `str.strip()`.
-///
-/// Only complete whitespace sequences are removed, which are lead-byte
-/// anchored, so stripping never changes whether the rest decodes.
-#[inline]
-pub fn trim_str(bytes: &[u8]) -> &[u8] {
-    let trimmed = trim_ascii_by(bytes, is_str_space);
-    match (trimmed.first(), trimmed.last()) {
-        (Some(&first), Some(&last)) if first >= 0x80 || last >= 0x80 => trim_wide(trimmed),
-        _ => trimmed,
-    }
-}
-
-#[cold]
-#[inline(never)]
-fn trim_wide(bytes: &[u8]) -> &[u8] {
-    let mut start = 0;
-    loop {
-        match wide_space_prefix(&bytes[start..]) {
-            0 => break,
-            len => start += len,
-        }
-        while start < bytes.len() && is_str_space(bytes[start]) {
-            start += 1;
-        }
-    }
-    let mut end = bytes.len();
-    loop {
-        match wide_space_suffix(&bytes[start..end]) {
-            0 => break,
-            len => end -= len,
-        }
-        while end > start && is_str_space(bytes[end - 1]) {
-            end -= 1;
-        }
-    }
-    &bytes[start..end]
-}
-
-/// Which Python `strip()` a block's lines follow.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Strip {
-    /// `bytes.strip()`: ASCII whitespace only.
-    Bytes,
-    /// `str.strip()` over UTF-8: also `\x1c`-`\x1f` and Unicode spaces.
-    Str,
-}
-
-impl Strip {
-    #[inline]
-    pub fn trim(self, bytes: &[u8]) -> &[u8] {
-        match self {
-            Strip::Bytes => trim(bytes),
-            Strip::Str => trim_str(bytes),
-        }
-    }
-}
-
-/// Return the line starting at `*pos`, including its `\n`, and advance.
-#[inline]
-fn next_line<'a>(data: &'a [u8], pos: &mut usize) -> &'a [u8] {
-    let rest = &data[*pos..];
-    let len = memchr(b'\n', rest).map_or(rest.len(), |index| index + 1);
-    *pos += len;
-    &rest[..len]
-}
-
-/// Iterate over `\n`-terminated lines, yielding them without the `\n`.
-pub fn lines(data: &[u8]) -> impl Iterator<Item = &[u8]> {
-    let mut pos = 0;
-    std::iter::from_fn(move || {
-        (pos < data.len()).then(|| {
-            let line = next_line(data, &mut pos);
-            line.strip_suffix(b"\n").unwrap_or(line)
-        })
-    })
-}
-
-/// A metadata header that has no `<name>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MissingFieldName;
-
-impl fmt::Display for MissingFieldName {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("SD data field header is missing a name")
-    }
-}
-
-/// Where an SD data record starts, and its name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Header<'a> {
-    /// The field name between the header's first `<` and last `>`.
-    pub name: &'a [u8],
-    /// Offset of the header line in the SD data.
-    pub start: usize,
-}
-
-/// One SD data record borrowed from a block where possible.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Record<'a> {
-    /// The field name between the header's first `<` and last `>`.
-    pub name: &'a [u8],
-    /// Stripped value lines joined with `\n`.
-    pub value: Cow<'a, [u8]>,
-    /// Offset of the header line in the SD data.
-    pub start: usize,
-}
 
 /// The end of the first `M  END` line in `data[title_end..body_end]`.
 fn mdl_end(data: &[u8], title_end: usize, body_end: usize) -> Option<usize> {
     let body = &data[title_end..body_end];
-    let mut end = if body.starts_with(b"M  END") {
+    let start = if body.starts_with(b"M  END") {
         title_end
     } else {
         title_end + MEND.find(body)? + 1
     };
-    next_line(data, &mut end);
-    Some(end)
+    Some(memchr(b'\n', &data[start..]).map_or(data.len(), |index| start + index + 1))
+}
+
+/// Where the title, MDL, and SD data end in raw lines ending in `\n`, given
+/// the offset of a `$$$$` line. A `$$$$` first line ends the record, which
+/// then has no title line.
+///
+/// The MDL runs through the first `M  END` line and the SD data runs to the
+/// delimiter; without `M  END`, the MDL runs to the delimiter and there is
+/// no SD data.
+fn layout(data: &[u8], delimiter: Option<usize>) -> (usize, usize, usize) {
+    let title_end = match delimiter {
+        Some(0) => 0,
+        _ => memchr(b'\n', data).map_or(data.len(), |index| index + 1),
+    };
+    let body_end = delimiter.map_or(data.len(), |offset| offset.max(title_end));
+    let mdl_end = mdl_end(data, title_end, body_end).unwrap_or(body_end);
+    (title_end, mdl_end, body_end)
 }
 
 /// Why a value cannot replace a block's title and MDL.
@@ -209,60 +64,6 @@ impl fmt::Display for InvalidMolblock {
             Self::TrailingData => "molblock has data after its M  END line",
             Self::Delimiter => "molblock has a $$$$ line, which would end the block",
         })
-    }
-}
-
-/// Append `> <name>`, the value line, and a blank line, each ending in
-/// `newline`.
-fn push_record(data: &mut Vec<u8>, name: &[u8], value: &[u8], newline: &[u8]) {
-    data.reserve(name.len() + value.len() + 4 + 3 * newline.len());
-    data.extend_from_slice(b"> <");
-    data.extend_from_slice(name);
-    data.push(b'>');
-    data.extend_from_slice(newline);
-    data.extend_from_slice(value);
-    data.extend_from_slice(newline);
-    data.extend_from_slice(newline);
-}
-
-/// The delimiter lines that end serialized blocks, as read.
-const TRAILER: &[u8] = b"$$$$\n";
-const CRLF_TRAILER: &[u8] = b"$$$$\r\n";
-
-/// `\r\n` if `line` ends with it, else `\n`.
-fn newline(line: &[u8]) -> &'static [u8] {
-    if line.ends_with(b"\r\n") {
-        b"\r\n"
-    } else {
-        b"\n"
-    }
-}
-
-/// The ending of `data`'s first line once it ends in `\n`, which lines a
-/// block writes itself use.
-pub fn title_newline(data: &[u8]) -> &'static [u8] {
-    match memchr(b'\n', data) {
-        Some(index) => newline(&data[..=index]),
-        None if data.ends_with(b"\r") => b"\r\n",
-        None => b"\n",
-    }
-}
-
-/// What ends `line` if it lacks a `\n`: `\n` after a `\r`, else `newline`.
-pub fn missing_ending(line: &[u8], newline: &'static [u8]) -> &'static [u8] {
-    if line.ends_with(b"\r") {
-        b"\n"
-    } else {
-        newline
-    }
-}
-
-/// The `$$$$` line ending in `newline`.
-fn trailer(newline: &[u8]) -> &'static [u8] {
-    if newline == b"\r\n" {
-        CRLF_TRAILER
-    } else {
-        TRAILER
     }
 }
 
@@ -287,23 +88,16 @@ pub struct Block {
 impl Block {
     /// Build a block from its raw lines.
     ///
-    /// `delimiter` is the offset of a trailing `$$$$` line, if any. The MDL
-    /// runs through the first `M  END` line and the SD data runs to the
-    /// delimiter; without `M  END`, the MDL runs to the delimiter and there is
-    /// no SD data. (Pure-Python sendoff 0.1.x kept the delimiter line in that
-    /// MDL, so each write added a `$$$$` line that read back as a spurious
-    /// block.)
+    /// `delimiter` is the offset of a trailing `$$$$` line, if any, and
+    /// `layout` finds the title, MDL, and SD data. (Pure-Python sendoff
+    /// 0.1.x kept the delimiter line in an MDL without `M  END`, so each
+    /// write added a `$$$$` line that read back as a spurious block.)
     pub fn new(mut data: Vec<u8>, delimiter: Option<usize>) -> Self {
         if data.last() != Some(&b'\n') {
             let ending = missing_ending(&data, title_newline(&data));
             data.extend_from_slice(ending);
         }
-        let BlockView {
-            title_end,
-            mdl_end,
-            body_end,
-            ..
-        } = BlockView::new(&data, delimiter);
+        let (title_end, mdl_end, body_end) = layout(&data, delimiter);
         if !matches!(&data[body_end..], TRAILER | CRLF_TRAILER) {
             let trailer = trailer(title_newline(&data));
             data.truncate(body_end);
@@ -376,24 +170,14 @@ impl Block {
         }
     }
 
-    /// Read the block through a view.
-    pub fn view(&self) -> BlockView<'_> {
-        BlockView {
-            data: &self.data,
-            title_end: self.title_end,
-            mdl_end: self.mdl_end,
-            body_end: self.body_end(),
-        }
-    }
-
     /// The stripped title.
     pub fn title(&self, strip: Strip) -> &[u8] {
-        self.view().title(strip)
+        strip.trim(&self.data[..self.title_end])
     }
 
     /// The MDL lines after the title, through `M  END`, each ending in `\n`.
     pub fn mdl(&self) -> &[u8] {
-        self.view().mdl()
+        &self.data[self.title_end..self.mdl_end]
     }
 
     /// The stripped title line followed by the MDL lines: a mol block.
@@ -423,7 +207,7 @@ impl Block {
 
     /// The SD data lines, each ending in `\n`.
     pub fn metadata(&self) -> &[u8] {
-        self.view().metadata()
+        &self.data[self.mdl_end..self.body_end()]
     }
 
     /// The stripped title, the remaining lines, and `$$$$`.
@@ -536,8 +320,7 @@ impl Block {
         let metadata = self.metadata();
         let mut spans = Vec::new();
         let mut pos = 0;
-        let view = self.view();
-        while let Some(header) = view.next_header(&mut pos, strip)? {
+        while let Some(header) = record::next_header(metadata, &mut pos, strip)? {
             if header.name == name {
                 spans.push((header.start, pos));
             }
@@ -590,7 +373,7 @@ impl Block {
         pos: &mut usize,
         strip: Strip,
     ) -> Result<Option<Record<'_>>, MissingFieldName> {
-        self.view().next_record(pos, strip)
+        record::next_record(self.metadata(), pos, strip)
     }
 
     /// Like `next_record`, but skip the value.
@@ -599,7 +382,7 @@ impl Block {
         pos: &mut usize,
         strip: Strip,
     ) -> Result<Option<Header<'_>>, MissingFieldName> {
-        self.view().next_header(pos, strip)
+        record::next_header(self.metadata(), pos, strip)
     }
 
     /// The format and atom and bond counts declared by the MDL header.
@@ -616,183 +399,6 @@ impl Block {
         let header = owned.each_ref().map(|line| line.as_deref().unwrap_or(""));
         ctable::parse_header(&header[..found])
     }
-}
-
-/// A block read in place, from `Block::view` or a scanner's buffer.
-///
-/// `data` holds the title, MDL, and SD data lines, each ending in `\n`,
-/// then possibly the `$$$$` line.
-#[derive(Clone, Copy, Debug)]
-pub struct BlockView<'a> {
-    data: &'a [u8],
-    title_end: usize,
-    mdl_end: usize,
-    body_end: usize,
-}
-
-impl<'a> BlockView<'a> {
-    /// Find the title, MDL, and SD data in raw lines ending in `\n`, as
-    /// `Block::new` does; `delimiter` is the offset of a `$$$$` line. A
-    /// `$$$$` first line ends the record, which then has no title line.
-    pub fn new(data: &'a [u8], delimiter: Option<usize>) -> Self {
-        let title_end = match delimiter {
-            Some(0) => 0,
-            _ => memchr(b'\n', data).map_or(data.len(), |index| index + 1),
-        };
-        let body_end = delimiter.map_or(data.len(), |offset| offset.max(title_end));
-        let mdl_end = mdl_end(data, title_end, body_end).unwrap_or(body_end);
-        Self {
-            data,
-            title_end,
-            mdl_end,
-            body_end,
-        }
-    }
-
-    /// The stripped title.
-    pub fn title(&self, strip: Strip) -> &'a [u8] {
-        strip.trim(&self.data[..self.title_end])
-    }
-
-    /// The MDL lines after the title, through `M  END`, each ending in `\n`.
-    pub fn mdl(&self) -> &'a [u8] {
-        &self.data[self.title_end..self.mdl_end]
-    }
-
-    /// The SD data lines, each ending in `\n`.
-    pub fn metadata(&self) -> &'a [u8] {
-        &self.data[self.mdl_end..self.body_end]
-    }
-
-    /// Parse the next record at or after `*pos` in the SD data.
-    pub fn next_record(
-        &self,
-        pos: &mut usize,
-        strip: Strip,
-    ) -> Result<Option<Record<'a>>, MissingFieldName> {
-        next_record(self.metadata(), pos, strip)
-    }
-
-    /// Like `next_record`, but skip the value.
-    pub fn next_header(
-        &self,
-        pos: &mut usize,
-        strip: Strip,
-    ) -> Result<Option<Header<'a>>, MissingFieldName> {
-        let found = match strip {
-            Strip::Bytes => next_record_by::<false>(self.metadata(), pos, trim),
-            Strip::Str => next_record_by::<false>(self.metadata(), pos, trim_str),
-        };
-        found.map(|record| {
-            record.map(|record| Header {
-                name: record.name,
-                start: record.start,
-            })
-        })
-    }
-}
-
-/// Parse the next record at or after `*pos`, as Python's groupby over
-/// stripped lines does: a run of non-blank lines whose first line starts with
-/// `> ` is a record; other runs are skipped.
-pub fn next_record<'a>(
-    metadata: &'a [u8],
-    pos: &mut usize,
-    strip: Strip,
-) -> Result<Option<Record<'a>>, MissingFieldName> {
-    match strip {
-        Strip::Bytes => next_record_by::<true>(metadata, pos, trim),
-        Strip::Str => next_record_by::<true>(metadata, pos, trim_str),
-    }
-}
-
-/// Parse the next record; without `VALUE`, skip the value lines unbuilt.
-#[inline]
-fn next_record_by<'a, const VALUE: bool>(
-    metadata: &'a [u8],
-    pos: &mut usize,
-    trim: impl Fn(&[u8]) -> &[u8],
-) -> Result<Option<Record<'a>>, MissingFieldName> {
-    let mut lines = Lines::new(metadata, *pos);
-    let found = record_in::<VALUE>(&mut lines, &trim);
-    *pos = lines.pos();
-    found
-}
-
-#[inline(always)]
-fn record_in<'a, const VALUE: bool>(
-    lines: &mut Lines<'a>,
-    trim: &impl Fn(&[u8]) -> &[u8],
-) -> Result<Option<Record<'a>>, MissingFieldName> {
-    loop {
-        let start = lines.pos();
-        let Some(line) = lines.next() else {
-            return Ok(None);
-        };
-        let header = trim(line);
-        if header.is_empty() {
-            continue;
-        }
-        let Some(rest) = header.strip_prefix(b"> ") else {
-            skip_run(lines, trim);
-            continue;
-        };
-        let name = record_name(rest)?;
-        let mut value: Cow<'a, [u8]> = Cow::Borrowed(&[]);
-        if !VALUE {
-            skip_run(lines, trim);
-            return Ok(Some(Record { name, value, start }));
-        }
-        let mut first = true;
-        for line in lines.by_ref() {
-            let line = trim(line);
-            if line.is_empty() {
-                break;
-            }
-            if first {
-                value = Cow::Borrowed(line);
-                first = false;
-            } else {
-                let owned = value.to_mut();
-                owned.push(b'\n');
-                owned.extend_from_slice(line);
-            }
-        }
-        return Ok(Some(Record { name, value, start }));
-    }
-}
-
-/// Consume lines through the next blank one.
-#[inline(always)]
-fn skip_run(lines: &mut Lines<'_>, trim: &impl Fn(&[u8]) -> &[u8]) {
-    for line in lines {
-        if is_blank(line, trim) {
-            break;
-        }
-    }
-}
-
-/// Whether `line` strips to nothing, deciding most lines by their first
-/// byte: printable ASCII is whitespace for neither `str` nor `bytes`.
-#[inline(always)]
-fn is_blank(line: &[u8], trim: &impl Fn(&[u8]) -> &[u8]) -> bool {
-    match line.first() {
-        Some(&byte) if byte > b' ' && byte < 0x80 => false,
-        _ => trim(line).is_empty(),
-    }
-}
-
-/// Extract `name` from the text after `> ` in a stripped `> <name>` header.
-///
-/// Python strips `rest` again first, but that can only remove leading
-/// whitespace, which holds no `<` or `>`, so the name is the same.
-fn record_name(field: &[u8]) -> Result<&[u8], MissingFieldName> {
-    let field = field
-        .iter()
-        .rposition(|&byte| byte == b'>')
-        .map_or(field, |end| &field[..end]);
-    let start = memchr(b'<', field).ok_or(MissingFieldName)?;
-    Ok(&field[start + 1..])
 }
 
 #[cfg(test)]
@@ -984,19 +590,6 @@ mod tests {
     }
 
     #[test]
-    fn record_names_follow_python_slicing() {
-        let names = |text: &str| {
-            records(&block(&format!("t\nM  END\n{text}\nv\n"), false))
-                .map(|found| found.into_iter().map(|(name, _)| name).collect::<Vec<_>>())
-        };
-        assert_eq!(names("> <a<b>c>").unwrap(), ["a<b>c"]);
-        assert_eq!(names(">  < x > (1)").unwrap(), [" x "]);
-        assert_eq!(names("> <a").unwrap(), ["a"]);
-        assert_eq!(names("x\n> <skipped>").unwrap(), Vec::<String>::new());
-        assert_eq!(names("> missing"), Err(MissingFieldName));
-    }
-
-    #[test]
     fn appended_records_follow_existing_metadata() {
         let mut block = block("t\nM  END\n> <A>\na\n\n$$$$\n", true);
         block.append_record(b"B", b"b");
@@ -1071,39 +664,6 @@ mod tests {
             malformed.remove_records(b"A", Strip::Bytes),
             Err(MissingFieldName)
         );
-    }
-
-    #[test]
-    fn strips_python_bytes_whitespace_only() {
-        assert_eq!(trim(b"\x0b\x0c \t\r\nx\x1c\n"), b"x\x1c");
-    }
-
-    /// Every character for which Python's `str.isspace()` is true.
-    const STR_SPACES: &str = "\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f \u{85}\u{a0}\u{1680}\
-        \u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}\u{2007}\u{2008}\
-        \u{2009}\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}";
-
-    #[test]
-    fn strips_python_str_whitespace() {
-        for space in STR_SPACES.chars() {
-            let padded = format!("{space}{space}x{space}y{space}{space}");
-            let expected = format!("x{space}y");
-            assert_eq!(
-                trim_str(padded.as_bytes()),
-                expected.as_bytes(),
-                "{space:?}"
-            );
-            assert_eq!(trim_str(space.to_string().as_bytes()), b"");
-        }
-        assert_eq!(trim_str(STR_SPACES.as_bytes()), b"");
-        // Neighbours of the whitespace code points are kept.
-        for kept in [
-            "\u{84}", "\u{a1}", "\u{200b}", "\u{2027}", "\u{3001}", "\u{feff}",
-        ] {
-            assert_eq!(trim_str(kept.as_bytes()), kept.as_bytes(), "{kept:?}");
-        }
-        // Incomplete sequences are not whitespace.
-        assert_eq!(trim_str(b"\xe3\x80x\xe3\x80"), b"\xe3\x80x\xe3\x80");
     }
 
     #[test]

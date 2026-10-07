@@ -108,6 +108,11 @@ impl<'a> Lines<'a> {
     }
 }
 
+/// The lines of `data` without their `\n`.
+pub fn lines(data: &[u8]) -> impl Iterator<Item = &[u8]> {
+    Lines::new(data, 0).map(|line| line.strip_suffix(b"\n").unwrap_or(line))
+}
+
 impl<'a> Iterator for Lines<'a> {
     type Item = &'a [u8];
 

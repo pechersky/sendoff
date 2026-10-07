@@ -277,7 +277,7 @@ pub fn translate_newlines(space: &mut [u8], len: usize, pending_cr: &mut bool) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::block::Strip;
+    use crate::core::strip::Strip;
 
     fn scanned(input: &[u8], chunk: usize) -> Vec<Block> {
         let mut scanner = Scanner::default();
