@@ -220,6 +220,11 @@ pub fn parse_format(line: &str) -> Option<&str> {
     fields(line).next_back()
 }
 
+/// The offset in `line` just past `field`, a subslice of it.
+fn end_of(line: &str, field: &str) -> usize {
+    field.as_ptr() as usize - line.as_ptr() as usize + field.len()
+}
+
 /// The `\r` and `\n` characters that end `line`, if any.
 fn line_ending(line: &str) -> &str {
     &line[line.trim_end_matches(['\r', '\n']).len()..]
@@ -334,8 +339,9 @@ impl Renumbered {
     /// Renumber the atom and bond lines of `lines`.
     ///
     /// Atom and bond lines are numbered from one in their existing order, and
-    /// bond atom references are remapped through the atom-index map. The
-    /// counts line declares the number of raw atom and bond lines. Fail with
+    /// bond atom references are remapped through the atom-index map; the
+    /// rest of each line, such as bond `CFG` and the ending, stays as it was.
+    /// The counts line declares the number of raw atom and bond lines. Fail with
     /// `Duplicate` when duplicate atom indices make a bond's atom mapping
     /// ambiguous, and with `MissingField` when a bond references an absent
     /// atom.
@@ -375,7 +381,9 @@ impl Renumbered {
                 return Err(missing());
             };
             let from_index = integer(from_field)?;
-            let to_index = integer(fields.next().ok_or_else(missing)?)?;
+            let to_field = fields.next().ok_or_else(missing)?;
+            let to_index = integer(to_field)?;
+            let tail = &line[end_of(line, to_field)..];
             let (new_from, new_to) = match (
                 atom_index_mapping.get(&from_index),
                 atom_index_mapping.get(&to_index),
@@ -386,9 +394,8 @@ impl Renumbered {
                 (Some(&NewIndex::Unique(from)), Some(&NewIndex::Unique(to))) => (from, to),
                 _ => return Err(CTableError::MissingField("bonded atom")),
             };
-            let trailing = if line.ends_with('\n') { "\n" } else { "" };
             new_bond_lines.push(format!(
-                "{prefix}{} {bond_type} {new_from} {new_to}{trailing}",
+                "{prefix}{} {bond_type} {new_from} {new_to}{tail}",
                 line_index + 1,
             ));
         }

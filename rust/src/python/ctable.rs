@@ -107,7 +107,9 @@ impl PyCTable {
     /// Iterating through the atom lines, replace the indexes into a
     /// 1-indexed order, keeping track of what maps to what.
     /// Then, renumber the bond lines, making sure to map the new atom indices
-    /// properly.
+    /// properly, and keeping the rest of each line, such as CFG, as written.
+    /// Indices inside properties (bond ENDPTS, atom ATTCHORD) and in Sgroup
+    /// and collection blocks are not remapped.
     /// At the end, regenerate the counts line, num_atoms, and num_bonds to
     /// match the number of atom and bond lines.
     /// This will run regardless of whether the indices are already valid.

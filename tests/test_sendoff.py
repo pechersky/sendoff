@@ -1806,7 +1806,7 @@ def test_renumber_refreshes_ctable_counts() -> None:
     assert (reparsed.num_atoms, reparsed.num_bonds) == (2, 1)
 
 
-@pytest.mark.parametrize("ending", ["\n", ""])
+@pytest.mark.parametrize("ending", ["\n", "\r\n", ""])
 def test_renumber_keeps_line_endings(ending: str) -> None:
     """Renumbering an already numbered table keeps its lines, endings included.
 
@@ -1817,6 +1817,17 @@ def test_renumber_keeps_line_endings(ending: str) -> None:
     ctable = CTable(lines)
     ctable.renumber_indices()
     assert ctable.lines == lines
+
+
+def test_renumber_keeps_bond_properties() -> None:
+    """Renumbering remaps bond atoms and keeps the properties after them."""
+    block = v3000_block(
+        atom="M  V30 3 C 0 0 0 0 CHG=1", bond="M  V30 4 1 3 2 CFG=1  STBOX=1"
+    )
+    block.renumber_indices()
+    lines = block.ctable().lines
+    assert "M  V30 1 C 0 0 0 0 CHG=1" in lines
+    assert "M  V30 1 1 1 2 CFG=1  STBOX=1" in lines
 
 
 def test_ctable_lines_are_a_fresh_list() -> None:
