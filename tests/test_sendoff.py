@@ -2252,28 +2252,115 @@ def test_write_sdf_writes_what_block_write_would(tmp_path: Path) -> None:
     assert out.read_bytes() == b""
 
 
-def test_write_sdf_rejects_bad_input(tmp_path: Path) -> None:
-    """write_sdf reports bad paths, mixed handles, and undecodable text.
+def _then_raise(blocks: list[SDBlock[str]]) -> Iterator[SDBlock[str]]:
+    """Produce `blocks`, then fail.
+
+    Args:
+        blocks: the blocks to produce first
+
+    Yields:
+        each of `blocks`
+
+    Raises:
+        RuntimeError: after the last block
+    """
+    yield from blocks
+    raise RuntimeError("source failed")
+
+
+@pytest.mark.parametrize("to_path", [True, False], ids=["path", "handle"])
+@pytest.mark.parametrize(
+    ("failing", "error", "match"),
+    [
+        (None, RuntimeError, "source failed"),
+        ("t\nM  END\n", TypeError, "SDBlock"),
+        (b"latin1", UnicodeDecodeError, "utf-8"),
+        (b"t\nM  END\n", TypeError, None),
+    ],
+    ids=["source-error", "not-a-block", "undecodable", "bytes-block"],
+)
+def test_write_sdf_writes_blocks_before_a_failure(
+    tmp_path: Path,
+    to_path: bool,
+    failing: typing.Any,
+    error: type[Exception],
+    match: str | None,
+) -> None:
+    """Blocks before a failing one are written, like a loop of block.write.
+
+    Args:
+        tmp_path: pytest fixture of a temporary directory
+        to_path: whether to write to a path or to a file object
+        failing: what follows the good blocks
+        error: the exception it raises
+        match: a pattern in its message
+    """
+    good = [SDBlock(f"{title}\nM  END\n") for title in "ab"]
+    if failing == b"t\nM  END\n" and to_path:
+        # Paths take str and bytes blocks alike.
+        assert write_sdf(tmp_path / "mixed.sdf", [*good, SDBlock(failing)]) == 3
+        return
+    blocks: typing.Any = _then_raise(good)
+    if failing == b"latin1":
+        source = tmp_path / "latin1.sdf"
+        source.write_bytes(b"t\nM  END\n> <A>\n\xe9\n\n$$$$\n")
+        blocks = [*good, *parse_sdf(source)]
+    elif failing is not None:
+        blocks = [*good, SDBlock(failing) if isinstance(failing, bytes) else failing]
+    out = tmp_path / "out.sdf"
+    handle = io.StringIO()
+    with pytest.raises(error, match=match) as raised:
+        write_sdf(out if to_path else handle, blocks)
+    if error is UnicodeDecodeError:
+        assert raised.value.__notes__[0].startswith("Writing block 2 (from 0),")
+    written = out.read_text() if to_path else handle.getvalue()
+    assert written == "a\nM  END\n$$$$\nb\nM  END\n$$$$\n"
+
+
+def test_write_sdf_raises_os_errors(tmp_path: Path) -> None:
+    """Paths raise the OSError subclass open() would, naming the path.
 
     Args:
         tmp_path: pytest fixture of a temporary directory
     """
-    text, data = SDBlock("t\nM  END\n"), SDBlock(b"t\nM  END\n")
-    with pytest.raises(TypeError, match="mixed str and bytes"):
-        write_sdf(io.StringIO(), [text, data])  # type: ignore[list-item]
-    assert write_sdf(tmp_path / "mixed.sdf", [text, data]) == 2
-    with pytest.raises(TypeError):
-        write_sdf(tmp_path / "x.sdf", ["t\nM  END\n"])  # type: ignore[list-item]
-    with pytest.raises(FileNotFoundError) as error:
-        write_sdf(tmp_path / "missing" / "x.sdf", [text])
-    assert error.value.filename == str(tmp_path / "missing" / "x.sdf")
-
-    source = tmp_path / "latin1.sdf"
-    source.write_bytes(b"s\nM  END\n$$$$\nt\nM  END\n> <A>\n\xe9\n\n$$$$\n")
-    dests: list[typing.Any] = [tmp_path / "bad.sdf", io.StringIO()]
-    for dest in dests:
-        with pytest.raises(UnicodeDecodeError) as decode_error:
-            write_sdf(dest, parse_sdf(source))
-        assert decode_error.value.__notes__[0].startswith(
-            "Writing block 1 (from 0), the SDBlock titled 't'."
+    blocks = [SDBlock("t\nM  END\n")]
+    locked = tmp_path / "locked"
+    locked.mkdir(mode=0o500)
+    dests: dict[type[OSError], Path] = {
+        IsADirectoryError: tmp_path,
+        FileNotFoundError: tmp_path / "missing" / "x.sdf",
+    }
+    if os.geteuid() != 0:
+        dests[PermissionError] = locked / "x.sdf"
+    for error, dest in dests.items():
+        with pytest.raises(error) as raised:
+            write_sdf(dest, blocks)
+        assert raised.value.filename == str(dest)
+    if os.path.exists("/dev/full"):
+        with pytest.raises(OSError) as raised:
+            write_sdf(b"/dev/full", blocks)
+        assert (raised.value.errno, raised.value.filename) == (
+            errno.ENOSPC,
+            b"/dev/full",
         )
+
+
+def test_write_sdf_checks_blocks_before_creating_the_path(tmp_path: Path) -> None:
+    """A non-iterable `blocks` leaves the destination alone.
+
+    Args:
+        tmp_path: pytest fixture of a temporary directory
+    """
+    out = tmp_path / "out.sdf"
+    out.write_text("kept")
+    with pytest.raises(TypeError, match="not iterable"):
+        write_sdf(out, 5)  # type: ignore[call-overload]
+    assert out.read_text() == "kept"
+
+
+def test_write_sdf_propagates_file_object_errors() -> None:
+    """A file object's write error propagates."""
+    handle = io.StringIO()
+    handle.close()
+    with pytest.raises(ValueError, match="closed file"):
+        write_sdf(handle, [SDBlock("t\nM  END\n")])

@@ -642,6 +642,11 @@ def write_sdf(dest: _SupportsWrite[AnyStr], blocks: Iterable[SDBlock[AnyStr]]) -
     `write` call per chunk, as str for text blocks or bytes for byte-backed
     ones. Text blocks must be valid UTF-8.
 
+    An error stops writing as it would a loop of `SDBlock.write` calls:
+    the blocks before the failing one are written, a path keeps them, and
+    the error propagates. A failed write may leave part of its chunk
+    written.
+
     Args:
         dest: a str, bytes, or os.PathLike path to create or truncate, or a
             text or binary file object
@@ -650,4 +655,10 @@ def write_sdf(dest: _SupportsWrite[AnyStr], blocks: Iterable[SDBlock[AnyStr]]) -
 
     Returns:
         The number of blocks written
+
+    Raises:
+        TypeError: if `blocks` is not iterable, produces something other
+            than an SDBlock, or mixes str and bytes blocks for a file object
+        UnicodeDecodeError: for a str block that is not UTF-8
+        OSError: if `dest` cannot be created or written
     """

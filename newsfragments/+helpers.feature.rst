@@ -12,7 +12,8 @@ New ``SDBlock`` helpers for common tasks:
   and ``SDBlock.from_sdf(text)`` parses SDF held in memory. ``to_sdf()``
   returns a block as SDF text.
 - ``sendoff.sdblock.write_sdf(dest, blocks)`` writes blocks to a path or a
-  file object and returns how many it wrote.
+  file object and returns how many it wrote. Like a loop of ``block.write``,
+  an error leaves the blocks before it written.
 - ``fix_counts()`` on ``SDBlock`` and ``CTable`` sets the V3000 ``COUNTS``
   line to the number of atom and bond lines.
 - ``parse_sdf`` of a ``bytes`` path reads files that are not UTF-8 and gives

@@ -1300,6 +1300,11 @@ impl Sink<'_> {
 /// `write` call per chunk, as str for text blocks or bytes for byte-backed
 /// ones. Text blocks must be valid UTF-8.
 ///
+/// An error stops writing as it would a loop of `SDBlock.write` calls:
+/// the blocks before the failing one are written, a path keeps them, and
+/// the error propagates. A failed write may leave part of its chunk
+/// written.
+///
 /// Args:
 ///     dest: a str, bytes, or os.PathLike path to create or truncate, or a
 ///         text or binary file object
@@ -1308,6 +1313,12 @@ impl Sink<'_> {
 ///
 /// Returns:
 ///     The number of blocks written
+///
+/// Raises:
+///     TypeError: if `blocks` is not iterable, produces something other
+///         than an SDBlock, or mixes str and bytes blocks for a file object
+///     UnicodeDecodeError: for a str block that is not UTF-8
+///     OSError: if `dest` cannot be created or written
 #[pyfunction]
 #[pyo3(signature = (
     dest: "str | bytes | os.PathLike[str] | os.PathLike[bytes] | _SupportsWrite[Any]",
@@ -1315,6 +1326,7 @@ impl Sink<'_> {
 ))]
 pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> PyResult<usize> {
     let py = dest.py();
+    let blocks = blocks.try_iter()?;
     let mut sink = match dest.getattr(intern!(py, "write")) {
         Ok(write) => Sink::Handle { write, kind: None },
         Err(_) => {
@@ -1336,33 +1348,46 @@ pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> P
     };
     let mut chunk = Vec::with_capacity(2 * limit);
     let mut count = 0;
-    for block in blocks.try_iter()? {
-        let block = block?;
-        let block = block.cast::<PySDBlock>()?.borrow();
-        let start = chunk.len();
-        block.block.serialize_into(block.kind.strip(), &mut chunk);
-        let noted = |error| block.noted(py, error, || format!("Writing block {count} (from 0),"));
-        let alone = sink
-            .accept(py, block.kind, &chunk[start..])
-            .map_err(noted)?;
-        if alone {
-            if start > 0 {
-                sink.write(py, &chunk[..start])?;
+    // `chunk` holds only blocks not yet passed to a write, so after an
+    // error it holds the blocks before the failing one.
+    let result = (|| -> PyResult<()> {
+        for block in blocks {
+            let block = block?;
+            let block = block.cast::<PySDBlock>()?.borrow();
+            let start = chunk.len();
+            block.block.serialize_into(block.kind.strip(), &mut chunk);
+            let noted =
+                |error| block.noted(py, error, || format!("Writing block {count} (from 0),"));
+            let alone = sink
+                .accept(py, block.kind, &chunk[start..])
+                .map_err(|error| {
+                    chunk.truncate(start);
+                    noted(error)
+                })?;
+            if alone {
+                let mut written = Ok(());
+                if start > 0 {
+                    written = sink.write(py, &chunk[..start]);
+                }
+                // Text blocks that are not ASCII, which include any that
+                // are not UTF-8, are written alone, so a decode error is
+                // this block's.
+                let written = written.and_then(|()| sink.write(py, &chunk[start..]).map_err(noted));
+                chunk.clear();
+                written?;
+            } else if chunk.len() >= limit {
+                let written = sink.write(py, &chunk);
+                chunk.clear();
+                written?;
             }
-            // Text blocks that are not ASCII, which include any that are
-            // not UTF-8, are written alone, so a decode error is this block's.
-            sink.write(py, &chunk[start..]).map_err(noted)?;
-            chunk.clear();
-        } else if chunk.len() >= limit {
-            sink.write(py, &chunk)?;
-            chunk.clear();
+            count += 1;
         }
-        count += 1;
-    }
+        Ok(())
+    })();
     if !chunk.is_empty() {
         sink.write(py, &chunk)?;
     }
-    Ok(count)
+    result.map(|()| count)
 }
 
 /// Lazily parse SDBlocks from an SDF path.
