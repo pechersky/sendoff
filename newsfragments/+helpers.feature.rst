@@ -13,6 +13,8 @@ New ``SDBlock`` helpers for common tasks:
   returns a block as SDF text.
 - ``sendoff.sdblock.write_sdf(dest, blocks)`` writes blocks to a path or a
   file object and returns how many it wrote.
+- ``fix_counts()`` on ``SDBlock`` and ``CTable`` sets the V3000 ``COUNTS``
+  line to the number of atom and bond lines.
 - ``parse_sdf`` of a ``bytes`` path reads files that are not UTF-8 and gives
   ``bytes`` titles and values.
 - The package is typed: ``SDBlock`` is ``Generic[AnyStr]``, so ``parse_sdf`` of

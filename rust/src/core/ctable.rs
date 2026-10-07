@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::num::ParseIntError;
+use std::ops::Range;
 
 /// The supported connection-table formats.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -23,8 +24,14 @@ pub enum CTableError {
     UnknownFormat(String),
     /// The operation only supports V3000 tables.
     NotImplemented,
-    /// Renumbering would corrupt the named construct, so it refuses.
-    Unsupported(&'static str),
+    /// The operation would corrupt or miscount the named construct, so it
+    /// refuses.
+    Unsupported {
+        operation: &'static str,
+        construct: &'static str,
+    },
+    /// A section has no line with this end marker.
+    MissingLine(&'static str),
     /// Strict validation found an index out of one-based order.
     OutOfOrder,
     /// An index occurs twice, or a bond references a duplicated atom index.
@@ -43,6 +50,9 @@ impl From<ParseIntError> for CTableError {
 
 /// The most lines, title included, that `parse_header` reads.
 pub const HEADER_LINES: usize = 6;
+
+/// The index of the V3000 counts line, title included.
+const V3000_COUNTS_LINE: usize = 5;
 
 fn line_at<'a>(lines: &[&'a str], index: usize) -> Result<&'a str, CTableError> {
     lines.get(index).copied().ok_or(CTableError::Truncated {
@@ -72,7 +82,7 @@ pub fn parse_header<'a>(
     let (counts, (atoms, bonds)) = match format {
         CTableFormat::V2000 => (first_counts, parse_v2000_counts(first_counts)?),
         CTableFormat::V3000 => {
-            let counts = line_at(lines, 5)?.trim();
+            let counts = line_at(lines, V3000_COUNTS_LINE)?.trim();
             (counts, parse_v3000_counts(counts)?)
         }
     };
@@ -95,8 +105,6 @@ pub struct CTable {
     pub source: String,
     /// The unmodified comment line.
     pub comment: String,
-    /// The original or stripped V3000 counts line.
-    pub counts: String,
     /// The parsed format.
     pub format: CTableFormat,
     /// The atom count from the counts line.
@@ -115,9 +123,8 @@ impl CTable {
     pub fn parse(lines: Vec<String>) -> Result<Self, CTableError> {
         let header: [&str; HEADER_LINES] =
             std::array::from_fn(|index| lines.get(index).map_or("", String::as_str));
-        let (format, counts, num_atoms, num_bonds) =
+        let (format, _, num_atoms, num_bonds) =
             parse_header(&header[..lines.len().min(HEADER_LINES)])?;
-        let counts = counts.to_owned();
         let title = lines[0].trim().to_owned();
         let source = lines[1].clone();
         let comment = lines[2].clone();
@@ -126,7 +133,6 @@ impl CTable {
             title,
             source,
             comment,
-            counts,
             format,
             num_atoms,
             num_bonds,
@@ -164,18 +170,57 @@ impl CTable {
     /// Renumber atom and bond indices, replacing the stored lines on success.
     ///
     /// Only V3000 tables are supported. Atom and bond lines are numbered in
-    /// their current order, bond atom references are remapped, and the
-    /// rewritten counts line reflects the number of table lines, as do the
-    /// parsed counts. Lines are only replaced on success.
+    /// their current order and bond atom references are remapped; the counts
+    /// line and parsed counts are left as they are (see `fix_counts`). Lines
+    /// are only replaced on success.
     pub fn renumber_indices(&mut self) -> Result<(), CTableError> {
         if self.format != CTableFormat::V3000 {
             return Err(CTableError::NotImplemented);
         }
-        let renumbered = Renumbered::new(&self.lines, &self.counts)?;
-        renumbered.counts.trim().clone_into(&mut self.counts);
-        self.num_atoms = renumbered.atoms.len() as i64;
-        self.num_bonds = renumbered.bonds.len() as i64;
+        let renumbered = Renumbered::new(&self.lines)?;
         self.lines = renumbered.splice(std::mem::take(&mut self.lines));
+        Ok(())
+    }
+
+    /// Set the counts line's atom and bond counts to the number of atom and
+    /// bond lines, and the parsed counts with them.
+    ///
+    /// Only V3000 tables are supported. The rest of the counts line, spacing
+    /// and ending included, stays as it was.
+    pub fn fix_counts(&mut self) -> Result<(), CTableError> {
+        if self.format != CTableFormat::V3000 {
+            return Err(CTableError::NotImplemented);
+        }
+        let atoms = section(&self.lines, "M  V30 BEGIN ATOM", "M  V30 END ATOM")?;
+        let bonds = section(&self.lines, "M  V30 BEGIN BOND", "M  V30 END BOND")?;
+        check_layout(
+            "fixing counts",
+            &self.lines,
+            &self.lines[atoms.clone()],
+            &self.lines[bonds.clone()],
+        )?;
+        let (atoms, bonds) = (atoms.len(), bonds.len());
+        let line = &self.lines[V3000_COUNTS_LINE];
+        let (atom_field, bond_field) = {
+            let mut counts = fields(line).skip(3);
+            (
+                counts
+                    .next()
+                    .ok_or(CTableError::MissingField("atom count"))?,
+                counts
+                    .next()
+                    .ok_or(CTableError::MissingField("bond count"))?,
+            )
+        };
+        let fixed = format!(
+            "{}{atoms}{}{bonds}{}",
+            &line[..start_of(line, atom_field)],
+            &line[end_of(line, atom_field)..start_of(line, bond_field)],
+            &line[end_of(line, bond_field)..],
+        );
+        self.lines[V3000_COUNTS_LINE] = fixed;
+        self.num_atoms = atoms as i64;
+        self.num_bonds = bonds as i64;
         Ok(())
     }
 }
@@ -229,10 +274,11 @@ fn starts_with_keyword(line: &str, prefix: &str) -> bool {
         .is_some_and(|start| start.eq_ignore_ascii_case(prefix.as_bytes()))
 }
 
-/// Refuse tables whose lines renumbering cannot tell apart: `-` continued
-/// atom or bond lines, and CTABs nested in RGROUP or TEMPLATE blocks, whose
-/// atom sections would get the root CTAB's atoms.
+/// Refuse tables whose atom and bond lines `operation` cannot tell apart:
+/// `-` continued atom or bond lines, and CTABs nested in RGROUP or TEMPLATE
+/// blocks, whose sections would be taken for the root CTAB's.
 fn check_layout(
+    operation: &'static str,
     lines: &[String],
     atom_lines: &[String],
     bond_lines: &[String],
@@ -242,16 +288,20 @@ fn check_layout(
         .chain(bond_lines)
         .any(|line| line.trim_end_matches(['\r', '\n']).ends_with('-'))
     {
-        return Err(CTableError::Unsupported("continued (-) atom or bond lines"));
+        return Err(CTableError::Unsupported {
+            operation,
+            construct: "continued (-) atom or bond lines",
+        });
     }
     let ctabs = lines
         .iter()
         .filter(|line| starts_with_keyword(line, "M  V30 BEGIN CTAB"))
         .count();
     if ctabs > 1 {
-        return Err(CTableError::Unsupported(
-            "CTABs nested in RGROUP or TEMPLATE blocks",
-        ));
+        return Err(CTableError::Unsupported {
+            operation,
+            construct: "CTABs nested in RGROUP or TEMPLATE blocks",
+        });
     }
     Ok(())
 }
@@ -270,11 +320,17 @@ fn check_references(
                 .any(|field| starts_with_keyword(field, keyword))
         })
     };
+    let refuse = |construct| {
+        Err(CTableError::Unsupported {
+            operation: "renumbering",
+            construct,
+        })
+    };
     if has_property(atom_lines, "ATTCHORD=") {
-        return Err(CTableError::Unsupported("ATTCHORD atom references"));
+        return refuse("ATTCHORD atom references");
     }
     if has_property(bond_lines, "ENDPTS=") {
-        return Err(CTableError::Unsupported("ENDPTS atom references"));
+        return refuse("ENDPTS atom references");
     }
     for (marker, construct) in [
         ("M  V30 BEGIN SGROUP", "SGROUP atom and bond references"),
@@ -286,20 +342,37 @@ fn check_references(
         ("M  V30 LINKNODE", "LINKNODE atom references"),
     ] {
         if lines.iter().any(|line| starts_with_keyword(line, marker)) {
-            return Err(CTableError::Unsupported(construct));
+            return refuse(construct);
         }
     }
     Ok(())
 }
 
-/// The offset in `line` just past `field`, a subslice of it.
-fn end_of(line: &str, field: &str) -> usize {
-    field.as_ptr() as usize - line.as_ptr() as usize + field.len()
+/// The offset in `line` of `field`, a subslice of it.
+fn start_of(line: &str, field: &str) -> usize {
+    field.as_ptr() as usize - line.as_ptr() as usize
 }
 
-/// The `\r` and `\n` characters that end `line`, if any.
-fn line_ending(line: &str) -> &str {
-    &line[line.trim_end_matches(['\r', '\n']).len()..]
+/// The offset in `line` just past `field`, a subslice of it.
+fn end_of(line: &str, field: &str) -> usize {
+    start_of(line, field) + field.len()
+}
+
+/// Return the range of lines between the `begin` and `end` marker lines,
+/// empty when there is no `begin` line.
+fn section(lines: &[String], begin: &str, end: &'static str) -> Result<Range<usize>, CTableError> {
+    let Some(start) = lines
+        .iter()
+        .position(|line| starts_with_keyword(line, begin))
+        .map(|index| index + 1)
+    else {
+        return Ok(0..0);
+    };
+    let len = lines[start..]
+        .iter()
+        .position(|line| starts_with_keyword(line, end))
+        .ok_or(CTableError::MissingLine(end))?;
+    Ok(start..start + len)
 }
 
 /// Return the half-open range of raw atom lines in a CTable.
@@ -399,10 +472,9 @@ enum NewIndex {
     Duplicate,
 }
 
-/// Atom and bond lines numbered from one in table order, and the counts
-/// line that declares them, to splice into the table.
+/// Atom and bond lines numbered from one in table order, to splice into the
+/// table.
 struct Renumbered {
-    counts: String,
     atoms: Vec<String>,
     bonds: Vec<String>,
 }
@@ -413,17 +485,17 @@ impl Renumbered {
     /// Atom and bond lines are numbered from one in their existing order, and
     /// bond atom references are remapped through the atom-index map; the
     /// rest of each line, such as bond `CFG` and the ending, stays as it was.
-    /// The counts line declares the number of raw atom and bond lines. Fail with
+    /// Fail with
     /// `Duplicate` when duplicate atom indices make a bond's atom mapping
     /// ambiguous, and with `MissingField` when a bond references an absent
     /// atom.
-    fn new(lines: &[String], counts: &str) -> Result<Self, CTableError> {
+    fn new(lines: &[String]) -> Result<Self, CTableError> {
         let prefix = "M  V30 ";
         let (atom_start, atom_end) = atom_line_range(lines);
         let atom_lines = &lines[atom_start..atom_end];
         let (bond_start, bond_end) = bond_line_range(lines);
         let bond_lines = &lines[bond_start..bond_end];
-        check_layout(lines, atom_lines, bond_lines)?;
+        check_layout("renumbering", lines, atom_lines, bond_lines)?;
         let mut changed = false;
         let mut atom_index_mapping = HashMap::with_capacity(atom_lines.len());
         let mut new_atom_lines = Vec::with_capacity(atom_lines.len());
@@ -479,30 +551,17 @@ impl Renumbered {
         if changed {
             check_references(lines, atom_lines, bond_lines)?;
         }
-        let mut new_counts = format!(
-            "{prefix}COUNTS {} {} ",
-            new_atom_lines.len(),
-            new_bond_lines.len()
-        );
-        for (index, token) in counts.split_whitespace().skip(5).enumerate() {
-            if index > 0 {
-                new_counts.push(' ');
-            }
-            new_counts.push_str(token);
-        }
         Ok(Self {
-            counts: new_counts,
             atoms: new_atom_lines,
             bonds: new_bond_lines,
         })
     }
 
-    /// Put the new lines in place of the counts, atom, and bond lines.
+    /// Put the new lines in place of the atom and bond lines.
     ///
-    /// Malformed marker sequences keep their established output: a `COUNTS`
-    /// line inside a section replaces the line before it, an `END` line
-    /// outside a section is kept twice, and every `END ATOM` or `END BOND`
-    /// line gets the new lines, which only the last one moves.
+    /// Malformed marker sequences keep their established output: an `END`
+    /// line outside a section is kept twice, and every `END ATOM` or
+    /// `END BOND` line gets the new lines, which only the last one moves.
     fn splice(mut self, lines: Vec<String>) -> Vec<String> {
         let last_atom_end = lines
             .iter()
@@ -518,12 +577,7 @@ impl Renumbered {
             } else if line.starts_with("M  V30 END BOND") {
                 (&mut self.bonds, last_bond_end)
             } else {
-                if line.starts_with("M  V30 COUNTS") {
-                    if !appending {
-                        new_lines.pop();
-                    }
-                    new_lines.push(self.counts.clone() + line_ending(&line));
-                } else if appending {
+                if appending {
                     appending = !(line.starts_with("M  V30 BEGIN ATOM")
                         || line.starts_with("M  V30 BEGIN BOND"));
                     new_lines.push(line);

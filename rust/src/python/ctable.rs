@@ -102,14 +102,14 @@ impl PyCTable {
             .map_err(|error| index_error(py, error, "bond"))
     }
 
-    /// Renumber the indices in the block, including changing counts line.
+    /// Renumber the atom and bond indices in the block.
     ///
     /// Iterating through the atom lines, replace the indexes into a
     /// 1-indexed order, keeping track of what maps to what.
     /// Then, renumber the bond lines, making sure to map the new atom indices
     /// properly, and keeping the rest of each line, such as CFG, as written.
-    /// At the end, regenerate the counts line, num_atoms, and num_bonds to
-    /// match the number of atom and bond lines.
+    /// The counts line, num_atoms, and num_bonds stay as they are; call
+    /// fix_counts after adding or removing atom or bond lines.
     /// This will run regardless of whether the indices are already valid.
     /// It cannot fix duplicate atom indices properly if the duplicate one
     /// occurs in the bond lines, and will raise an error.
@@ -135,6 +135,20 @@ impl PyCTable {
             other => index_error(py, other, "atom"),
         })
     }
+
+    /// Set the counts line to the number of atom and bond lines.
+    ///
+    /// Updates num_atoms and num_bonds to match, and keeps the rest of the
+    /// counts line, such as the Sgroup count, as written. Use it after
+    /// adding or removing atom or bond lines.
+    ///
+    /// Raises:
+    ///     NotImplementedError: for a V2000 format table, "-" continued atom
+    ///         or bond lines, or CTABs nested in RGROUP or TEMPLATE blocks
+    ///     ValueError: if an ATOM or BOND section has no END line
+    fn fix_counts(&mut self) -> PyResult<()> {
+        self.inner.fix_counts().map_err(error_to_py)
+    }
 }
 
 impl PyCTable {
@@ -149,6 +163,10 @@ impl PyCTable {
 
     pub(crate) fn renumber_indices_for_block(&mut self, py: Python<'_>) -> PyResult<()> {
         self.renumber_indices(py)
+    }
+
+    pub(crate) fn fix_counts_for_block(&mut self) -> PyResult<()> {
+        self.fix_counts()
     }
 }
 
@@ -168,8 +186,14 @@ pub(crate) fn error_to_py(error: ctable::CTableError) -> PyErr {
         ctable::CTableError::InvalidInteger(message) => PyValueError::new_err(message),
         ctable::CTableError::UnknownFormat(token) => PyKeyError::new_err(token),
         ctable::CTableError::NotImplemented => PyNotImplementedError::new_err(()),
-        ctable::CTableError::Unsupported(construct) => {
-            PyNotImplementedError::new_err(format!("renumbering does not support {construct} yet"))
+        ctable::CTableError::MissingLine(marker) => {
+            PyValueError::new_err(format!("CTable has no {marker:?} line"))
+        }
+        ctable::CTableError::Unsupported {
+            operation,
+            construct,
+        } => {
+            PyNotImplementedError::new_err(format!("{operation} does not support {construct} yet"))
         }
         other => PyValueError::new_err(format!("{other:?}")),
     }

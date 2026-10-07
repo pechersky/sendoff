@@ -1191,13 +1191,28 @@ impl PySDBlock {
 
     /// Renumber atom and bond indices to be 1-indexed and in order.
     ///
-    /// Uses the CTable renumbering and replaces this block's MDL lines.
+    /// Uses the CTable renumbering and replaces this block's MDL lines. The
+    /// counts line stays as it is; see fix_counts.
     ///
     /// Raises:
     ///     NotImplementedError: for byte-backed SDBlocks
     fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
         let mut ctable = self.ctable(py)?;
         ctable.renumber_indices_for_block(py)?;
+        self.block
+            .replace_mdl(ctable.lines_after_title().iter().map(String::as_bytes));
+        Ok(())
+    }
+
+    /// Set the counts line to the number of atom and bond lines.
+    ///
+    /// Uses CTable.fix_counts and replaces this block's MDL lines.
+    ///
+    /// Raises:
+    ///     NotImplementedError: for byte-backed SDBlocks
+    fn fix_counts(&mut self, py: Python<'_>) -> PyResult<()> {
+        let mut ctable = self.ctable(py)?;
+        ctable.fix_counts_for_block()?;
         self.block
             .replace_mdl(ctable.lines_after_title().iter().map(String::as_bytes));
         Ok(())

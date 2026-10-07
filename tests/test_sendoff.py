@@ -1531,13 +1531,17 @@ def test_single_missing_atom_line_valid_atom_indices_after_renumbering(
 ) -> None:
     """An sdf block with a missing atom line has stric valid indices, after renumbering.
 
+    Renumbering leaves the counts line; fix_counts makes it match.
+
     Args:
         single_missing_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
     """
     mol: SDBlock[str] = next(parse_sdf(single_missing_atom_line_v3000_sdf))
     mol.renumber_indices()
-    ctable = mol.ctable()
-    assert ctable.valid_atom_indices(strict=True)
+    with pytest.raises(IndicesMismatchError, match="fewer atom lines"):
+        mol.ctable().valid_atom_indices(strict=True)
+    mol.fix_counts()
+    assert mol.ctable().valid_atom_indices(strict=True)
 
 
 def test_single_extra_atom_line_valid_atom_indices_after_renumbering(
@@ -1545,13 +1549,17 @@ def test_single_extra_atom_line_valid_atom_indices_after_renumbering(
 ) -> None:
     """An sdf block with a extra atom line has strict valid indices, after renumbering.
 
+    Renumbering leaves the counts line; fix_counts makes it match.
+
     Args:
         single_extra_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
     """
     mol: SDBlock[str] = next(parse_sdf(single_extra_atom_line_v3000_sdf))
     mol.renumber_indices()
-    ctable = mol.ctable()
-    assert ctable.valid_atom_indices(strict=True)
+    with pytest.raises(IndicesMismatchError, match="more atom lines"):
+        mol.ctable().valid_atom_indices(strict=True)
+    mol.fix_counts()
+    assert mol.ctable().valid_atom_indices(strict=True)
 
 
 def test_single_missing_bond_line_valid_atom_indices_after_renumbering(
@@ -1559,13 +1567,17 @@ def test_single_missing_bond_line_valid_atom_indices_after_renumbering(
 ) -> None:
     """An sdf block with a missing bond line has strict valid indices after renumbering.
 
+    Renumbering leaves the counts line; fix_counts makes it match.
+
     Args:
         single_missing_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
     """
     mol: SDBlock[str] = next(parse_sdf(single_missing_bond_line_v3000_sdf))
     mol.renumber_indices()
-    ctable = mol.ctable()
-    assert ctable.valid_bond_indices(strict=True)
+    with pytest.raises(IndicesMismatchError, match="fewer bond lines"):
+        mol.ctable().valid_bond_indices(strict=True)
+    mol.fix_counts()
+    assert mol.ctable().valid_bond_indices(strict=True)
 
 
 def test_single_extra_bond_line_valid_atom_indices_after_renumbering(
@@ -1573,13 +1585,17 @@ def test_single_extra_bond_line_valid_atom_indices_after_renumbering(
 ) -> None:
     """An sdf block with a extra bond line has strict valid indices, after renumbering.
 
+    Renumbering leaves the counts line; fix_counts makes it match.
+
     Args:
         single_extra_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
     """
     mol: SDBlock[str] = next(parse_sdf(single_extra_bond_line_v3000_sdf))
     mol.renumber_indices()
-    ctable = mol.ctable()
-    assert ctable.valid_bond_indices(strict=True)
+    with pytest.raises(IndicesMismatchError, match="more bond lines"):
+        mol.ctable().valid_bond_indices(strict=True)
+    mol.fix_counts()
+    assert mol.ctable().valid_bond_indices(strict=True)
 
 
 def test_single_duplicate_atom_index_invalid_atom_indices_even_renumbering(
@@ -1800,14 +1816,72 @@ def test_renumber_slices_atom_lines_by_character() -> None:
     assert "M  V30 1" in block.ctable().lines
 
 
-def test_renumber_refreshes_ctable_counts() -> None:
-    """Renumbering a CTable updates its counts to match its new lines."""
-    ctable = v3000_block(counts="M  V30 COUNTS 5 3 0 0 0").ctable()
-    assert (ctable.num_atoms, ctable.num_bonds) == (5, 3)
+def test_renumber_leaves_counts() -> None:
+    """Renumbering leaves a counts line that disagrees with the table."""
+    block = v3000_block(
+        "M  V30 3 C 0 0 0 0", "M  V30 1 1 3 2", counts="M  V30 COUNTS 5 3 0 0 0"
+    )
+    ctable = block.ctable()
     ctable.renumber_indices()
+    assert "M  V30 1 C 0 0 0 0" in ctable.lines
+    assert "M  V30 COUNTS 5 3 0 0 0" in ctable.lines
+    assert (ctable.num_atoms, ctable.num_bonds) == (5, 3)
+    block.renumber_indices()
+    assert (block.num_atoms(), block.num_bonds()) == (5, 3)
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n", ""])
+def test_fix_counts_sets_counts_to_table_lines(ending: str) -> None:
+    """Fixing counts rewrites only the two counts, keeping the rest of the line.
+
+    Args:
+        ending: what ends each line given to the CTable
+    """
+    counts = "M  V30 COUNTS  5 3  1 0 1 REGNO=7"
+    block = v3000_block(counts=counts)
+    lines = [line + ending for line in block.to_sdf().splitlines()[:-1]]
+    ctable = CTable(lines)
+    assert (ctable.num_atoms, ctable.num_bonds) == (5, 3)
+    ctable.fix_counts()
+    fixed = "M  V30 COUNTS  2 1  1 0 1 REGNO=7" + ending
+    assert ctable.lines == [
+        fixed if line == counts + ending else line for line in lines
+    ]
     assert (ctable.num_atoms, ctable.num_bonds) == (2, 1)
     reparsed = CTable(ctable.lines)
     assert (reparsed.num_atoms, reparsed.num_bonds) == (2, 1)
+    block.fix_counts()
+    assert (block.num_atoms(), block.num_bonds()) == (2, 1)
+    assert block.to_sdf() == v3000_block(counts=fixed.rstrip()).to_sdf()
+
+
+def test_fix_counts_reads_section_markers() -> None:
+    """Fixing counts counts lines between markers, and absent sections as empty."""
+    ctab = "M  V30 BEGIN CTAB\nM  V30 COUNTS 3 1 0 0 0\nM  V30 END CTAB\nM  END\n"
+    block = next(SDBlock.from_sdf(V3000_HEADER + ctab + "$$$$\n"))
+    block.fix_counts()
+    assert (block.num_atoms(), block.num_bonds()) == (0, 0)
+    unterminated = v3000_block().to_sdf().replace("M  V30 END BOND\n", "")
+    with pytest.raises(ValueError, match="END BOND"):
+        next(SDBlock.from_sdf(unterminated)).fix_counts()
+
+
+def test_fix_counts_needs_v3000_text(single_mol_v2000_sdf: Pathy) -> None:
+    """Fixing counts is only implemented for V3000 tables of text blocks.
+
+    Args:
+        single_mol_v2000_sdf: pytest fixture of a Path to the sdf
+    """
+    mol: SDBlock[str] = next(parse_sdf(single_mol_v2000_sdf))
+    with pytest.raises(NotImplementedError):
+        mol.fix_counts()
+    raw = next(
+        SDBlock.from_lines(
+            [line.encode() for line in v3000_block().to_sdf().splitlines(True)]
+        )
+    )
+    with pytest.raises(NotImplementedError, match="byte-backed"):
+        raw.fix_counts()  # type: ignore[misc]
 
 
 @pytest.mark.parametrize("ending", ["\n", "\r\n", ""])
@@ -1893,6 +1967,7 @@ def test_renumber_refuses_to_change_referenced_indices(
     assert numbered.to_sdf() == before
 
 
+@pytest.mark.parametrize("operation", ["renumber_indices", "fix_counts"])
 @pytest.mark.parametrize(
     "atom, after, construct",
     [
@@ -1906,12 +1981,13 @@ def test_renumber_refuses_to_change_referenced_indices(
         ),
     ],
 )
-def test_renumber_refuses_tables_it_cannot_split(
-    atom: str, after: str, construct: str
+def test_refuses_tables_it_cannot_split(
+    operation: str, atom: str, after: str, construct: str
 ) -> None:
-    """Renumbering refuses continued lines and nested CTABs, even if numbered.
+    """Renumbering and fixing counts refuse continued lines and nested CTABs.
 
     Args:
+        operation: the SDBlock method to call
         atom: the first atom line or lines
         after: lines after the root CTAB
         construct: what the error names
@@ -1919,7 +1995,7 @@ def test_renumber_refuses_tables_it_cannot_split(
     block = v3000_block(atom, after=after)
     before = block.to_sdf()
     with pytest.raises(NotImplementedError, match=construct):
-        block.renumber_indices()
+        getattr(block, operation)()
     assert block.to_sdf() == before
 
 

@@ -68,6 +68,20 @@ class CTable:
                 be supplied as the first in lines.
         """
 
+    def fix_counts(self, /) -> None:
+        """
+        Set the counts line to the number of atom and bond lines.
+
+        Updates num_atoms and num_bonds to match, and keeps the rest of the
+        counts line, such as the Sgroup count, as written. Use it after
+        adding or removing atom or bond lines.
+
+        Raises:
+            NotImplementedError: for a V2000 format table, "-" continued atom
+                or bond lines, or CTABs nested in RGROUP or TEMPLATE blocks
+            ValueError: if an ATOM or BOND section has no END line
+        """
+
     @property
     def lines(self, /) -> list[str]:
         """
@@ -88,14 +102,14 @@ class CTable:
 
     def renumber_indices(self, /) -> None:
         """
-        Renumber the indices in the block, including changing counts line.
+        Renumber the atom and bond indices in the block.
 
         Iterating through the atom lines, replace the indexes into a
         1-indexed order, keeping track of what maps to what.
         Then, renumber the bond lines, making sure to map the new atom indices
         properly, and keeping the rest of each line, such as CFG, as written.
-        At the end, regenerate the counts line, num_atoms, and num_bonds to
-        match the number of atom and bond lines.
+        The counts line, num_atoms, and num_bonds stay as they are; call
+        fix_counts after adding or removing atom or bond lines.
         This will run regardless of whether the indices are already valid.
         It cannot fix duplicate atom indices properly if the duplicate one
         occurs in the bond lines, and will raise an error.
@@ -258,6 +272,16 @@ class SDBlock(Generic[AnyStr]):
         Returns:
             The CTable titled with this block's title, parsed from its MDL
             lines without validation
+
+        Raises:
+            NotImplementedError: for byte-backed SDBlocks
+        """
+
+    def fix_counts(self: SDBlock[str], /) -> None:
+        """
+        Set the counts line to the number of atom and bond lines.
+
+        Uses CTable.fix_counts and replaces this block's MDL lines.
 
         Raises:
             NotImplementedError: for byte-backed SDBlocks
@@ -436,7 +460,8 @@ class SDBlock(Generic[AnyStr]):
         """
         Renumber atom and bond indices to be 1-indexed and in order.
 
-        Uses the CTable renumbering and replaces this block's MDL lines.
+        Uses the CTable renumbering and replaces this block's MDL lines. The
+        counts line stays as it is; see fix_counts.
 
         Raises:
             NotImplementedError: for byte-backed SDBlocks
