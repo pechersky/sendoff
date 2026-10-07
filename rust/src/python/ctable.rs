@@ -69,16 +69,16 @@ impl PyCTable {
     /// Validate that the atom lines match the counts line.
     ///
     /// If strict, make sure they are 1-indexed and in order.
-    /// This can break if the V3000 block has "-" terminated lines,
-    ///     which means that the next line is a continuation of the previous.
+    /// A line ending in "-" continues onto the next, and the two are read
+    /// as one atom line, numbered by its first line in errors.
     ///
     /// Args:
     ///     strict: the indices start with 1, and increment by one.
     ///
     /// Raises:
     ///     MalformedCTableError: if an atom line has no integer index, the
-    ///         ATOM section has no END line, or the root CTAB has more than
-    ///         one ATOM section
+    ///         ATOM section has no END line or its last line ends in "-", or
+    ///         the root CTAB has more than one ATOM section
     ///     IndicesDuplicateError: if an atom line has an index seen before
     ///     IndicesMismatchError: if number of atom lines does not match count line
     ///     IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
@@ -97,16 +97,16 @@ impl PyCTable {
     /// Validate that the bond lines match the counts line.
     ///
     /// If strict, make sure they are 1-indexed and in order.
-    /// This can break if the V3000 block has "-" terminated lines,
-    ///     which means that the next line is a continuation of the previous.
+    /// A line ending in "-" continues onto the next, and the two are read
+    /// as one bond line, numbered by its first line in errors.
     ///
     /// Args:
     ///     strict: the indices start with 1, and increment by one.
     ///
     /// Raises:
     ///     MalformedCTableError: if a bond line has no integer index, the
-    ///         BOND section has no END line, or the root CTAB has more than
-    ///         one BOND section
+    ///         BOND section has no END line or its last line ends in "-", or
+    ///         the root CTAB has more than one BOND section
     ///     IndicesDuplicateError: if a bond line has an index seen before
     ///     IndicesMismatchError: if number of bond lines does not match count line
     ///     IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
@@ -144,8 +144,9 @@ impl PyCTable {
     /// Raises:
     ///     MalformedCTableError: if an atom or bond line is missing a field
     ///         or has a non-integer index, a bond refers to an atom index that
-    ///         no atom line has, an ATOM or BOND section has no END line, or
-    ///         the root CTAB has more than one of either
+    ///         no atom line has, an ATOM or BOND section has no END line or
+    ///         its last line ends in "-", or the root CTAB has more than one
+    ///         of either
     ///     IndicesDuplicateError: if there was a duplicate atom index, and it was used
     ///         somewhere in a bond line. Raised, because it is not clear which of the
     ///         original indices to use in the remapping.
@@ -159,14 +160,15 @@ impl PyCTable {
     ///
     /// Updates num_atoms and num_bonds to match, and keeps the rest of the
     /// counts line, such as the Sgroup count, as written. Use it after
-    /// adding or removing atom or bond lines.
+    /// adding or removing atom or bond lines. A line ending in "-" continues
+    /// onto the next, and the two count as one.
     ///
     /// Raises:
     ///     MalformedCTableError: if the counts line has no atom or bond count
-    ///         field, an ATOM or BOND section has no END line, or the root
-    ///         CTAB has more than one of either
-    ///     NotImplementedError: for a V2000 format table, "-" continued atom
-    ///         or bond lines, or CTABs nested in RGROUP or TEMPLATE blocks
+    ///         field, an ATOM or BOND section has no END line or its last
+    ///         line ends in "-", or the root CTAB has more than one of either
+    ///     NotImplementedError: for a V2000 format table, or CTABs nested in
+    ///         RGROUP or TEMPLATE blocks
     fn fix_counts(&mut self) -> PyResult<()> {
         Ok(self.inner.fix_counts()?)
     }

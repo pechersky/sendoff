@@ -2095,6 +2095,25 @@ def ambiguous_bond(bond: str) -> tuple[dict[str, str], CTableErrors]:
             {"bond": "M  V30 1 1 1 9"},
             malformed(RENUMBERING, "CTable line 12: bond atom 9 is not an atom index"),
         ),
+        # A continued line is one logical line, which only renumbering refuses.
+        (
+            {"atom": "M  V30 1 C 0 0 0 0 -\nM  V30 CHG=1"},
+            {
+                "renumber_indices": (
+                    NotImplementedError,
+                    "renumbering does not support continued (-) atom or bond "
+                    "lines yet",
+                )
+            },
+        ),
+        # Continuing a section's last line is malformed, even for renumbering.
+        (
+            {"bond": "M  V30 1 1 1 2 -"},
+            malformed(
+                BOND_INDICES | {"fix_counts"},
+                'CTable line 12: continues ("-") onto the "M  V30 END BOND" line',
+            ),
+        ),
         # A duplicated atom index outranks a missing one in the same bond.
         ambiguous_bond("M  V30 1 1 9 2"),
         ambiguous_bond("M  V30 1 1 2 9"),
@@ -2370,36 +2389,63 @@ def test_renumber_refuses_to_change_referenced_indices(
     assert numbered.to_sdf() == before
 
 
-@pytest.mark.parametrize("operation", ["renumber_indices", "fix_counts"])
 @pytest.mark.parametrize(
-    "atom, after, construct",
-    [
-        ("M  V30 1 C 0 0 0 0 -\nM  V30 CHG=1", "", "continued"),
-        (
-            "M  V30 1 C 0 0 0 0",
-            "M  V30 BEGIN RGROUP 1\nM  V30 BEGIN CTAB\nM  V30 COUNTS 1 0 0 0 0\n"
-            + "M  V30 BEGIN ATOM\nM  V30 1 C 0 0 0 0\nM  V30 END ATOM\n"
-            + "M  V30 END CTAB\nM  V30 END RGROUP\n",
-            "nested",
-        ),
-    ],
+    "operation, name",
+    [("renumber_indices", "renumbering"), ("fix_counts", "fixing counts")],
 )
-def test_refuses_tables_it_cannot_split(
-    operation: str, atom: str, after: str, construct: str
-) -> None:
-    """Renumbering and fixing counts refuse continued lines and nested CTABs.
+def test_refuses_nested_ctabs(operation: str, name: str) -> None:
+    """Renumbering and fixing counts refuse CTABs nested in RGROUP blocks.
 
     Args:
         operation: the SDBlock method to call
-        atom: the first atom line or lines
-        after: lines after the root CTAB
-        construct: what the error names
+        name: the operation's name in the error message
     """
-    block = v3000_block(atom, after=after)
+    block = v3000_block(
+        after="M  V30 BEGIN RGROUP 1\nM  V30 BEGIN CTAB\nM  V30 COUNTS 1 0 0 0 0\n"
+        + "M  V30 BEGIN ATOM\nM  V30 1 C 0 0 0 0\nM  V30 END ATOM\n"
+        + "M  V30 END CTAB\nM  V30 END RGROUP\n"
+    )
     before = block.to_sdf()
-    with pytest.raises(NotImplementedError, match=construct):
+    with pytest.raises(NotImplementedError) as raised:
         getattr(block, operation)()
+    assert str(raised.value) == (
+        f"{name} does not support CTABs nested in RGROUP or TEMPLATE blocks yet"
+    )
     assert block.to_sdf() == before
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n", ""])
+def test_continued_lines_are_one_logical_line(ending: str) -> None:
+    """Validation and fix_counts join a "-" ended line and the next line.
+
+    The "-" and the next line's "M  V30 " marker, if it has one, are dropped.
+
+    Args:
+        ending: what ends each line given to the CTable
+    """
+    block = v3000_block(
+        atom="M  V30 -\nM  V30 1 C 0 0 0 -\nM  V30 0 CHG=1",
+        bond="M  V30 1 1 -\n1 2",
+        counts="M  V30 COUNTS 9 9 0 0 0",
+    )
+    lines = [line + ending for line in block.to_sdf().splitlines()[:-1]]
+    ctable = CTable(lines)
+    ctable.fix_counts()
+    assert (ctable.num_atoms, ctable.num_bonds) == (2, 1)
+    assert ctable.valid_atom_indices(strict=True)
+    assert ctable.valid_bond_indices(strict=True)
+    block.fix_counts()
+    assert (block.num_atoms(), block.num_bonds()) == (2, 1)
+
+
+def test_continued_lines_are_numbered_by_their_first_line() -> None:
+    """An error in a logical line names the line it starts on."""
+    block = v3000_block(
+        atom="M  V30 1 C 0 0 -\nM  V30 0 0\nM  V30 -\nM  V30 1 N 0 0 0 0"
+    )
+    with pytest.raises(IndicesDuplicateError) as raised:
+        block.ctable().valid_atom_indices()
+    assert str(raised.value) == "CTable line 10: atom index 1 is a duplicate"
 
 
 def test_ctable_lines_are_a_fresh_list() -> None:

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::Range;
@@ -61,6 +62,8 @@ pub enum Malformed {
     Repeated(&'static str),
     /// A bond names this atom index, which no atom line has.
     NoAtom(i64),
+    /// The section's last line is continued (`-`) onto this end line.
+    Dangling(&'static str),
 }
 
 /// Errors from parsing, validating, or renumbering a connection table.
@@ -122,6 +125,7 @@ impl fmt::Display for Malformed {
                 write!(f, "more than one {begin:?} line in the root CTAB")
             }
             Self::NoAtom(index) => write!(f, "bond atom {index} is not an atom index"),
+            Self::Dangling(end) => write!(f, "continues (\"-\") onto the {end:?} line"),
         }
     }
 }
@@ -288,9 +292,9 @@ impl CTable {
 
     /// Validate the root CTAB's atom or bond lines against the counts line.
     ///
-    /// Each line's index must be a unique integer and, with `strict`, its
-    /// one-based position; the section must have as many lines as the
-    /// counts line declares.
+    /// Each logical line's index must be a unique integer and, with
+    /// `strict`, its one-based position; the section must have as many
+    /// logical lines as the counts line declares.
     pub fn valid_indices(&self, section: Section, strict: bool) -> Result<(), CTableError> {
         let operation = match section {
             Section::Atom => "validating atom indices",
@@ -321,21 +325,32 @@ impl CTable {
     pub fn renumber_indices(&mut self) -> Result<(), CTableError> {
         self.require_v3000("renumbering")?;
         let (atoms, bonds) = sections("renumbering", &self.lines)?;
+        if self.lines[atoms.clone()]
+            .iter()
+            .chain(&self.lines[bonds.clone()])
+            .any(|line| continued(line).is_some())
+        {
+            return Err(CTableError::Unsupported {
+                operation: "renumbering",
+                construct: "continued (-) atom or bond lines",
+            });
+        }
         let (mut new_atoms, mut new_bonds) = renumbered(&self.lines, atoms.clone(), bonds.clone())?;
         self.lines[atoms].swap_with_slice(&mut new_atoms);
         self.lines[bonds].swap_with_slice(&mut new_bonds);
         Ok(())
     }
 
-    /// Set the counts line's atom and bond counts to the number of atom and
-    /// bond lines, and the parsed counts with them.
+    /// Set the counts line's atom and bond counts to the number of logical
+    /// atom and bond lines, and the parsed counts with them.
     ///
     /// Only V3000 tables are supported. The rest of the counts line, spacing
     /// and ending included, stays as it was.
     pub fn fix_counts(&mut self) -> Result<(), CTableError> {
         self.require_v3000("fixing counts")?;
         let (atoms, bonds) = sections("fixing counts", &self.lines)?;
-        let (atoms, bonds) = (atoms.len(), bonds.len());
+        let atoms = logical_lines(&self.lines, atoms).count();
+        let bonds = logical_lines(&self.lines, bonds).count();
         let line = &self.lines[V3000_COUNTS_LINE];
         let (atom_field, bond_field) = v3000_count_fields(line)?;
         let fixed = format!(
@@ -398,39 +413,26 @@ fn starts_with_keyword(line: &str, prefix: &str) -> bool {
 }
 
 /// Find the root CTAB's atom and bond sections for `operation`, which edits
-/// a table line by line. Refuse tables it would get wrong: CTABs nested in
-/// RGROUP or TEMPLATE blocks, whose own atom and bond lines it would leave as
-/// they are, and `-` continued atom or bond lines, which it would take for
-/// atoms or bonds.
+/// a table line by line. Refuse CTABs nested in RGROUP or TEMPLATE blocks,
+/// whose own atom and bond lines it would leave as they are.
 fn sections(
     operation: &'static str,
     lines: &[String],
 ) -> Result<(Range<usize>, Range<usize>), CTableError> {
-    let unsupported = |construct| {
-        Err(CTableError::Unsupported {
-            operation,
-            construct,
-        })
-    };
     let ctabs = lines
         .iter()
         .filter(|line| starts_with_keyword(line, "M  V30 BEGIN CTAB"))
         .count();
     if ctabs > 1 {
-        return unsupported("CTABs nested in RGROUP or TEMPLATE blocks");
+        return Err(CTableError::Unsupported {
+            operation,
+            construct: "CTABs nested in RGROUP or TEMPLATE blocks",
+        });
     }
-    let (atoms, bonds) = (
+    Ok((
         section_range(lines, Section::Atom)?,
         section_range(lines, Section::Bond)?,
-    );
-    if lines[atoms.clone()]
-        .iter()
-        .chain(&lines[bonds.clone()])
-        .any(|line| line.trim_end_matches(['\r', '\n']).ends_with('-'))
-    {
-        return unsupported("continued (-) atom or bond lines");
-    }
-    Ok((atoms, bonds))
+    ))
 }
 
 /// Refuse to change indices that other data refers to, which renumbering
@@ -512,7 +514,56 @@ fn section_range(lines: &[String], section: Section) -> Result<Range<usize>, CTa
         .iter()
         .position(|line| starts_with_keyword(line, end))
         .ok_or_else(|| malformed(start, Malformed::Unterminated { begin, end }))?;
-    Ok(start..start + len)
+    let range = start..start + len;
+    if let Some(last) = range
+        .clone()
+        .last()
+        .filter(|&last| continued(&lines[last]).is_some())
+    {
+        return Err(malformed(last + 1, Malformed::Dangling(end)));
+    }
+    Ok(range)
+}
+
+/// The text of `line` before a terminal `-` that continues it onto the next
+/// line, if it has one.
+fn continued(line: &str) -> Option<&str> {
+    line.trim_end_matches(['\r', '\n']).strip_suffix('-')
+}
+
+/// The logical lines of the lines in `range`, each with the CTable line
+/// number of its first line.
+///
+/// A line ending in `-` continues onto the next: the `-` and the next line's
+/// `M  V30 ` marker are dropped and the two joined. `section_range` ensures a
+/// section's last line does not continue.
+fn logical_lines(
+    lines: &[String],
+    range: Range<usize>,
+) -> impl Iterator<Item = (usize, Cow<'_, str>)> {
+    let mut index = range.start;
+    std::iter::from_fn(move || {
+        if index >= range.end {
+            return None;
+        }
+        let first = index;
+        let mut line = Cow::Borrowed(lines[first].as_str());
+        index += 1;
+        while index < range.end {
+            let Some(head) = continued(&line) else {
+                break;
+            };
+            let next = &lines[index];
+            let payload = if starts_with_keyword(next, "M  V30 ") {
+                &next["M  V30 ".len()..]
+            } else {
+                next
+            };
+            line = Cow::Owned(format!("{head}{payload}"));
+            index += 1;
+        }
+        Some((first + 1, line))
+    })
 }
 
 /// The index field of `line`, CTable line `at`: its third field.
@@ -522,8 +573,8 @@ fn index_field(line: &str, at: usize, section: Section) -> Result<&str, CTableEr
         .ok_or_else(|| malformed(at, Malformed::NoField(section.index_field())))
 }
 
-/// Validate the count and unique indices of the `section` lines in `range`
-/// and, when strict, their order.
+/// Validate the count and unique indices of the `section` lines in `range`,
+/// read as logical lines, and, when strict, their order.
 fn validate_indices(
     lines: &[String],
     range: Range<usize>,
@@ -532,9 +583,10 @@ fn validate_indices(
     strict: bool,
 ) -> Result<(), CTableError> {
     let mut seen_indices = HashSet::new();
-    for (position, line_index) in range.clone().enumerate() {
-        let at = line_index + 1;
-        let field = index_field(&lines[line_index], at, section)?;
+    let mut found = 0;
+    for (position, (at, line)) in logical_lines(lines, range).enumerate() {
+        found = position + 1;
+        let field = index_field(&line, at, section)?;
         let index = integer(field, at, section.index_field())?;
         if strict && usize::try_from(index) != Ok(position + 1) {
             return Err(CTableError::OutOfOrder {
@@ -551,7 +603,6 @@ fn validate_indices(
             });
         }
     }
-    let found = range.len();
     match (found as i64).cmp(&declared) {
         std::cmp::Ordering::Less => Err(CTableError::Fewer {
             section,
