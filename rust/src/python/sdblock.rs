@@ -437,7 +437,7 @@ impl PySDBlock {
     fn get<'py>(
         &self,
         name: &Bound<'py, PyAny>,
-        default: Option<Bound<'py, PyAny>>,
+        default: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         let py = name.py();
         let name = self.arg_bytes(name, "record names")?;
@@ -450,7 +450,7 @@ impl PySDBlock {
             }
         }
         let Some(start) = found else {
-            return Ok(default);
+            return Ok(default.cloned());
         };
         let record = self.block.records_at(start, strip).next();
         let record = record.and_then(Result::ok).expect("a record starts here");
