@@ -7,28 +7,59 @@ ending as the block's title line does. Edits copy every line they do not
 rewrite byte for byte, including other writers' header styles and lines
 between records.
 """
+from textwrap import dedent
 from typing import Any, Callable
 
 import pytest
 
 from sendoff.sdblock import SDBlock
 
-# Headers as RDKit writes them, with a record number and a registry number,
-# a duplicate name, and a line that is not a record.
-SOURCE = (
-    "t\nM  END\n"
-    ">  <A>  (1) \n1\n\n"
-    "> 7 <B> (MFCD01)\nb1\nb2\n\n"
-    "note\n\n"
-    ">  <A>\ndup\n\n"
-    "$$$$\n"
-)
-KEPT = (
-    "t\nM  END\n>  <A>  (1) \n1\n\n> 7 <B> (MFCD01)\nb1\nb2\n\nnote\n\n>  <A>\ndup\n\n"
-)
-UNTERMINATED = "t\nM  END\n> <A>\n1\n$$$$\n"
-SPACED = "t\nM  END\n> <A>\n1\n\n\n\n$$$$\n"
-EMPTY = "t\nM  END\n$$$$\n"
+# A header as RDKit writes it, with a record number and a trailing space
+# (written \x20 so editors keep it), a header with a registry number, a
+# duplicate name, and a line that is not a record.
+SOURCE = """\
+t
+M  END
+>  <A>  (1)\x20
+1
+
+> 7 <B> (MFCD01)
+b1
+b2
+
+note
+
+>  <A>
+dup
+
+$$$$
+"""
+
+# The last record has no blank line after its value.
+UNTERMINATED = """\
+t
+M  END
+> <A>
+1
+$$$$
+"""
+
+SPACED = """\
+t
+M  END
+> <A>
+1
+
+
+
+$$$$
+"""
+
+EMPTY = """\
+t
+M  END
+$$$$
+"""
 
 FORMS: dict[str, Callable[[str], Any]] = {
     "str": lambda text: text,
@@ -36,90 +67,243 @@ FORMS: dict[str, Callable[[str], Any]] = {
     "crlf-bytes": lambda text: str.encode(text.replace("\n", "\r\n")),
 }
 
+# Each case is a source block, an edit and its arguments, and the SDF the
+# block writes after the edit, dedented.
 CASES = [
     pytest.param(SOURCE, "to_sdf", (), SOURCE, id="untouched"),
     pytest.param(
         SOURCE,
         "set_record",
         ("A", "x"),
-        "t\nM  END\n> <A>\nx\n\n> 7 <B> (MFCD01)\nb1\nb2\n\nnote\n\n$$$$\n",
+        """\
+        t
+        M  END
+        > <A>
+        x
+
+        > 7 <B> (MFCD01)
+        b1
+        b2
+
+        note
+
+        $$$$
+        """,
         id="set-rewrites-the-first-and-drops-duplicates",
     ),
     pytest.param(
         SOURCE,
         "set_record",
         ("B", "x"),
-        "t\nM  END\n>  <A>  (1) \n1\n\n> <B>\nx\n\nnote\n\n>  <A>\ndup\n\n$$$$\n",
+        """\
+        t
+        M  END
+        >  <A>  (1)\x20
+        1
+
+        > <B>
+        x
+
+        note
+
+        >  <A>
+        dup
+
+        $$$$
+        """,
         id="set-rewrites-a-numbered-multiline-record",
     ),
     pytest.param(
         SOURCE,
         "set_record",
         ("C", "x"),
-        KEPT + "> <C>\nx\n\n$$$$\n",
+        """\
+        t
+        M  END
+        >  <A>  (1)\x20
+        1
+
+        > 7 <B> (MFCD01)
+        b1
+        b2
+
+        note
+
+        >  <A>
+        dup
+
+        > <C>
+        x
+
+        $$$$
+        """,
         id="set-appends-a-new-name",
     ),
     pytest.param(
         SOURCE,
         "append_record",
         ("A", "x"),
-        KEPT + "> <A>\nx\n\n$$$$\n",
+        """\
+        t
+        M  END
+        >  <A>  (1)\x20
+        1
+
+        > 7 <B> (MFCD01)
+        b1
+        b2
+
+        note
+
+        >  <A>
+        dup
+
+        > <A>
+        x
+
+        $$$$
+        """,
         id="append-adds-a-duplicate",
     ),
     pytest.param(
         SOURCE,
         "append_record",
         ("C", "x\ny"),
-        KEPT + "> <C>\nx\ny\n\n$$$$\n",
+        """\
+        t
+        M  END
+        >  <A>  (1)\x20
+        1
+
+        > 7 <B> (MFCD01)
+        b1
+        b2
+
+        note
+
+        >  <A>
+        dup
+
+        > <C>
+        x
+        y
+
+        $$$$
+        """,
         id="append-multiline",
     ),
     pytest.param(
         UNTERMINATED,
         "append_record",
         ("C", "x"),
-        "t\nM  END\n> <A>\n1\n\n> <C>\nx\n\n$$$$\n",
+        """\
+        t
+        M  END
+        > <A>
+        1
+
+        > <C>
+        x
+
+        $$$$
+        """,
         id="append-ends-an-unterminated-record",
     ),
     pytest.param(
         UNTERMINATED,
         "set_record",
         ("A", "x"),
-        "t\nM  END\n> <A>\nx\n\n$$$$\n",
+        """\
+        t
+        M  END
+        > <A>
+        x
+
+        $$$$
+        """,
         id="set-ends-an-unterminated-record",
     ),
     pytest.param(
         SPACED,
         "append_record",
         ("C", "x"),
-        "t\nM  END\n> <A>\n1\n\n\n\n> <C>\nx\n\n$$$$\n",
+        """\
+        t
+        M  END
+        > <A>
+        1
+
+
+
+        > <C>
+        x
+
+        $$$$
+        """,
         id="append-keeps-extra-blank-lines",
     ),
     pytest.param(
         EMPTY,
         "append_record",
         ("C", "x"),
-        "t\nM  END\n> <C>\nx\n\n$$$$\n",
+        """\
+        t
+        M  END
+        > <C>
+        x
+
+        $$$$
+        """,
         id="append-to-no-records",
     ),
     pytest.param(
         EMPTY,
         "append_record",
         ("C", ""),
-        "t\nM  END\n> <C>\n\n\n$$$$\n",
+        """\
+        t
+        M  END
+        > <C>
+
+
+        $$$$
+        """,
         id="append-an-empty-value",
     ),
     pytest.param(
         SOURCE,
         "remove_record",
         ("A",),
-        "t\nM  END\n> 7 <B> (MFCD01)\nb1\nb2\n\nnote\n\n$$$$\n",
+        """\
+        t
+        M  END
+        > 7 <B> (MFCD01)
+        b1
+        b2
+
+        note
+
+        $$$$
+        """,
         id="remove-drops-duplicates",
     ),
     pytest.param(
         SOURCE,
         "remove_record",
         ("B",),
-        "t\nM  END\n>  <A>  (1) \n1\n\nnote\n\n>  <A>\ndup\n\n$$$$\n",
+        """\
+        t
+        M  END
+        >  <A>  (1)\x20
+        1
+
+        note
+
+        >  <A>
+        dup
+
+        $$$$
+        """,
         id="remove-keeps-neighbors",
     ),
     pytest.param(SOURCE, "remove_record", ("C",), SOURCE, id="remove-missing"),
@@ -127,18 +311,50 @@ CASES = [
         SOURCE,
         "replace_records",
         ([("A", "1"), ("B", "b1\nb2"), ("A", "dup")],),
-        "t\nM  END\n> <A>\n1\n\n> <B>\nb1\nb2\n\n> <A>\ndup\n\n$$$$\n",
+        """\
+        t
+        M  END
+        > <A>
+        1
+
+        > <B>
+        b1
+        b2
+
+        > <A>
+        dup
+
+        $$$$
+        """,
         id="replace-rewrites-every-header-and-drops-other-lines",
     ),
     pytest.param(
         SOURCE,
         "replace_records",
         ({"C": "x", "A": "y"},),
-        "t\nM  END\n> <C>\nx\n\n> <A>\ny\n\n$$$$\n",
+        """\
+        t
+        M  END
+        > <C>
+        x
+
+        > <A>
+        y
+
+        $$$$
+        """,
         id="replace-from-a-mapping",
     ),
     pytest.param(
-        SOURCE, "replace_records", ([],), "t\nM  END\n$$$$\n", id="replace-with-none"
+        SOURCE,
+        "replace_records",
+        ([],),
+        """\
+        t
+        M  END
+        $$$$
+        """,
+        id="replace-with-none",
     ),
 ]
 
@@ -176,12 +392,12 @@ def test_edit_writes_exactly(
         source: the block's SDF before the edit
         method: the edit to make
         args: the edit's arguments, as str
-        expected: the block's SDF after the edit
+        expected: the block's SDF after the edit, dedented
     """
     block = next(SDBlock.from_sdf(form(source)))
     getattr(block, method)(*(convert(arg, form) for arg in args))
     written = block.to_sdf()
-    assert written == form(expected)
+    assert written == form(dedent(expected))
     reread = next(SDBlock.from_sdf(written))
     assert reread.records() == block.records()
     assert reread.to_sdf() == written
