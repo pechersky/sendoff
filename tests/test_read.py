@@ -1,10 +1,12 @@
 # mypy: allow-untyped-decorators
 """Test reading SDFs into blocks: parse_sdf, from_lines, from_sdf, decoding."""
 import errno
+import gc
 import io
 import os
 import threading
 import typing
+import weakref
 from itertools import chain
 from pathlib import Path
 from typing import Generator, Iterator
@@ -287,6 +289,43 @@ def test_from_lines_does_not_close_caller_owned_iterable() -> None:
     assert closed == []
     source.close()
     assert closed == [True]
+
+
+class SelfParsingReader(io.StringIO):
+    """A reader that keeps its own parser, making a reference cycle."""
+
+    parser: typing.Any = None
+
+
+class SelfParsingLines:
+    """An iterable of lines that keeps its own parser, making a reference cycle."""
+
+    parser: typing.Any = None
+
+    def __iter__(self) -> Iterator[str]:
+        """Yield one block's lines.
+
+        Yields:
+            The lines.
+        """
+        yield from ["t\n", "M  END\n", "$$$$\n"]
+
+
+@pytest.mark.parametrize("source", [SelfParsingReader, SelfParsingLines])
+def test_parsers_in_reference_cycles_are_collected(
+    source: type[SelfParsingReader] | type[SelfParsingLines],
+) -> None:
+    """The garbage collector frees a source that refers to its own parser.
+
+    Args:
+        source: the class of source to parse
+    """
+    held = source()
+    held.parser = SDBlock.from_lines(held)
+    collected = weakref.ref(held)
+    del held
+    gc.collect()
+    assert collected() is None
 
 
 def open_paths() -> set[str]:

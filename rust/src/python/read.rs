@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyIterator, PyString};
+use pyo3::{PyTraverseError, PyVisit};
 
 use crate::core::block::Block;
 use crate::core::mapped::MappedBlocks;
@@ -270,6 +271,25 @@ impl PySDBlockIterator {
     fn close(&mut self) {
         self.source = Source::Closed;
         self.scanner = Scanner::default();
+    }
+
+    /// Let the garbage collector find cycles through the source, such as a
+    /// reader that keeps its parser.
+    ///
+    /// There is no `__clear__`: a cycle back to the parser runs through a
+    /// container changed after the parser was made, and clearing that
+    /// container breaks it.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "PyO3 passes the visitor by value"
+    )]
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        // The other sources hold only str and bytes, which are never in cycles.
+        match &self.source {
+            Source::Lines(lines) => visit.call(lines),
+            Source::Reader(read) => visit.call(read),
+            _ => Ok(()),
+        }
     }
 }
 
