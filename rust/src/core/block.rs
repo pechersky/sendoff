@@ -10,9 +10,8 @@ use std::sync::LazyLock;
 
 use memchr::{memchr, memmem, memrchr};
 
-use crate::core::ctable::CTableFormat;
 use crate::core::ctable::error::CTableError;
-use crate::core::ctable::header::{HEADER_LINES, parse_header};
+use crate::core::ctable::header::{Counts, HEADER_LINES, parse_header};
 use crate::core::lines::lines;
 use crate::core::newline::{
     CRLF_TRAILER, TRAILER, missing_ending, newline, title_newline, trailer,
@@ -40,14 +39,34 @@ fn mdl_end(data: &[u8], title_end: usize, body_end: usize) -> Option<usize> {
 /// The MDL runs through the first `M  END` line and the SD data runs to the
 /// delimiter; without `M  END`, the MDL runs to the delimiter and there is
 /// no SD data.
-fn layout(data: &[u8], delimiter: Option<usize>) -> (usize, usize, usize) {
+fn layout(data: &[u8], delimiter: Option<usize>) -> Layout {
     let title_end = match delimiter {
         Some(0) => 0,
         _ => memchr(b'\n', data).map_or(data.len(), |index| index + 1),
     };
     let body_end = delimiter.map_or(data.len(), |offset| offset.max(title_end));
     let mdl_end = mdl_end(data, title_end, body_end).unwrap_or(body_end);
-    (title_end, mdl_end, body_end)
+    Layout {
+        title_end,
+        mdl_end,
+        body_end,
+    }
+}
+
+/// Where a block's title, MDL, and SD data end.
+struct Layout {
+    title_end: usize,
+    mdl_end: usize,
+    body_end: usize,
+}
+
+/// A block's data, ending with a `$$$$` line, and where its title and MDL
+/// end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Parts<'a> {
+    pub data: &'a [u8],
+    pub title_end: usize,
+    pub mdl_end: usize,
 }
 
 /// Why a value cannot replace a block's title and MDL.
@@ -91,7 +110,11 @@ impl Block {
             let ending = missing_ending(&data, title_newline(&data));
             data.extend_from_slice(ending);
         }
-        let (title_end, mdl_end, body_end) = layout(&data, delimiter);
+        let Layout {
+            title_end,
+            mdl_end,
+            body_end,
+        } = layout(&data, delimiter);
         if !matches!(&data[body_end..], TRAILER | CRLF_TRAILER) {
             let trailer = trailer(title_newline(&data));
             data.truncate(body_end);
@@ -110,8 +133,12 @@ impl Block {
     /// Re-parsing the serialized block does not always restore it: a title
     /// set to start with `$$$$` reads back as a delimiter, and SD data can
     /// follow an MDL without `M  END`.
-    pub fn parts(&self) -> (&[u8], usize, usize) {
-        (&self.data, self.title_end, self.mdl_end)
+    pub fn parts(&self) -> Parts<'_> {
+        Parts {
+            data: &self.data,
+            title_end: self.title_end,
+            mdl_end: self.mdl_end,
+        }
     }
 
     /// Rebuild a block from `parts`, or `None` if no block has them.
@@ -394,7 +421,7 @@ impl Block {
     ///
     /// Equivalent to parsing a `CTable` from the title and MDL lines, without
     /// copying them.
-    pub fn counts(&self) -> Result<(CTableFormat, i64, i64), CTableError> {
+    pub fn counts(&self) -> Result<Counts, CTableError> {
         let mut source = std::iter::once(&b""[..])
             .chain(lines(self.mdl()))
             .map(String::from_utf8_lossy);
@@ -408,6 +435,7 @@ impl Block {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ctable::CTableFormat;
     use crate::core::ctable::error::Malformed;
 
     fn block(text: &str, delimited: bool) -> Block {
@@ -477,7 +505,11 @@ mod tests {
         block.serialize_into(Strip::Bytes, &mut out);
         assert_eq!(out, b"$$$$\n");
         assert_eq!(written(&self::block("$$$$ x\r\n", true)), "$$$$\r\n");
-        let (data, title_end, mdl_end) = block.parts();
+        let Parts {
+            data,
+            title_end,
+            mdl_end,
+        } = block.parts();
         assert_eq!((title_end, mdl_end), (0, 0));
         assert_eq!(
             Block::from_parts(data.to_vec(), title_end, mdl_end),
@@ -544,7 +576,11 @@ mod tests {
         block.set_record(b"A", b"3", Strip::Bytes).unwrap();
         let edited = "new\r\nM  END\r\n> <A>\r\n3\r\n\r\n> <B>\r\n2\r\n\r\n$$$$\r\n";
         assert_eq!(written(&block), edited);
-        let (data, title_end, mdl_end) = block.parts();
+        let Parts {
+            data,
+            title_end,
+            mdl_end,
+        } = block.parts();
         assert_eq!(
             Block::from_parts(data.to_vec(), title_end, mdl_end),
             Some(block.clone())
@@ -687,12 +723,26 @@ mod tests {
             "t\n\n\n  3  2  0  0  0  0            999 V2000\nM  END\n",
             false,
         );
-        assert_eq!(v2000.counts(), Ok((CTableFormat::V2000, 3, 2)));
+        assert_eq!(
+            v2000.counts(),
+            Ok(Counts {
+                format: CTableFormat::V2000,
+                atoms: 3,
+                bonds: 2
+            })
+        );
         let v3000 = block(
             "t\n\n\n  0  0  0     0  0            999 V3000\nM  V30 BEGIN CTAB\nM  V30 COUNTS 4 5 0 0 0\nM  END\n",
             false,
         );
-        assert_eq!(v3000.counts(), Ok((CTableFormat::V3000, 4, 5)));
+        assert_eq!(
+            v3000.counts(),
+            Ok(Counts {
+                format: CTableFormat::V3000,
+                atoms: 4,
+                bonds: 5
+            })
+        );
         assert_eq!(
             block("t\nM  END\n", false).counts(),
             Err(CTableError::Malformed {

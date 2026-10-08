@@ -7,7 +7,7 @@ pub mod header;
 mod v3000;
 
 use error::CTableError;
-use header::{HEADER_LINES, V3000_COUNTS_LINE, parse_header, with_v3000_counts};
+use header::{Counts, HEADER_LINES, V3000_COUNTS_LINE, parse_header, with_v3000_counts};
 use v3000::{continued, logical_lines, renumbered, section_range, sections, validate_indices};
 
 /// The supported connection-table formats.
@@ -73,8 +73,11 @@ impl CTable {
     pub fn parse(lines: Vec<String>) -> Result<Self, CTableError> {
         let header: [&str; HEADER_LINES] =
             std::array::from_fn(|index| lines.get(index).map_or("", String::as_str));
-        let (format, num_atoms, num_bonds) =
-            parse_header(&header[..lines.len().min(HEADER_LINES)])?;
+        let Counts {
+            format,
+            atoms: num_atoms,
+            bonds: num_bonds,
+        } = parse_header(&header[..lines.len().min(HEADER_LINES)])?;
         Ok(Self {
             lines,
             format,

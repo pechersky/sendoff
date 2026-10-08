@@ -20,11 +20,19 @@ fn line_at<'a>(lines: &[&'a str], index: usize) -> Result<&'a str, CTableError> 
         .ok_or_else(|| malformed(lines.len() + 1, Malformed::Missing(lines.len())))
 }
 
+/// A CTable's format and the atom and bond counts its header declares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Counts {
+    pub format: CTableFormat,
+    pub atoms: i64,
+    pub bonds: i64,
+}
+
 /// Parse the format and the declared atom and bond counts.
 ///
 /// `lines` starts with the title and needs at most six lines. V3000 input
 /// skips the CTAB BEGIN line and reads its counts from the following line.
-pub fn parse_header(lines: &[&str]) -> Result<(CTableFormat, i64, i64), CTableError> {
+pub fn parse_header(lines: &[&str]) -> Result<Counts, CTableError> {
     let first_counts = line_at(lines, COUNTS_LINE)?;
     let format = match fields(first_counts).next_back() {
         Some("V2000") => CTableFormat::V2000,
@@ -48,7 +56,11 @@ pub fn parse_header(lines: &[&str]) -> Result<(CTableFormat, i64, i64), CTableEr
             )
         }
     };
-    Ok((format, atoms, bonds))
+    Ok(Counts {
+        format,
+        atoms,
+        bonds,
+    })
 }
 
 /// Parse the atom and bond counts from a V2000 counts line, its first two

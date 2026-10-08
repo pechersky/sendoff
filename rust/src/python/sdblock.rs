@@ -7,7 +7,7 @@ use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyList, PyString, PyTuple, PyType};
 
-use crate::core::block::Block;
+use crate::core::block::{Block, Parts};
 use crate::core::ctable::CTable;
 use crate::core::ctable::error::CTableError;
 use crate::core::lines::lines;
@@ -525,7 +525,11 @@ impl PySDBlock {
     fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyTuple>> {
         let py = slf.py();
         let this = slf.try_borrow()?;
-        let (data, title_end, mdl_end) = this.block.parts();
+        let Parts {
+            data,
+            title_end,
+            mdl_end,
+        } = this.block.parts();
         let state = (
             PyBytes::new(py, data),
             title_end,
@@ -729,8 +733,7 @@ impl PySDBlock {
     /// Raises:
     ///     MalformedCTableError: as ctable raises
     fn num_atoms(&self) -> PyResult<i64> {
-        let (_, atoms, _) = self.block.counts()?;
-        Ok(atoms)
+        Ok(self.block.counts()?.atoms)
     }
 
     /// Get the number of bonds declared by the counts line.
@@ -740,8 +743,7 @@ impl PySDBlock {
     /// Raises:
     ///     MalformedCTableError: as ctable raises
     fn num_bonds(&self) -> PyResult<i64> {
-        let (_, _, bonds) = self.block.counts()?;
-        Ok(bonds)
+        Ok(self.block.counts()?.bonds)
     }
 
     /// Renumber atom and bond indices to be 1-indexed and in order.
