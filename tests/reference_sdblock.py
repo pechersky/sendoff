@@ -6,11 +6,12 @@ behavior changes that an unterminated final block is still yielded, that a
 block without ``M  END`` does not keep its ``$$$$`` line as MDL, and that line
 endings survive: a ``$$$$`` line that is exactly ``$$$$`` and a newline is kept,
 and lines the block writes or ends itself end like its title line (a line
-ending in a bare ``\r`` gets just ``\n``). A block whose first line starts
-with ``$$$$`` is an empty record, as the CTfile spec reads any such line as a
-terminator, rather than a ``$$$$`` title that each write doubled. Divergences
-that are accepted but not modeled here are kept out of the generated inputs
-instead.
+ending in a bare ``\r`` gets just ``\n``). An appended record follows a blank
+line, so that it does not run on from a last record without one. A block whose
+first line starts with ``$$$$`` is an empty record, as the CTfile spec reads
+any such line as a terminator, rather than a ``$$$$`` title that each write
+doubled. Divergences that are accepted but not modeled here are kept out of
+the generated inputs instead.
 """
 
 from __future__ import annotations
@@ -114,12 +115,17 @@ class RefBlock(Generic[AnyStr]):
     def append_record(self, name: AnyStr, value: AnyStr) -> None:
         """Append a record as main's append_record does.
 
+        Unlike main, a blank line comes first if the SD data ends in a line
+        that is not blank.
+
         Args:
             name: record name
             value: record value without a trailing newline
         """
         newline = self.newline
         self.titled = True
+        if self.metadata and self.metadata[-1].strip():
+            self.metadata.append(newline)
         self.metadata.extend(
             [
                 _lit(name, "> <") + name + _lit(name, ">") + newline,

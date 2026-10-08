@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::sync::LazyLock;
 
-use memchr::{memchr, memmem};
+use memchr::{memchr, memmem, memrchr};
 
 use crate::core::ctable::CTableFormat;
 use crate::core::ctable::error::CTableError;
@@ -228,13 +228,27 @@ impl Block {
         out.extend_from_slice(&self.data[self.title_end..]);
     }
 
-    /// Append a `> <name>` record with a single value line.
-    pub fn append_record(&mut self, name: &[u8], value: &[u8]) {
+    /// Append a `> <name>` record with a single value line, after a blank
+    /// line unless the SD data is empty or already ends with one.
+    pub fn append_record(&mut self, name: &[u8], value: &[u8], strip: Strip) {
         self.ensure_title_line();
         let (newline, trailer) = (self.newline(), self.trailer());
+        let needs_separator = self.ends_in_text(strip);
         self.data.truncate(self.body_end());
+        if needs_separator {
+            self.data.extend_from_slice(newline);
+        }
         push_record(&mut self.data, name, value, newline);
         self.data.extend_from_slice(trailer);
+    }
+
+    /// Whether the last SD data line is not blank, so that a header
+    /// written after it would read as part of its run.
+    fn ends_in_text(&self, strip: Strip) -> bool {
+        let metadata = self.metadata();
+        let body = metadata.strip_suffix(b"\n").unwrap_or(metadata);
+        let start = memrchr(b'\n', body).map_or(0, |index| index + 1);
+        !strip.trim(&body[start..]).is_empty()
     }
 
     /// Replace the title line with `title`, which must not contain `\n`,
@@ -287,7 +301,7 @@ impl Block {
         strip: Strip,
     ) -> Result<(), MissingFieldName> {
         if self.rewrite_records(name, Some(value), strip)? == 0 {
-            self.append_record(name, value);
+            self.append_record(name, value, strip);
         }
         Ok(())
     }
@@ -485,7 +499,7 @@ mod tests {
     fn lines_added_to_an_empty_record_follow_an_empty_title() {
         let empty = block("$$$$\r\n", true);
         let mut appended = empty.clone();
-        appended.append_record(b"A", b"1");
+        appended.append_record(b"A", b"1", Strip::Bytes);
         assert_eq!(written(&appended), "\r\n> <A>\r\n1\r\n\r\n$$$$\r\n");
         let mut set = empty.clone();
         set.set_record(b"A", b"1", Strip::Bytes).unwrap();
@@ -533,7 +547,7 @@ mod tests {
         );
         assert_eq!(written(&self::block("t\r", false)), "t\r\n$$$$\r\n");
         assert_eq!(written(&self::block("t", false)), "t\n$$$$\n");
-        block.append_record(b"B", b"2");
+        block.append_record(b"B", b"2", Strip::Bytes);
         block.set_title(b"new");
         block.set_record(b"A", b"3", Strip::Bytes).unwrap();
         let edited = "new\r\nM  END\r\n> <A>\r\n3\r\n\r\n> <B>\r\n2\r\n\r\n$$$$\r\n";
@@ -551,7 +565,7 @@ mod tests {
 
         // A delimiter line is kept as read, even if the title's ending differs.
         let mut mixed = self::block("t\nM  END\n$$$$\r\n", true);
-        mixed.append_record(b"A", b"1");
+        mixed.append_record(b"A", b"1", Strip::Bytes);
         assert_eq!(written(&mixed), "t\nM  END\n> <A>\n1\n\n$$$$\r\n");
         assert_eq!(Block::from_parts(b"t\r\n$$$$\r".to_vec(), 3, 3), None);
         assert_eq!(Block::from_parts(b"\r\n".to_vec(), 2, 2), None);
@@ -567,12 +581,31 @@ mod tests {
     #[test]
     fn appended_records_follow_existing_metadata() {
         let mut block = block("t\nM  END\n> <A>\na\n\n$$$$\n", true);
-        block.append_record(b"B", b"b");
+        block.append_record(b"B", b"b", Strip::Bytes);
         assert_eq!(
             records(&block).unwrap(),
             [("A".into(), "a".into()), ("B".into(), "b".into())]
         );
         assert_eq!(written(&block), "t\nM  END\n> <A>\na\n\n> <B>\nb\n\n$$$$\n");
+
+        // SD data ending in a line that is not blank gets a blank line first.
+        for (text, delimited) in [
+            ("t\nM  END\n> <A>\na\n$$$$\n", true),
+            ("t\nM  END\n> <A>\na", false),
+        ] {
+            let mut block = self::block(text, delimited);
+            block.append_record(b"B", b"b", Strip::Bytes);
+            assert_eq!(written(&block), "t\nM  END\n> <A>\na\n\n> <B>\nb\n\n$$$$\n");
+        }
+        let mut stray = self::block("t\r\nM  END\r\nstray\r\n$$$$\r\n", true);
+        stray.append_record(b"B", b"b", Strip::Bytes);
+        assert_eq!(records(&stray).unwrap(), [("B".into(), "b".into())]);
+        let mut spaced = self::block("t\nM  END\n> <A>\na\n \n$$$$\n", true);
+        spaced.append_record(b"B", b"b", Strip::Bytes);
+        assert_eq!(
+            written(&spaced),
+            "t\nM  END\n> <A>\na\n \n> <B>\nb\n\n$$$$\n"
+        );
     }
 
     #[test]

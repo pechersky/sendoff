@@ -280,6 +280,17 @@ def test_names_len_and_contains_skip_values() -> None:
             call()
 
 
+def test_appended_records_follow_a_blank_line() -> None:
+    """Appending after a last record without its blank line adds a record."""
+    for method in ("append_record", "set_record"):
+        block = SDBlock("t\nM  END\n> <A>\n1")
+        getattr(block, method)("B", "2")
+        assert block.records() == [("A", "1"), ("B", "2")]
+        assert block.to_sdf() == "t\nM  END\n> <A>\n1\n\n> <B>\n2\n\n$$$$\n"
+    constructed = SDBlock("t\nM  END\n> <A>\n1\n$$$$\n", {"B": "2"})
+    assert constructed.records() == [("A", "1"), ("B", "2")]
+
+
 def test_constructor_parses_one_block() -> None:
     """SDBlock(sdf) parses a molblock or one record and appends records."""
     molblock = "title\n  prog\n\nM  END\n"

@@ -277,7 +277,7 @@ impl PySDBlock {
             for (name, value) in record_pairs(records)? {
                 let name = slf.arg_bytes(&name, "record names")?;
                 let value = slf.arg_bytes(&value, "values")?;
-                slf.block.append_record(name, value);
+                slf.block.append_record(name, value, slf.kind.strip());
             }
         }
         Ok(slf)
@@ -638,7 +638,7 @@ impl PySDBlock {
     ) -> PyResult<()> {
         let name = self.arg_bytes(record_name, "record names")?;
         let value = self.arg_bytes(value, "values")?;
-        self.block.append_record(name, value);
+        self.block.append_record(name, value, self.kind.strip());
         Ok(())
     }
 
