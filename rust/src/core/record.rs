@@ -51,14 +51,6 @@ pub struct Record<'a> {
     pub start: usize,
 }
 
-/// Append `> <name>`, the value line, and a blank line, each ending in
-/// `newline`.
-pub fn push_record(data: &mut Vec<u8>, name: &[u8], value: &[u8], newline: &[u8]) {
-    data.reserve(name.len() + value.len() + 4 + 3 * newline.len());
-    push_header(data, PLAIN_HEADER, name, newline);
-    push_value(data, value, newline);
-}
-
 /// What a header line holds around its name when there is no header to
 /// copy: `> <name>`.
 pub const PLAIN_HEADER: (&[u8], &[u8]) = (b"> <", b">");
@@ -82,6 +74,69 @@ pub fn push_value(data: &mut Vec<u8>, value: &[u8], newline: &[u8]) {
     data.extend_from_slice(value);
     data.extend_from_slice(newline);
     data.extend_from_slice(newline);
+}
+
+/// The named header lines of SD data, for new records to reuse by name.
+pub struct HeaderPool<'a> {
+    metadata: &'a [u8],
+    headers: Headers<'a>,
+    /// The next header, while records take them in order.
+    next: Option<Header<'a>>,
+    /// The names and offsets of the headers left, sorted, once a record
+    /// comes out of order; a taken header's offset becomes `usize::MAX`.
+    sorted: Option<Vec<(&'a [u8], usize)>>,
+    /// What new header lines hold around their names.
+    pub template: (&'a [u8], &'a [u8]),
+}
+
+impl<'a> HeaderPool<'a> {
+    /// Pool the headers of `metadata`, skipping those without a name. The
+    /// template copies the first one's line around its name.
+    pub fn new(metadata: &'a [u8], strip: Strip) -> Self {
+        let mut headers = Records::new(metadata, 0, strip).headers();
+        let next = headers.find_map(Result::ok);
+        let template = next
+            .and_then(|header| header.around_name(metadata))
+            .map_or(PLAIN_HEADER, |(before, after)| {
+                (&metadata[before], &metadata[after])
+            });
+        Self {
+            metadata,
+            headers,
+            next,
+            sorted: None,
+            template,
+        }
+    }
+
+    /// Take the line, with its ending, of the first header left named
+    /// `name`.
+    pub fn take(&mut self, name: &[u8]) -> Option<&'a [u8]> {
+        let start = match &mut self.sorted {
+            None if self.next.is_some_and(|header| header.name == name) => {
+                let start = self.next?.start;
+                self.next = self.headers.find_map(Result::ok);
+                start
+            }
+            sorted => {
+                let sorted = sorted.get_or_insert_with(|| {
+                    let left = self.next.into_iter();
+                    let left = left.chain(self.headers.by_ref().filter_map(Result::ok));
+                    let mut sorted: Vec<_> =
+                        left.map(|header| (header.name, header.start)).collect();
+                    sorted.sort_unstable();
+                    sorted
+                });
+                let first = sorted.partition_point(|&(other, _)| other < name);
+                let (_, start) = sorted[first..]
+                    .iter_mut()
+                    .take_while(|(other, _)| *other == name)
+                    .find(|(_, start)| *start != usize::MAX)?;
+                std::mem::replace(start, usize::MAX)
+            }
+        };
+        Some(&self.metadata[start..line_end(self.metadata, start)])
+    }
 }
 
 /// The records of SD data from an offset on, parsed as Python's groupby
@@ -290,5 +345,27 @@ mod tests {
         assert_eq!(headers.next(), Some(Err(MissingFieldName)));
         assert_eq!(headers.next().unwrap().unwrap().name, b"B");
         assert_eq!(headers.next(), None);
+    }
+
+    #[test]
+    fn header_pool_gives_each_name_its_lines_in_order() {
+        let metadata = b"> bad\n> <A>\n\n>  <A> (1) \na\n\n> 7 <B>\r\nb\n\n> <A>\na\n\n";
+        let mut pool = HeaderPool::new(metadata, Strip::Bytes);
+        assert_eq!(pool.template, (&b">  <"[..], &b"> (1) "[..]));
+        assert_eq!(pool.take(b"A"), Some(&b">  <A> (1) \n"[..]));
+        assert_eq!(pool.take(b"A"), Some(&b"> <A>\n"[..]));
+        assert_eq!(pool.take(b"B"), Some(&b"> 7 <B>\r\n"[..]));
+        assert_eq!(pool.take(b"A"), None);
+        assert_eq!(pool.take(b"C"), None);
+
+        let mut pool = HeaderPool::new(metadata, Strip::Bytes);
+        for name in [&b"A"[..], b"B", b"A"] {
+            assert!(pool.take(name).is_some());
+        }
+        assert_eq!(pool.take(b"A"), None);
+
+        let mut empty = HeaderPool::new(b"x\n", Strip::Bytes);
+        assert_eq!(empty.template, PLAIN_HEADER);
+        assert_eq!(empty.take(b"A"), None);
     }
 }

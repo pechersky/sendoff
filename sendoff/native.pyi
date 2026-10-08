@@ -536,6 +536,9 @@ class SDBlock(Generic[AnyStr]):
         """
         Replace all SD data with the given records.
 
+        The k-th record with a name keeps the k-th old header line with that
+        name; other headers are written as `append_record` writes them.
+
         Args:
             records: a mapping, or an iterable of (name, value) tuples, in
                 the block's type

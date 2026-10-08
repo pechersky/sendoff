@@ -18,7 +18,7 @@ use crate::core::newline::{
     CRLF_TRAILER, TRAILER, missing_ending, newline, title_newline, trailer,
 };
 use crate::core::record::{
-    Headers, MissingFieldName, PLAIN_HEADER, Records, push_header, push_record, push_value,
+    HeaderPool, Headers, MissingFieldName, PLAIN_HEADER, Records, push_header, push_value,
 };
 use crate::core::strip::Strip;
 
@@ -355,16 +355,27 @@ impl Block {
         self.rewrite_records(name, None, strip)
     }
 
-    /// Replace the whole SD data with `records`.
-    pub fn replace_records<'a>(&mut self, records: impl IntoIterator<Item = (&'a [u8], &'a [u8])>) {
+    /// Replace the whole SD data with `records`. The k-th record with a name
+    /// keeps the k-th old header line with that name; other headers are
+    /// written as `append_record` writes them, from the old SD data.
+    pub fn replace_records<'a>(
+        &mut self,
+        records: impl IntoIterator<Item = (&'a [u8], &'a [u8])>,
+        strip: Strip,
+    ) {
         let mut records = records.into_iter().peekable();
         if records.peek().is_some() {
             self.ensure_title_line();
         }
         let (newline, trailer) = (self.newline(), self.trailer());
-        self.data.truncate(self.mdl_end);
+        let old = self.data.split_off(self.mdl_end);
+        let mut headers = HeaderPool::new(&old[..old.len() - trailer.len()], strip);
         for (name, value) in records {
-            push_record(&mut self.data, name, value, newline);
+            match headers.take(name) {
+                Some(line) => self.data.extend_from_slice(line),
+                None => push_header(&mut self.data, headers.template, name, newline),
+            }
+            push_value(&mut self.data, value, newline);
         }
         self.data.extend_from_slice(trailer);
     }
@@ -554,10 +565,10 @@ mod tests {
         set.set_record(b"A", b"1", Strip::Bytes).unwrap();
         assert_eq!(set, appended);
         let mut replaced = empty.clone();
-        replaced.replace_records([(&b"A"[..], &b"1"[..])]);
+        replaced.replace_records([(&b"A"[..], &b"1"[..])], Strip::Bytes);
         assert_eq!(replaced, appended);
         let mut cleared = empty.clone();
-        cleared.replace_records([]);
+        cleared.replace_records([], Strip::Bytes);
         cleared.replace_mdl([]);
         assert_eq!(cleared, empty);
         let mut mdl = empty.clone();
@@ -610,7 +621,7 @@ mod tests {
             Block::from_parts(data.to_vec(), title_end, mdl_end),
             Some(block.clone())
         );
-        block.replace_records([(&b"C"[..], &b"c"[..])]);
+        block.replace_records([(&b"C"[..], &b"c"[..])], Strip::Bytes);
         assert_eq!(
             written(&block),
             "new\r\nM  END\r\n> <C>\r\nc\r\n\r\n$$$$\r\n"
@@ -745,8 +756,8 @@ mod tests {
             written(&block),
             "t\nM  END\n> <A>  (1)\nnew\n\njunk\n\n> <C>  (1)\nc\n\n$$$$\n"
         );
-        block.replace_records([(&b"Z"[..], &b"z"[..])]);
-        assert_eq!(written(&block), "t\nM  END\n> <Z>\nz\n\n$$$$\n");
+        block.replace_records([(&b"Z"[..], &b"z"[..])], Strip::Bytes);
+        assert_eq!(written(&block), "t\nM  END\n> <Z>  (1)\nz\n\n$$$$\n");
         let mut malformed = self::block("t\nM  END\n> bad\n\n", false);
         assert_eq!(
             malformed.remove_records(b"A", Strip::Bytes),

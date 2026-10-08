@@ -6,8 +6,10 @@ header with a name, so after RDKit's ``>  <A>  (1)`` it writes
 ``>  <C>  (1)`` with the same trailing space; without such a header, or when
 its name has no closing ``>``, it writes ``> <C>``. Value lines and one blank
 line follow, every line ending as the block's title line does.
-``set_record`` keeps the header line of the record it sets. Edits copy every
-line they do not rewrite byte for byte, including lines between records.
+``set_record`` keeps the header line of the record it sets, and
+``replace_records`` gives the k-th record with a name the k-th old header line
+with that name. Edits copy every line they do not rewrite byte for byte,
+including lines between records, which ``replace_records`` drops.
 """
 from textwrap import dedent
 from typing import Any, Callable
@@ -343,19 +345,42 @@ CASES = [
         """\
         t
         M  END
-        > <A>
+        >  <A>  (1)\x20
         1
 
-        > <B>
+        > 7 <B> (MFCD01)
         b1
         b2
 
-        > <A>
+        >  <A>
         dup
 
         $$$$
         """,
-        id="replace-rewrites-every-header-and-drops-other-lines",
+        id="replace-keeps-headers-and-drops-other-lines",
+    ),
+    pytest.param(
+        SOURCE,
+        "replace_records",
+        ([("B", "x"), ("A", "y"), ("A", "z"), ("A", "w")],),
+        """\
+        t
+        M  END
+        > 7 <B> (MFCD01)
+        x
+
+        >  <A>  (1)\x20
+        y
+
+        >  <A>
+        z
+
+        >  <A>  (1)\x20
+        w
+
+        $$$$
+        """,
+        id="replace-keeps-each-names-headers-in-order",
     ),
     pytest.param(
         SOURCE,
@@ -364,10 +389,10 @@ CASES = [
         """\
         t
         M  END
-        > <C>
+        >  <C>  (1)\x20
         x
 
-        > <A>
+        >  <A>  (1)\x20
         y
 
         $$$$
