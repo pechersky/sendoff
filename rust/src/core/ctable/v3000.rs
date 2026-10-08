@@ -146,7 +146,7 @@ pub(super) fn logical_lines(
         let mut line = Cow::Borrowed(lines[first].as_str());
         index += 1;
         while index < range.end {
-            let Some(head) = continued(&line) else {
+            let Some(head) = continued(&line).map(str::len) else {
                 break;
             };
             let next = &lines[index];
@@ -155,7 +155,9 @@ pub(super) fn logical_lines(
             } else {
                 next
             };
-            line = Cow::Owned(format!("{head}{payload}"));
+            let joined = line.to_mut();
+            joined.truncate(head);
+            joined.push_str(payload);
             index += 1;
         }
         Some((first + 1, line))
