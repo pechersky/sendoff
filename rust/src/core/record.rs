@@ -41,6 +41,11 @@ pub fn push_record(data: &mut Vec<u8>, name: &[u8], value: &[u8], newline: &[u8]
     data.extend_from_slice(name);
     data.push(b'>');
     data.extend_from_slice(newline);
+    push_value(data, value, newline);
+}
+
+/// Append the value line and a blank line, each ending in `newline`.
+pub fn push_value(data: &mut Vec<u8>, value: &[u8], newline: &[u8]) {
     data.extend_from_slice(value);
     data.extend_from_slice(newline);
     data.extend_from_slice(newline);

@@ -3,9 +3,9 @@
 
 A record the block writes itself has a ``> <name>`` header, with one space
 and no other fields, then its value lines and one blank line, every line
-ending as the block's title line does. Edits copy every line they do not
-rewrite byte for byte, including other writers' header styles and lines
-between records.
+ending as the block's title line does; ``set_record`` keeps the header line
+of the record it sets. Edits copy every line they do not rewrite byte for
+byte, including other writers' header styles and lines between records.
 """
 from textwrap import dedent
 from typing import Any, Callable
@@ -78,7 +78,7 @@ CASES = [
         """\
         t
         M  END
-        > <A>
+        >  <A>  (1)\x20
         x
 
         > 7 <B> (MFCD01)
@@ -89,7 +89,7 @@ CASES = [
 
         $$$$
         """,
-        id="set-rewrites-the-first-and-drops-duplicates",
+        id="set-keeps-the-first-header-and-drops-duplicates",
     ),
     pytest.param(
         SOURCE,
@@ -101,7 +101,7 @@ CASES = [
         >  <A>  (1)\x20
         1
 
-        > <B>
+        > 7 <B> (MFCD01)
         x
 
         note
@@ -111,7 +111,7 @@ CASES = [
 
         $$$$
         """,
-        id="set-rewrites-a-numbered-multiline-record",
+        id="set-keeps-a-registry-header",
     ),
     pytest.param(
         SOURCE,

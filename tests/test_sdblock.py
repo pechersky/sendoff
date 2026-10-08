@@ -142,7 +142,9 @@ def test_record_mutators_keep_order_and_other_lines() -> None:
     assert block.remove_record("B") == 0
     out = io.StringIO()
     block.write(out)
-    assert out.getvalue() == ("t\nM  END\n> <A>\nnew\n\nnote\n\n> <C>\nc\n\n$$$$\n")
+    assert out.getvalue() == (
+        "t\nM  END\n> <A>  (1)\nnew\n\nnote\n\n> <C>\nc\n\n$$$$\n"
+    )
 
     block.replace_records({"X": "1", "Y": "2"})
     assert block.records() == [("X", "1"), ("Y", "2")]

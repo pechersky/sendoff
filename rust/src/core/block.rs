@@ -16,7 +16,7 @@ use crate::core::lines::{find_newline, line_end, lines};
 use crate::core::newline::{
     CRLF_TRAILER, TRAILER, missing_ending, newline, title_newline, trailer,
 };
-use crate::core::record::{Headers, MissingFieldName, Records, push_record};
+use crate::core::record::{Headers, MissingFieldName, Records, push_record, push_value};
 use crate::core::strip::Strip;
 
 static MEND: LazyLock<memmem::Finder<'static>> = LazyLock::new(|| memmem::Finder::new(b"\nM  END"));
@@ -311,8 +311,9 @@ impl Block {
         Ok(())
     }
 
-    /// Give the first record named `name` the single-line `value` and
-    /// remove later ones, or append the record if there is none.
+    /// Give the first record named `name` the single-line `value`, keeping
+    /// its header line, and remove later ones, or append the record if there
+    /// is none.
     pub fn set_record(
         &mut self,
         name: &[u8],
@@ -344,8 +345,8 @@ impl Block {
         self.data.extend_from_slice(trailer);
     }
 
-    /// Drop the records named `name`, putting `value` in place of the
-    /// first, and return how many matched.
+    /// Drop the records named `name`, putting `value` under the first's
+    /// header line, and return how many matched.
     fn rewrite_records(
         &mut self,
         name: &[u8],
@@ -364,15 +365,15 @@ impl Block {
             return Ok(0);
         }
         let newline = self.newline();
-        let mut data = Vec::with_capacity(
-            self.data.len() + name.len() + value.map_or(0, <[u8]>::len) + 4 + 3 * newline.len(),
-        );
+        let mut data =
+            Vec::with_capacity(self.data.len() + value.map_or(0, <[u8]>::len) + 2 * newline.len());
         data.extend_from_slice(&self.data[..self.mdl_end]);
         let mut copied = 0;
         for (index, &(start, end)) in spans.iter().enumerate() {
             data.extend_from_slice(&metadata[copied..start]);
             if let (0, Some(value)) = (index, value) {
-                push_record(&mut data, name, value, newline);
+                data.extend_from_slice(&metadata[start..line_end(metadata, start)]);
+                push_value(&mut data, value, newline);
             }
             copied = end;
         }
@@ -676,7 +677,7 @@ mod tests {
         block.set_record(b"A", b"new", Strip::Bytes).unwrap();
         assert_eq!(
             written(&block),
-            "t\nM  END\n> <A>\nnew\n\njunk\n\n> <B>\nb\n\n$$$$\n"
+            "t\nM  END\n> <A>  (1)\nnew\n\njunk\n\n> <B>\nb\n\n$$$$\n"
         );
         block.set_record(b"C", b"c", Strip::Bytes).unwrap();
         assert_eq!(
@@ -691,7 +692,7 @@ mod tests {
         assert_eq!(block.remove_records(b"B", Strip::Bytes), Ok(0));
         assert_eq!(
             written(&block),
-            "t\nM  END\n> <A>\nnew\n\njunk\n\n> <C>\nc\n\n$$$$\n"
+            "t\nM  END\n> <A>  (1)\nnew\n\njunk\n\n> <C>\nc\n\n$$$$\n"
         );
         block.replace_records([(&b"Z"[..], &b"z"[..])]);
         assert_eq!(written(&block), "t\nM  END\n> <Z>\nz\n\n$$$$\n");

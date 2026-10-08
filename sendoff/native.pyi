@@ -543,7 +543,8 @@ class SDBlock(Generic[AnyStr]):
 
     def set_record(self, /, name: AnyStr, value: AnyStr) -> None:
         """
-        Set a record, keeping the position of the first with that name.
+        Set a record, keeping the header line and position of the first with
+        that name.
 
         Later records with the same name are removed; if there is none, the
         record is appended.
