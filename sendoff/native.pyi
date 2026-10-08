@@ -598,7 +598,8 @@ class SDBlock(Generic[AnyStr]):
         str paths read universal newlines, so their lines end in "\\n". Lines
         the block adds or ends (a stripped title, new records, a missing $$$$,
         a last line without "\\n") end like the title line. The block is
-        written in one `write` call.
+        written in one `write` call, whose return value is not checked, so an
+        unbuffered (`buffering=0`) or nonblocking handle may write part of it.
 
         Args:
             outh: a text or binary file-like handle matching the input type
@@ -675,6 +676,11 @@ def write_sdf(dest: _SupportsWrite[AnyStr], blocks: Iterable[SDBlock[AnyStr]]) -
     the blocks before the failing one are written, a path keeps them, and
     the error propagates. A failed write may leave part of its chunk
     written.
+
+    A file object's `write` is called once per chunk and its return value
+    is not checked. Buffered and text file objects, such as `sys.stdout` or
+    those `open` returns by default, write everything or raise; an
+    unbuffered (`buffering=0`) or nonblocking one may write part of a chunk.
 
     Args:
         dest: a str, bytes, or os.PathLike path to create or truncate, or a

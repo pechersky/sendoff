@@ -75,6 +75,11 @@ impl Sink<'_> {
 /// the error propagates. A failed write may leave part of its chunk
 /// written.
 ///
+/// A file object's `write` is called once per chunk and its return value
+/// is not checked. Buffered and text file objects, such as `sys.stdout` or
+/// those `open` returns by default, write everything or raise; an
+/// unbuffered (`buffering=0`) or nonblocking one may write part of a chunk.
+///
 /// Args:
 ///     dest: a str, bytes, or os.PathLike path to create or truncate, or a
 ///         text or binary file object

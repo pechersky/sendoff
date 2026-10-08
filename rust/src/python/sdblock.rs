@@ -606,7 +606,8 @@ impl PySDBlock {
     /// str paths read universal newlines, so their lines end in "\n". Lines
     /// the block adds or ends (a stripped title, new records, a missing $$$$,
     /// a last line without "\n") end like the title line. The block is
-    /// written in one `write` call.
+    /// written in one `write` call, whose return value is not checked, so an
+    /// unbuffered (`buffering=0`) or nonblocking handle may write part of it.
     ///
     /// Args:
     ///     outh: a text or binary file-like handle matching the input type
