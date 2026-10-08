@@ -50,7 +50,7 @@ impl PySDRecordIterator {
         if self.finished {
             return Ok(None);
         }
-        let block = self.block.borrow(py);
+        let block = self.block.bind(py).try_borrow()?;
         let mut records = block.block.records_at(self.pos, block.kind.strip());
         let result = match records.next() {
             Some(Ok(record)) => Namer::with(block.kind, |names| names.lookup(py, record.name))
@@ -524,7 +524,7 @@ impl PySDBlock {
     #[pyo3(signature = () -> "tuple[Any, ...]")]
     fn __reduce__<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyTuple>> {
         let py = slf.py();
-        let this = slf.borrow();
+        let this = slf.try_borrow()?;
         let (data, title_end, mdl_end) = this.block.parts();
         let state = (
             PyBytes::new(py, data),
@@ -689,18 +689,21 @@ impl PySDBlock {
     /// Raises:
     ///     TypeError: if a name or value is not the block's type
     #[pyo3(signature = (records: "Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]]"))]
-    fn replace_records(&mut self, records: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn replace_records(slf: &Bound<'_, Self>, records: &Bound<'_, PyAny>) -> PyResult<()> {
+        // Collect the records before borrowing the block to change it, as
+        // they may come from the block itself.
         let pairs = record_pairs(records)?;
+        let mut this = slf.try_borrow_mut()?;
         let records = pairs
             .iter()
             .map(|(name, value)| {
                 Ok((
-                    self.arg_bytes(name, "record names")?,
-                    self.arg_bytes(value, "values")?,
+                    this.arg_bytes(name, "record names")?,
+                    this.arg_bytes(value, "values")?,
                 ))
             })
             .collect::<PyResult<Vec<_>>>()?;
-        self.block.replace_records(records);
+        this.block.replace_records(records);
         Ok(())
     }
 

@@ -291,6 +291,24 @@ def test_appended_records_follow_a_blank_line() -> None:
     assert constructed.records() == [("A", "1"), ("B", "2")]
 
 
+def test_replace_records_can_read_the_block_itself() -> None:
+    """Records to replace with may come from, or change, the same block."""
+    block = SDBlock("t\nM  END\n> <A>\n1\n\n> <B>\n2\n\n$$$$\n")
+    block.replace_records(block.iter_records())
+    assert block.records() == [("A", "1"), ("B", "2")]
+    block.replace_records(
+        (name, value) for name, value in block.iter_records() if name != "A"
+    )
+    assert block.records() == [("B", "2")]
+
+    def retitling() -> typing.Iterator[tuple[str, str]]:
+        block.title = "changed"
+        yield "C", "3"
+
+    block.replace_records(retitling())
+    assert (block.title, block.records()) == ("changed", [("C", "3")])
+
+
 def test_constructor_parses_one_block() -> None:
     """SDBlock(sdf) parses a molblock or one record and appends records."""
     molblock = "title\n  prog\n\nM  END\n"

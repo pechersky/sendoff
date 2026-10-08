@@ -121,7 +121,7 @@ pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> P
     let result = (|| -> PyResult<()> {
         for block in blocks {
             let block = block?;
-            let block = block.cast::<PySDBlock>()?.borrow();
+            let block = block.cast::<PySDBlock>()?.try_borrow()?;
             let start = chunk.len();
             block.block.serialize_into(block.kind.strip(), &mut chunk);
             let noted =
