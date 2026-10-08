@@ -3,9 +3,9 @@
 
 use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
 
 use pyo3::prelude::*;
+use rustc_hash::FxBuildHasher;
 
 use crate::python::kind::Kind;
 
@@ -14,26 +14,6 @@ use crate::python::kind::Kind;
 const MAX_NAMES: usize = 4096;
 /// Longer names are rare and are not cached.
 const MAX_CACHED_NAME: usize = 64;
-
-/// A fast hash for short record names, eight bytes at a time.
-#[derive(Default)]
-struct NameHasher(u64);
-
-impl Hasher for NameHasher {
-    fn write(&mut self, bytes: &[u8]) {
-        for chunk in bytes.chunks(8) {
-            let mut word = [0; 8];
-            word[..chunk.len()].copy_from_slice(chunk);
-            self.0 = (self.0.rotate_left(5) ^ u64::from_le_bytes(word))
-                .wrapping_mul(0x517c_c1b7_2722_0a95);
-        }
-    }
-
-    fn finish(&self) -> u64 {
-        // Fold the well-mixed high bits into the low bits buckets use.
-        self.0 ^ (self.0 >> 32)
-    }
-}
 
 /// Marks no cached name: the start of a block, or an unknown successor.
 const NO_NAME: u32 = u32::MAX;
@@ -51,7 +31,7 @@ struct Name {
 /// by comparing bytes instead of hashing them, even when some records are
 /// missing or new.
 struct Names {
-    index: HashMap<Box<[u8]>, u32, BuildHasherDefault<NameHasher>>,
+    index: HashMap<Box<[u8]>, u32, FxBuildHasher>,
     names: Vec<Name>,
     /// The first name of the last block.
     first: u32,

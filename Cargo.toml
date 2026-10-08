@@ -31,6 +31,7 @@ stubgen = ["pyo3/experimental-inspect"]
 memchr = "2"
 memmap2 = "0.9"
 pyo3 = { version = "=0.29.3", features = ["abi3-py311"] }
+rustc-hash = "2"
 thiserror = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
