@@ -10,3 +10,5 @@ record, as the CTfile spec ends a compound at any such line. It used to become
 a ``$$$$`` title, which each ``write`` doubled.
 The garbage collector now frees a parser in a reference cycle with its
 source, such as a reader that keeps the parser reading it.
+``parse_sdf`` now opens its path without holding the GIL. Opening a named
+pipe waits for a writer, which deadlocked when that writer was a Python thread.

@@ -84,9 +84,17 @@ impl Source {
         else {
             return Ok(());
         };
-        let file = File::open(&*path).map_err(|error| os_error(py, error, filename))?;
+        let text_mode = *text;
+        // Opening a FIFO waits for a writer, which may be a Python thread.
+        let (file, mapped) = py
+            .detach(|| {
+                let file = File::open(&*path)?;
+                let mapped = MappedBlocks::open(&file, text_mode);
+                Ok((file, mapped))
+            })
+            .map_err(|error| os_error(py, error, filename))?;
         *kind = Some(Kind::of(*text));
-        *self = match MappedBlocks::open(&file, *text) {
+        *self = match mapped {
             Some(blocks) => Source::Mapped {
                 blocks,
                 batch: VecDeque::new(),

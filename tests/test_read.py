@@ -4,9 +4,12 @@ import errno
 import gc
 import io
 import os
+import subprocess
+import sys
 import threading
 import typing
 import weakref
+from importlib import import_module
 from itertools import chain
 from pathlib import Path
 from typing import Generator, Iterator
@@ -388,6 +391,45 @@ def test_parse_sdf_reads_files_that_do_not_map(tmp_path: Path) -> None:
     empty = tmp_path / "empty.sdf"
     empty.write_bytes(b"")
     assert list(parse_sdf(empty)) == []
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+def test_parse_sdf_waits_for_a_pipe_writer_without_the_gil(tmp_path: Path) -> None:
+    """Opening a pipe releases the GIL, so a Python thread can open its end.
+
+    A subprocess runs the reader so that a deadlock fails the timeout
+    rather than hanging the tests. It loads the extension these tests use.
+
+    Args:
+        tmp_path: Temporary directory for the pipe.
+    """
+    native = import_module("sendoff.native").__file__
+    assert native is not None
+    pipe = tmp_path / "pipe.sdf"
+    os.mkfifo(pipe)
+    script = """if True:
+        import importlib.util, sys, threading, time
+
+        spec = importlib.util.spec_from_file_location("sendoff.native", sys.argv[2])
+        native = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(native)
+
+        def write():
+            time.sleep(0.2)
+            with open(sys.argv[1], "w") as pipe:
+                pipe.write("t\\n\\nM  END\\n$$$$\\n")
+
+        threading.Thread(target=write, daemon=True).start()
+        print([block.title for block in native.parse_sdf(sys.argv[1])])
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(pipe), native],
+        capture_output=True,
+        check=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.stdout == "['t']\n"
 
 
 def test_parse_sdf_raises_open_errors_on_first_next(tmp_path: Path) -> None:
