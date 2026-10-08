@@ -8,11 +8,11 @@
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
-use memchr::{memchr, memmem, memrchr};
+use memchr::{memmem, memrchr};
 
 use crate::core::ctable::error::CTableError;
 use crate::core::ctable::header::{Counts, HEADER_LINES, parse_header};
-use crate::core::lines::lines;
+use crate::core::lines::{find_newline, line_end, lines};
 use crate::core::newline::{
     CRLF_TRAILER, TRAILER, missing_ending, newline, title_newline, trailer,
 };
@@ -29,7 +29,7 @@ fn mdl_end(data: &[u8], title_end: usize, body_end: usize) -> Option<usize> {
     } else {
         title_end + MEND.find(body)? + 1
     };
-    Some(memchr(b'\n', &data[start..]).map_or(data.len(), |index| start + index + 1))
+    Some(line_end(data, start))
 }
 
 /// Where the title, MDL, and SD data end in raw lines ending in `\n`, given
@@ -42,7 +42,7 @@ fn mdl_end(data: &[u8], title_end: usize, body_end: usize) -> Option<usize> {
 fn layout(data: &[u8], delimiter: Option<usize>) -> Layout {
     let title_end = match delimiter {
         Some(0) => 0,
-        _ => memchr(b'\n', data).map_or(data.len(), |index| index + 1),
+        _ => line_end(data, 0),
     };
     let body_end = delimiter.map_or(data.len(), |offset| offset.max(title_end));
     let mdl_end = mdl_end(data, title_end, body_end).unwrap_or(body_end);
@@ -149,7 +149,7 @@ impl Block {
             && if title_end == 0 {
                 mdl_end == 0 && body_end == 0
             } else {
-                memchr(b'\n', &data) == Some(title_end - 1)
+                find_newline(&data) == Some(title_end - 1)
                     && title_end <= mdl_end
                     && mdl_end <= body_end
                     && data[mdl_end - 1] == b'\n'
@@ -288,7 +288,7 @@ impl Block {
     /// `molblock` must run through an `M  END` line followed only by
     /// whitespace, with no `$$$$` line after the title.
     pub fn set_molblock(&mut self, molblock: &[u8]) -> Result<(), InvalidMolblock> {
-        let title_end = memchr(b'\n', molblock).map_or(molblock.len(), |index| index + 1);
+        let title_end = line_end(molblock, 0);
         let mdl_end =
             mdl_end(molblock, title_end, molblock.len()).ok_or(InvalidMolblock::MissingEnd)?;
         if !molblock[mdl_end..].iter().all(u8::is_ascii_whitespace) {

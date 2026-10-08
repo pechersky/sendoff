@@ -113,6 +113,19 @@ pub fn lines(data: &[u8]) -> impl Iterator<Item = &[u8]> {
     Lines::new(data, 0).map(|line| line.strip_suffix(b"\n").unwrap_or(line))
 }
 
+/// Where the line starting at `start` ends, past its `\n`, or `data.len()`.
+#[inline]
+pub fn line_end(data: &[u8], start: usize) -> usize {
+    find_newline(&data[start..]).map_or(data.len(), |index| start + index + 1)
+}
+
+/// The first `\n` in `data`. Not memchr: for titles, `M  END`, and `$$$$`
+/// lines, a few bytes long, its out-of-line call costs more than the search.
+#[inline]
+pub fn find_newline(data: &[u8]) -> Option<usize> {
+    data.iter().position(|&byte| byte == b'\n')
+}
+
 impl<'a> Iterator for Lines<'a> {
     type Item = &'a [u8];
 

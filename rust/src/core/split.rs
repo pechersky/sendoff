@@ -9,9 +9,10 @@
 
 use std::sync::LazyLock;
 
-use memchr::{memchr, memchr2, memmem, memrchr};
+use memchr::{memchr2, memmem, memrchr};
 
 use crate::core::block::Block;
+use crate::core::lines::{find_newline, line_end};
 use crate::core::newline::translated;
 
 static DELIMITER: LazyLock<memmem::Finder<'static>> =
@@ -77,7 +78,7 @@ impl Scanner {
             },
         };
         self.delimiter = Some(start);
-        let end = match memchr(b'\n', &buf[start..]) {
+        let end = match find_newline(&buf[start..]) {
             Some(index) => start + index + 1,
             None if self.eof => buf.len(),
             None => return None,
@@ -116,9 +117,7 @@ fn bounds(data: &[u8]) -> (usize, Option<usize>) {
     } else {
         DELIMITER.find(data).map(|index| index + 1)
     };
-    let end = delimiter.map_or(data.len(), |start| {
-        memchr(b'\n', &data[start..]).map_or(data.len(), |index| start + index + 1)
-    });
+    let end = delimiter.map_or(data.len(), |start| line_end(data, start));
     (end, delimiter)
 }
 
