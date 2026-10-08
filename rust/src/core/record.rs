@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use memchr::memchr;
+use memchr::{memchr, memrchr};
 
 use crate::core::lines::Lines;
 use crate::core::strip::{Strip, trim, trim_str};
@@ -188,10 +188,7 @@ fn is_blank(line: &[u8], trim: &impl Fn(&[u8]) -> &[u8]) -> bool {
 /// Python strips `rest` again first, but that can only remove leading
 /// whitespace, which holds no `<` or `>`, so the name is the same.
 fn record_name(field: &[u8]) -> Result<&[u8], MissingFieldName> {
-    let field = field
-        .iter()
-        .rposition(|&byte| byte == b'>')
-        .map_or(field, |end| &field[..end]);
+    let field = memrchr(b'>', field).map_or(field, |end| &field[..end]);
     let start = memchr(b'<', field).ok_or(MissingFieldName)?;
     Ok(&field[start + 1..])
 }
