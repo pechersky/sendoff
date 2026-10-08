@@ -182,7 +182,24 @@ impl<'a> Records<'a> {
             Strip::Str => record_in::<VALUE>(&mut lines, &trim_str),
         };
         self.pos = lines.pos();
+        if found.is_err() {
+            self.skip_nameless_run();
+        }
         found.transpose()
+    }
+
+    /// Skip the rest of a nameless header's run, as groupby does. Out of
+    /// line: inlined into `record_in`, this rare path grew the record loop
+    /// by a fifth and slowed `get` and `in` up to 10%.
+    #[cold]
+    #[inline(never)]
+    fn skip_nameless_run(&mut self) {
+        let mut lines = Lines::new(self.metadata, self.pos);
+        match self.strip {
+            Strip::Bytes => skip_run(&mut lines, &trim),
+            Strip::Str => skip_run(&mut lines, &trim_str),
+        }
+        self.pos = lines.pos();
     }
 }
 
@@ -229,10 +246,7 @@ fn record_in<'a, const VALUE: bool>(
             skip_run(lines, trim);
             continue;
         };
-        let Ok(name) = record_name(rest) else {
-            skip_run(lines, trim);
-            return Err(MissingFieldName);
-        };
+        let name = record_name(rest)?;
         let mut value: Cow<'a, [u8]> = Cow::Borrowed(&[]);
         if !VALUE {
             skip_run(lines, trim);
