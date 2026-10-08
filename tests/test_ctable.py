@@ -551,11 +551,21 @@ def test_ctable_errors_are_value_errors() -> None:
     assert issubclass(CTableError, ValueError)
 
 
-def test_renumber_slices_atom_lines_by_character() -> None:
-    """Renumbering skips characters like Python slicing, even mid-UTF-8."""
+def test_renumber_keeps_atom_lines_after_the_index_field() -> None:
+    """Renumbering keeps whatever follows an atom's index field, even non-ASCII."""
     block = v3000_block(atom="a b 1 \u4e2d")
     block.renumber_indices()
-    assert "M  V30 1" in block.ctable().lines
+    assert "M  V30 1 \u4e2d" in block.ctable().lines
+
+
+def test_renumber_reads_index_fields_after_extra_spaces() -> None:
+    """Atom and bond lines with extra spaces renumber consistently."""
+    block = v3000_block(atom="M  V30  10 C 0 0 0 0", bond="M  V30   7 1  10  2")
+    block.renumber_indices()
+    lines = block.ctable().lines
+    assert "M  V30 1 C 0 0 0 0" in lines
+    assert "M  V30 1 1 1 2" in lines
+    assert block.ctable().valid_atom_indices(strict=True)
 
 
 def test_renumber_leaves_counts() -> None:

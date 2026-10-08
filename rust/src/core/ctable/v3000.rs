@@ -249,12 +249,7 @@ pub(super) fn renumbered(
             .entry(old_index)
             .and_modify(|index| *index = NewIndex::Duplicate)
             .or_insert(NewIndex::Unique(new_index));
-        // Like the Python slice line[n:], skip characters, not bytes.
-        let skip_chars = prefix.chars().count() + old_field.chars().count();
-        let rest = line
-            .char_indices()
-            .nth(skip_chars)
-            .map_or("", |(offset, _)| &line[offset..]);
+        let rest = &line[end_of(line, old_field)..];
         new_atom_lines.push(format!("{prefix}{new_index}{rest}"));
     }
 
