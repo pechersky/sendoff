@@ -796,3 +796,18 @@ def test_right_angle_bracket_record_name_mol_read(
     mol: SDBlock[str] = next(parse_sdf(single_right_angle_bracket_record_name_mol_sdf))
     records = list(mol.records())
     assert records == [("Rec>ord", "Value")]
+
+
+def test_from_lines_reads_read1_only_file_objects() -> None:
+    """A file object with only read1, and no line iteration, is read."""
+
+    class Reader:
+        def __init__(self, data: bytes) -> None:
+            self.data = data
+
+        def read1(self, size: int, /) -> bytes:
+            chunk, self.data = self.data[:size], self.data[size:]
+            return chunk
+
+    blocks = SDBlock.from_lines(Reader(b"First\n\nM  END\n$$$$\n"))
+    assert [block.title for block in blocks] == [b"First"]

@@ -24,21 +24,15 @@ True when compiled without optimizations; never benchmark such a build.
 
 __version__: Final[str]
 
-__all__ = [
-    "CTable",
-    "SDBlock",
-    "_SDBlockIterator",
-    "_SDRecordIterator",
-    "parse_sdf",
-    "write_sdf",
-    "__version__",
-    "DEBUG_BUILD",
-]
-
 class _SupportsRead(Protocol[_AnyStr_co]):
     """A text or binary file-like handle read in chunks."""
 
     def read(self, size: int, /) -> _AnyStr_co: ...
+
+class _SupportsRead1(Protocol[_AnyStr_co]):
+    """A binary file-like handle read in chunks with read1."""
+
+    def read1(self, size: int, /) -> _AnyStr_co: ...
 
 class _SupportsWrite(Protocol[_AnyStr_contra]):
     """A text or binary file-like handle accepting str or bytes payloads."""
@@ -322,18 +316,23 @@ class SDBlock(Generic[AnyStr]):
     @overload
     @staticmethod
     def from_lines(
-        lines: Iterable[str] | _SupportsRead[str],
+        lines: Iterable[str] | _SupportsRead[str] | _SupportsRead1[str],
     ) -> _SDBlockIterator[str]: ...
     @overload
     @staticmethod
     def from_lines(
-        lines: Iterable[bytes] | _SupportsRead[bytes],
+        lines: Iterable[bytes] | _SupportsRead[bytes] | _SupportsRead1[bytes],
     ) -> _SDBlockIterator[bytes]: ...
     @overload
     @staticmethod
     def from_lines(
         lines: (
-            Iterable[str] | Iterable[bytes] | _SupportsRead[str] | _SupportsRead[bytes]
+            Iterable[str]
+            | Iterable[bytes]
+            | _SupportsRead[str]
+            | _SupportsRead[bytes]
+            | _SupportsRead1[str]
+            | _SupportsRead1[bytes]
         ),
     ) -> _SDBlockIterator[Any]:
         """
