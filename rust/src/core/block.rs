@@ -689,6 +689,8 @@ mod tests {
                 "\n",
             ),
             ("t\nM  END\n> <A\na\n\n> 7 <A> (M)\na\n\n", "> <B>", "\n"),
+            // Opening with a blank line and a run that is not a record.
+            ("t\nM  END\n\nnote\n\n> <A> x\na\n\n", "> <B> x", "\n"),
         ] {
             let mut block = block(text, false);
             block.append_record(b"B", b"b", Strip::Bytes);
