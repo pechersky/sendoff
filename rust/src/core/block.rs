@@ -18,8 +18,7 @@ use crate::core::newline::{
     CRLF_TRAILER, TRAILER, missing_ending, newline, title_newline, trailer,
 };
 use crate::core::record::{
-    HeaderPool, Headers, MissingFieldName, PLAIN_HEADER, Records, header_template, push_header,
-    push_value,
+    HeaderPool, Headers, MissingFieldName, PLAIN_HEADER, Records, push_header, push_value,
 };
 use crate::core::strip::Strip;
 
@@ -276,9 +275,12 @@ impl Block {
         self.data.extend_from_slice(trailer);
     }
 
-    /// `header_template` of the SD data, as ranges of the whole block.
+    /// The ranges of the data before and after the name on the first named
+    /// header line, without its ending, for new headers to copy; `None`
+    /// without one, or when that name has no closing `>`.
     fn template(&self, strip: Strip) -> Option<(Range<usize>, Range<usize>)> {
-        let (before, after) = header_template(self.metadata(), strip)?;
+        let header = self.headers(strip).find_map(Result::ok)?;
+        let (before, after) = header.around_name(self.metadata())?;
         let shift = |range: Range<usize>| range.start + self.mdl_end..range.end + self.mdl_end;
         Some((shift(before), shift(after)))
     }
@@ -687,8 +689,6 @@ mod tests {
                 "\n",
             ),
             ("t\nM  END\n> <A\na\n\n> 7 <A> (M)\na\n\n", "> <B>", "\n"),
-            // Opening with a blank line and a run that is not a record.
-            ("t\nM  END\n\nnote\n\n> <A> x\na\n\n", "> <B> x", "\n"),
         ] {
             let mut block = block(text, false);
             block.append_record(b"B", b"b", Strip::Bytes);

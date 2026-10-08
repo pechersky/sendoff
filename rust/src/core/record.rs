@@ -23,38 +23,21 @@ pub struct Header<'a> {
     pub end: usize,
 }
 
-/// The ranges of SD data before and after the name on its first named
-/// header line, without the line ending, for new headers to copy; `None`
-/// without one, or when that name has no closing `>`.
-pub fn header_template(metadata: &[u8], strip: Strip) -> Option<(Range<usize>, Range<usize>)> {
-    // SD data nearly always opens with its first named header: read that
-    // line as `record_in` would before falling back to the iterator.
-    let opening = strip.trim(&metadata[..line_end(metadata, 0)]);
-    let (start, name) = match opening.strip_prefix(b"> ").map(record_name) {
-        Some(Ok(name)) => (0, name),
-        _ => {
-            let header = Records::new(metadata, 0, strip)
-                .headers()
-                .find_map(Result::ok)?;
-            (header.start, header.name)
+impl Header<'_> {
+    /// The ranges of `metadata`, which the header was read from, before and
+    /// after its name on the header line, without the line ending; `None`
+    /// when the name has no closing `>`.
+    pub fn around_name(&self, metadata: &[u8]) -> Option<(Range<usize>, Range<usize>)> {
+        let name_start = self.name.as_ptr().addr() - metadata.as_ptr().addr();
+        let name_end = name_start + self.name.len();
+        if metadata.get(name_end) != Some(&b'>') {
+            return None;
         }
-    };
-    around_name(metadata, start, name)
-}
-
-/// The ranges of `metadata` before and after `name`, read from the header
-/// line at `start`, on that line without its ending; `None` when the name
-/// has no closing `>`.
-fn around_name(metadata: &[u8], start: usize, name: &[u8]) -> Option<(Range<usize>, Range<usize>)> {
-    let name_start = name.as_ptr().addr() - metadata.as_ptr().addr();
-    let name_end = name_start + name.len();
-    if metadata.get(name_end) != Some(&b'>') {
-        return None;
+        let line = &metadata[..line_end(metadata, self.start)];
+        let line = line.strip_suffix(b"\n").unwrap_or(line);
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        Some((self.start..name_start, name_end..line.len()))
     }
-    let line = &metadata[..line_end(metadata, name_end)];
-    let line = line.strip_suffix(b"\n").unwrap_or(line);
-    let line = line.strip_suffix(b"\r").unwrap_or(line);
-    Some((start..name_start, name_end..line.len()))
 }
 
 /// One SD data record borrowed from a block where possible.
@@ -113,7 +96,7 @@ impl<'a> HeaderPool<'a> {
         let mut headers = Records::new(metadata, 0, strip).headers();
         let next = headers.find_map(Result::ok);
         let template = next
-            .and_then(|header| around_name(metadata, header.start, header.name))
+            .and_then(|header| header.around_name(metadata))
             .map_or(PLAIN_HEADER, |(before, after)| {
                 (&metadata[before], &metadata[after])
             });
