@@ -2,8 +2,6 @@
 
 use std::borrow::Cow;
 
-use memchr::memchr;
-
 use crate::core::lines::Lines;
 use crate::core::strip::{Strip, trim, trim_str};
 
@@ -188,13 +186,17 @@ fn is_blank(line: &[u8], trim: &impl Fn(&[u8]) -> &[u8]) -> bool {
 /// Python strips `rest` again first, but that can only remove leading
 /// whitespace, which holds no `<` or `>`, so the name is the same.
 fn record_name(field: &[u8]) -> Result<&[u8], MissingFieldName> {
-    // Not memrchr: headers are short, and its dispatched call cost `in`,
-    // `get`, and `len` up to 7% against this inlined loop.
+    // Not memchr or memrchr: on headers a dozen bytes long their
+    // dispatched calls cost more than these inlined loops, up to 7% of
+    // `in`, `get`, and `len`.
     let field = field
         .iter()
         .rposition(|&byte| byte == b'>')
         .map_or(field, |end| &field[..end]);
-    let start = memchr(b'<', field).ok_or(MissingFieldName)?;
+    let start = field
+        .iter()
+        .position(|&byte| byte == b'<')
+        .ok_or(MissingFieldName)?;
     Ok(&field[start + 1..])
 }
 
