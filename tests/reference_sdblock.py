@@ -7,7 +7,8 @@ block without ``M  END`` does not keep its ``$$$$`` line as MDL, and that line
 endings survive: a ``$$$$`` line that is exactly ``$$$$`` and a newline is kept,
 and lines the block writes or ends itself end like its title line (a line
 ending in a bare ``\r`` gets just ``\n``). An appended record follows a blank
-line, so that it does not run on from a last record without one. A block whose
+line, so that it does not run on from a last record without one, and its
+header copies the first named header's line around the name. A block whose
 first line starts with ``$$$$`` is an empty record, as the CTfile spec reads
 any such line as a terminator, rather than a ``$$$$`` title that each write
 doubled. Divergences that are accepted but not modeled here are kept out of
@@ -116,7 +117,7 @@ class RefBlock(Generic[AnyStr]):
         """Append a record as main's append_record does.
 
         Unlike main, a blank line comes first if the SD data ends in a line
-        that is not blank.
+        that is not blank, and the header copies the first named header.
 
         Args:
             name: record name
@@ -126,13 +127,31 @@ class RefBlock(Generic[AnyStr]):
         self.titled = True
         if self.metadata and self.metadata[-1].strip():
             self.metadata.append(newline)
+        before, after = self._template() or (_lit(name, "> <"), _lit(name, ">"))
         self.metadata.extend(
-            [
-                _lit(name, "> <") + name + _lit(name, ">") + newline,
-                value + newline,
-                newline,
-            ]
+            [before + name + after + newline, value + newline, newline]
         )
+
+    def _template(self) -> tuple[AnyStr, AnyStr] | None:
+        """Return the first named header line before and after its name.
+
+        Returns:
+            The text through ``<`` and from the closing ``>``, without the
+            line ending, or None without a named header or a closing ``>``.
+        """
+        for _, chunk in groupby(self.metadata, lambda line: bool(line.strip())):
+            line = next(chunk)
+            field = line.strip()
+            if not field.startswith(_lit(line, "> ")):
+                continue
+            if _lit(line, "<") not in field[2:].rsplit(_lit(line, ">"), 1)[0]:
+                continue  # no name
+            if _lit(line, ">") not in field[2:]:
+                return None
+            start, end = line.find(_lit(line, "<")), line.rfind(_lit(line, ">"))
+            text = line.removesuffix(_lit(line, "\n")).removesuffix(_lit(line, "\r"))
+            return line[: start + 1], text[end:]
+        return None
 
     def molblock(self) -> AnyStr:
         """Return the title and MDL lines as main's idiom joins them.

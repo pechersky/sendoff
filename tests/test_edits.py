@@ -1,11 +1,13 @@
 # mypy: allow-untyped-decorators
 """Pin the exact SDF text each record edit writes.
 
-A record the block writes itself has a ``> <name>`` header, with one space
-and no other fields, then its value lines and one blank line, every line
-ending as the block's title line does; ``set_record`` keeps the header line
-of the record it sets. Edits copy every line they do not rewrite byte for
-byte, including other writers' header styles and lines between records.
+A header the block writes copies the text around the name on the first
+header with a name, so after RDKit's ``>  <A>  (1)`` it writes
+``>  <C>  (1)`` with the same trailing space; without such a header, or when
+its name has no closing ``>``, it writes ``> <C>``. Value lines and one blank
+line follow, every line ending as the block's title line does.
+``set_record`` keeps the header line of the record it sets. Edits copy every
+line they do not rewrite byte for byte, including lines between records.
 """
 from textwrap import dedent
 from typing import Any, Callable
@@ -58,6 +60,16 @@ $$$$
 EMPTY = """\
 t
 M  END
+$$$$
+"""
+
+# The only header's name has no closing ``>``.
+UNCLOSED = """\
+t
+M  END
+>  <A
+1
+
 $$$$
 """
 
@@ -132,7 +144,7 @@ CASES = [
         >  <A>
         dup
 
-        > <C>
+        >  <C>  (1)\x20
         x
 
         $$$$
@@ -158,7 +170,7 @@ CASES = [
         >  <A>
         dup
 
-        > <A>
+        >  <A>  (1)\x20
         x
 
         $$$$
@@ -184,7 +196,7 @@ CASES = [
         >  <A>
         dup
 
-        > <C>
+        >  <C>  (1)\x20
         x
         y
 
@@ -269,6 +281,23 @@ CASES = [
         $$$$
         """,
         id="append-an-empty-value",
+    ),
+    pytest.param(
+        UNCLOSED,
+        "append_record",
+        ("C", "x"),
+        """\
+        t
+        M  END
+        >  <A
+        1
+
+        > <C>
+        x
+
+        $$$$
+        """,
+        id="append-after-an-unclosed-name",
     ),
     pytest.param(
         SOURCE,

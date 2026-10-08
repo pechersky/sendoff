@@ -6,6 +6,7 @@
 //! requested.
 
 use std::borrow::Cow;
+use std::ops::Range;
 use std::sync::LazyLock;
 
 use memchr::{memmem, memrchr};
@@ -16,7 +17,9 @@ use crate::core::lines::{find_newline, line_end, lines};
 use crate::core::newline::{
     CRLF_TRAILER, TRAILER, missing_ending, newline, title_newline, trailer,
 };
-use crate::core::record::{Headers, MissingFieldName, Records, push_record, push_value};
+use crate::core::record::{
+    Headers, MissingFieldName, PLAIN_HEADER, Records, push_header, push_record, push_value,
+};
 use crate::core::strip::Strip;
 
 static MEND: LazyLock<memmem::Finder<'static>> = LazyLock::new(|| memmem::Finder::new(b"\nM  END"));
@@ -247,18 +250,39 @@ impl Block {
         out.extend_from_slice(&self.data[self.title_end..]);
     }
 
-    /// Append a `> <name>` record with a single value line, after a blank
-    /// line unless the SD data is empty or already ends with one.
+    /// Append a record with a single value line, after a blank line unless
+    /// the SD data is empty or already ends with one. Its header copies the
+    /// first named header's line around the name, or is `> <name>`.
     pub fn append_record(&mut self, name: &[u8], value: &[u8], strip: Strip) {
         self.ensure_title_line();
+        let template = self.template(strip);
         let (newline, trailer) = (self.newline(), self.trailer());
         let needs_separator = self.ends_in_text(strip);
         self.data.truncate(self.body_end());
         if needs_separator {
             self.data.extend_from_slice(newline);
         }
-        push_record(&mut self.data, name, value, newline);
+        match template {
+            Some((before, after)) => {
+                self.data.extend_from_within(before);
+                self.data.extend_from_slice(name);
+                self.data.extend_from_within(after);
+                self.data.extend_from_slice(newline);
+            }
+            None => push_header(&mut self.data, PLAIN_HEADER, name, newline),
+        }
+        push_value(&mut self.data, value, newline);
         self.data.extend_from_slice(trailer);
+    }
+
+    /// The ranges of the data before and after the name on the first named
+    /// header line, without its ending, for new headers to copy; `None`
+    /// without one, or when that name has no closing `>`.
+    fn template(&self, strip: Strip) -> Option<(Range<usize>, Range<usize>)> {
+        let header = self.headers(strip).find_map(Result::ok)?;
+        let (before, after) = header.around_name(self.metadata())?;
+        let shift = |range: Range<usize>| range.start + self.mdl_end..range.end + self.mdl_end;
+        Some((shift(before), shift(after)))
     }
 
     /// Whether the last SD data line is not blank, so that a header
@@ -638,6 +662,33 @@ mod tests {
     }
 
     #[test]
+    fn appended_headers_copy_the_first_named_header() {
+        for (text, header, newline) in [
+            (
+                "t\r\nM  END\r\n>  <A>  (1) \r\na\r\n\r\n",
+                ">  <B>  (1) ",
+                "\r\n",
+            ),
+            // The title's line ending, not the copied header's.
+            ("t\nM  END\n > <A> (x)\r\na\n\n", " > <B> (x)", "\n"),
+            // Not a line in a nameless header's run.
+            (
+                "t\nM  END\n> bad\n> <X> (v)\n\n> 7 <A> (M)\na\n\n",
+                "> 7 <B> (M)",
+                "\n",
+            ),
+            ("t\nM  END\n> <A\na\n\n> 7 <A> (M)\na\n\n", "> <B>", "\n"),
+        ] {
+            let mut block = block(text, false);
+            block.append_record(b"B", b"b", Strip::Bytes);
+            assert_eq!(
+                written(&block),
+                format!("{text}{header}{newline}b{newline}{newline}$$$${newline}")
+            );
+        }
+    }
+
+    #[test]
     fn set_molblock_replaces_title_and_mdl_only() {
         let mut block = block(" old \nsrc\nM  END\n> <A>\na\n\n$$$$\n", true);
         block.set_molblock(b"new\n  prog\n\nM  END").unwrap();
@@ -692,7 +743,7 @@ mod tests {
         assert_eq!(block.remove_records(b"B", Strip::Bytes), Ok(0));
         assert_eq!(
             written(&block),
-            "t\nM  END\n> <A>  (1)\nnew\n\njunk\n\n> <C>\nc\n\n$$$$\n"
+            "t\nM  END\n> <A>  (1)\nnew\n\njunk\n\n> <C>  (1)\nc\n\n$$$$\n"
         );
         block.replace_records([(&b"Z"[..], &b"z"[..])]);
         assert_eq!(written(&block), "t\nM  END\n> <Z>\nz\n\n$$$$\n");

@@ -279,6 +279,9 @@ class SDBlock(Generic[AnyStr]):
         """
         Append a field and value of the same type as the input block.
 
+        The header copies the first named header's line around the name, as
+        `>  <C>  (1)` after RDKit's `>  <A>  (1)`, or is `> <C>` without one.
+
         Args:
             record_name: field name
             value: field value, with no terminating newline

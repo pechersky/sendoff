@@ -1,8 +1,9 @@
 //! SD data records: `> <name>` header lines and their value lines.
 
 use std::borrow::Cow;
+use std::ops::Range;
 
-use crate::core::lines::Lines;
+use crate::core::lines::{Lines, line_end};
 use crate::core::strip::{Strip, trim, trim_str};
 
 /// A metadata header that has no `<name>`.
@@ -22,6 +23,23 @@ pub struct Header<'a> {
     pub end: usize,
 }
 
+impl Header<'_> {
+    /// The ranges of `metadata`, which the header was read from, before and
+    /// after its name on the header line, without the line ending; `None`
+    /// when the name has no closing `>`.
+    pub fn around_name(&self, metadata: &[u8]) -> Option<(Range<usize>, Range<usize>)> {
+        let name_start = self.name.as_ptr().addr() - metadata.as_ptr().addr();
+        let name_end = name_start + self.name.len();
+        if metadata.get(name_end) != Some(&b'>') {
+            return None;
+        }
+        let line = &metadata[..line_end(metadata, self.start)];
+        let line = line.strip_suffix(b"\n").unwrap_or(line);
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        Some((self.start..name_start, name_end..line.len()))
+    }
+}
+
 /// One SD data record borrowed from a block where possible.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Record<'a> {
@@ -37,11 +55,26 @@ pub struct Record<'a> {
 /// `newline`.
 pub fn push_record(data: &mut Vec<u8>, name: &[u8], value: &[u8], newline: &[u8]) {
     data.reserve(name.len() + value.len() + 4 + 3 * newline.len());
-    data.extend_from_slice(b"> <");
-    data.extend_from_slice(name);
-    data.push(b'>');
-    data.extend_from_slice(newline);
+    push_header(data, PLAIN_HEADER, name, newline);
     push_value(data, value, newline);
+}
+
+/// What a header line holds around its name when there is no header to
+/// copy: `> <name>`.
+pub const PLAIN_HEADER: (&[u8], &[u8]) = (b"> <", b">");
+
+/// Append a header line of `before`, `name`, and `after`, ending in
+/// `newline`.
+pub fn push_header(
+    data: &mut Vec<u8>,
+    (before, after): (&[u8], &[u8]),
+    name: &[u8],
+    newline: &[u8],
+) {
+    data.extend_from_slice(before);
+    data.extend_from_slice(name);
+    data.extend_from_slice(after);
+    data.extend_from_slice(newline);
 }
 
 /// Append the value line and a blank line, each ending in `newline`.
@@ -56,7 +89,7 @@ pub fn push_value(data: &mut Vec<u8>, value: &[u8], newline: &[u8]) {
 /// starts with `> ` is a record; other runs are skipped.
 ///
 /// A header without a name yields an error; iterating further resumes
-/// after it.
+/// after its run.
 pub struct Records<'a> {
     metadata: &'a [u8],
     pos: usize,
@@ -141,7 +174,10 @@ fn record_in<'a, const VALUE: bool>(
             skip_run(lines, trim);
             continue;
         };
-        let name = record_name(rest)?;
+        let Ok(name) = record_name(rest) else {
+            skip_run(lines, trim);
+            return Err(MissingFieldName);
+        };
         let mut value: Cow<'a, [u8]> = Cow::Borrowed(&[]);
         if !VALUE {
             skip_run(lines, trim);
@@ -250,7 +286,7 @@ mod tests {
                 assert_eq!(headers, expected);
             }
         }
-        let mut headers = Records::new(b"> A\n1\n\n> <B>\n", 0, Strip::Bytes).headers();
+        let mut headers = Records::new(b"> A\n> <1>\n\n> <B>\n", 0, Strip::Bytes).headers();
         assert_eq!(headers.next(), Some(Err(MissingFieldName)));
         assert_eq!(headers.next().unwrap().unwrap().name, b"B");
         assert_eq!(headers.next(), None);
