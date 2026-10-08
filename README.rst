@@ -73,13 +73,9 @@ is parsed crashes the process.
 Shell pipelines
 ---------------
 
-sendoff has no command line tool, but a few lines of Python make shell
-functions that read SDF on stdin and print records or SDF to stdout:
-
 .. code-block:: bash
 
-   # Print a record's value from every block that has it, one line per block.
-   sdf-record() {
+   sdf-record() {  # one value per block, newlines escaped
        python -c '
    import signal, sys
    from sendoff.sdblock import parse_sdf
@@ -91,42 +87,11 @@ functions that read SDF on stdin and print records or SDF to stdout:
    ' "$1"
    }
 
-   # Keep the blocks that have a record, as SDF.
-   sdf-has() {
-       python -c '
-   import signal, sys
-   from sendoff.sdblock import parse_sdf, write_sdf
-   signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-   write_sdf(sys.stdout, (b for b in parse_sdf("/dev/stdin") if sys.argv[1] in b))
-   ' "$1"
-   }
+   cat my.sdf | sdf-record Supplier | sort | uniq -c
 
-   cat my.sdf | sdf-record Supplier | sort | uniq -c | sort -rn
-   sdf-record ID < my.sdf | rg -c '^MFCD'
-   sdf-has CAS < my.sdf | sdf-record CAS | sort -u | wc -l
-   sdf-has CAS < my.sdf > with-cas.sdf
-
-``grep -A1 '<Supplier>'`` miscounts real files: it keeps only a multi-line
-value's first line, and counts every copy when a block repeats a name, where
-``get`` returns the last. A stricter pattern such as ``'^> <Supplier>$'``
-misses the ``>  <Supplier>  (12)`` and ``> 12 <Supplier>`` headers other tools
-write. The functions above print a multi-line value on one line with ``\n``
-escaped, so ``sort``, ``uniq``, and ``wc -l`` count one line per block, and
-they read CRLF files the same as LF ones.
-
-Some details matter once these leave Python:
-
-- ``parse_sdf("/dev/stdin")`` maps a file redirected with ``<`` and reads a
-  pipe in chunks; both are as fast as passing the path. ``from_lines(sys.stdin)``
-  also works.
-- Write with ``write_sdf(sys.stdout, blocks)``, not the path ``"/dev/stdout"``:
-  a path is opened with truncation, which empties a file being appended to
-  with ``>>`` and is not ordered with ``print``'s buffered output.
-- Without the ``SIGPIPE`` line, a reader that exits early, such as ``head``,
-  makes the next write raise ``BrokenPipeError``, as ``print`` does.
-- A str path decodes UTF-8 and raises ``UnicodeDecodeError`` otherwise. For
-  other feeds, parse ``b"/dev/stdin"``, look up ``os.fsencode(sys.argv[1])``,
-  and write values to ``sys.stdout.buffer``.
+Write SDF to a pipe with ``write_sdf(sys.stdout, blocks)``; the path
+``"/dev/stdout"`` is opened with truncation. For non-UTF-8 feeds, parse
+``b"/dev/stdin"`` and write to ``sys.stdout.buffer``.
 
 CTable errors
 -------------
