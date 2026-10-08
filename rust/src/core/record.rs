@@ -1,7 +1,6 @@
 //! SD data records: `> <name>` header lines and their value lines.
 
 use std::borrow::Cow;
-use std::fmt;
 
 use memchr::memchr;
 
@@ -9,14 +8,9 @@ use crate::core::lines::Lines;
 use crate::core::strip::{Strip, trim, trim_str};
 
 /// A metadata header that has no `<name>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("SD data field header is missing a name")]
 pub struct MissingFieldName;
-
-impl fmt::Display for MissingFieldName {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("SD data field header is missing a name")
-    }
-}
 
 /// Where an SD data record lies, and its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

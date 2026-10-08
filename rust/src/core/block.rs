@@ -6,7 +6,6 @@
 //! requested.
 
 use std::borrow::Cow;
-use std::fmt;
 use std::sync::LazyLock;
 
 use memchr::{memchr, memmem, memrchr};
@@ -52,21 +51,14 @@ fn layout(data: &[u8], delimiter: Option<usize>) -> (usize, usize, usize) {
 }
 
 /// Why a value cannot replace a block's title and MDL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum InvalidMolblock {
+    #[error("molblock has no M  END line")]
     MissingEnd,
+    #[error("molblock has data after its M  END line")]
     TrailingData,
+    #[error("molblock has a $$$$ line, which would end the block")]
     Delimiter,
-}
-
-impl fmt::Display for InvalidMolblock {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::MissingEnd => "molblock has no M  END line",
-            Self::TrailingData => "molblock has data after its M  END line",
-            Self::Delimiter => "molblock has a $$$$ line, which would end the block",
-        })
-    }
 }
 
 /// One molecule block: a title line, MDL lines, and SD data lines.
