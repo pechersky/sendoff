@@ -70,6 +70,16 @@ it to a ``block.write`` loop. ``parse_sdf`` memory-maps regular files on local
 Linux filesystems, so write results to a new path: truncating a file while it
 is parsed crashes the process.
 
+In shell pipelines, ``parse_sdf("/dev/stdin")`` reads a pipe in chunks as fast
+as a file, and ``SDBlock.from_lines(sys.stdin)`` (or ``sys.stdin.buffer`` for
+bytes) also works. Write with ``write_sdf(sys.stdout, blocks)``, not the path
+``"/dev/stdout"``: a path is opened with truncation, which empties a file being
+appended to with ``>>`` and is not ordered with ``print``'s buffered output.
+When a reader such as ``head`` exits early, the next write raises
+``BrokenPipeError``, as ``print`` does; call
+``signal.signal(signal.SIGPIPE, signal.SIG_DFL)`` first to exit quietly
+instead.
+
 CTable errors
 -------------
 
