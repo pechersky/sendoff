@@ -16,7 +16,8 @@ const MAX_NAMES: usize = 4096;
 const MAX_CACHED_NAME: usize = 64;
 
 /// A fast hash for short record names, eight bytes at a time. Not
-/// rustc-hash's FxHasher, which ran record operations 0.5-1% slower on EC2.
+/// rustc-hash's FxHasher, which ran record operations about 0.5% slower on
+/// EC2 with the same instruction count.
 #[derive(Default)]
 struct NameHasher(u64);
 
