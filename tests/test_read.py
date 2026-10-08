@@ -773,6 +773,15 @@ def test_from_sdf_parses_like_a_file(tmp_path: Path) -> None:
         SDBlock.from_sdf(["lines"])  # type: ignore[call-overload]
 
 
+def test_from_sdf_translates_many_crlf_lines() -> None:
+    """A str with many CRLF lines, shorter and longer than 16 bytes, reads as LF."""
+    lf = str.join("", [f"t{i}\nM  END\n> <A>\n{'v' * i}\n\n$$$$\n" for i in range(40)])
+    crlf = lf.replace("\n", "\r\n")
+    expected = [block.to_sdf() for block in SDBlock.from_sdf(lf)]
+    assert [block.to_sdf() for block in SDBlock.from_sdf(crlf)] == expected
+    assert str.join("", expected) == lf
+
+
 def test_delimiter_value_ends_a_record(
     single_delimiter_record_mol_sdf: Path,
 ) -> None:
