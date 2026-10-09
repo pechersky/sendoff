@@ -160,6 +160,20 @@ and GitHub Actions check all targets and features, treating warnings as errors:
 The shared VS Code settings make rust-analyzer run Clippy instead of
 ``cargo check``, using the same lint configuration.
 
+Fuzzing
+-------
+
+``fuzz/`` holds `cargo-fuzz <https://github.com/rust-fuzz/cargo-fuzz>`_
+targets for the parsing core: ``text`` (newline search and translation),
+``split`` (block splitting over arbitrary read chunks), ``block`` (record and
+structure edits), and ``ctable`` (index checks, renumbering, counts). They
+build on stable Rust without sanitizers:
+
+.. code-block:: console
+
+   cargo install cargo-fuzz
+   cargo fuzz run -s none block -- -max_total_time=600
+
 Release wheels
 --------------
 
