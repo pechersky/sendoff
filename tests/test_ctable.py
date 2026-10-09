@@ -1,6 +1,7 @@
 # mypy: allow-untyped-decorators
 """Test CTAB operations: counts, index checks, renumbering, and CTable."""
 import io
+import typing
 from pathlib import Path
 
 import pytest
@@ -295,7 +296,7 @@ CTABLE_OPERATIONS = [
 ]
 
 
-def run_ctable_operation(block: SDBlock[str], operation: str) -> object:
+def run_ctable_operation(block: SDBlock[typing.Any], operation: str) -> object:
     """Run an SDBlock CTable operation, or a validation on the block's CTable.
 
     Args:
@@ -315,6 +316,7 @@ def run_ctable_operation(block: SDBlock[str], operation: str) -> object:
 V3000_CTAB = "M  V30 BEGIN CTAB\n"
 
 
+@pytest.mark.parametrize("binary", [False, True], ids=["str", "bytes"])
 @pytest.mark.parametrize("operation", CTABLE_OPERATIONS)
 @pytest.mark.parametrize(
     "header, message",
@@ -353,7 +355,7 @@ V3000_CTAB = "M  V30 BEGIN CTAB\n"
     ],
 )
 def test_malformed_headers_fail_every_operation(
-    header: str, message: str, operation: str
+    header: str, message: str, operation: str, binary: bool
 ) -> None:
     """Every CTable operation reports a malformed header line by number.
 
@@ -361,13 +363,16 @@ def test_malformed_headers_fail_every_operation(
         header: the CTable lines before M  END
         message: the expected error message
         operation: one of CTABLE_OPERATIONS
+        binary: whether the block is a bytes block
     """
     text = header + "M  END\n$$$$\n"
-    block = next(SDBlock.from_sdf(text))
+    block: SDBlock[typing.Any] = next(
+        SDBlock.from_sdf(text.encode() if binary else text)
+    )
     with pytest.raises(MalformedCTableError) as raised:
         run_ctable_operation(block, operation)
     assert str(raised.value) == message
-    assert block.to_sdf() == text
+    assert block.to_sdf() == (text.encode() if binary else text)
 
 
 RENUMBERING = {"renumber_indices"}
@@ -671,15 +676,24 @@ def test_sections_are_the_root_ctabs() -> None:
     assert ctable.valid_bond_indices(strict=True)
 
 
-def test_fix_counts_needs_text_blocks() -> None:
-    """Fixing counts is not implemented for byte-backed blocks."""
-    raw = next(
-        SDBlock.from_lines(
-            [line.encode() for line in v3000_block().to_sdf().splitlines(True)]
-        )
-    )
-    with pytest.raises(NotImplementedError, match="byte-backed"):
-        raw.fix_counts()  # type: ignore[misc]
+def test_bytes_blocks_edit_their_ctable_as_latin_1() -> None:
+    """Bytes blocks read and edit their CTable as Latin-1 text, byte for byte."""
+    sdf = b"\xff" + v3000_block(
+        "M  V30 3 C 0 0 0 0", "M  V30 1 1 3 2", counts="M  V30 COUNTS 5 3 0 0 0"
+    ).to_sdf().encode().replace(b" 2 O 0 0 0 0", b" 2 O 0 0 0 0 X=\xe9")
+    raw = next(SDBlock.from_sdf(sdf))
+    text = next(SDBlock.from_sdf(sdf.decode("latin-1")))
+    lines = raw.ctable().lines
+    assert lines[0] == "\xfft"
+    assert lines == text.ctable().lines
+    for block in (raw, text):
+        block.renumber_indices()
+        block.fix_counts()
+    assert raw.to_sdf() == text.to_sdf().encode("latin-1")
+    assert b"M  V30 1 C 0 0 0 0\n" in raw.to_sdf()
+    assert b"M  V30 2 O 0 0 0 0 X=\xe9\n" in raw.to_sdf()
+    assert (raw.num_atoms, raw.num_bonds) == (2, 1)
+    assert raw.title == b"\xfft"
 
 
 @pytest.mark.parametrize("ending", ["\n", "\r\n", ""])

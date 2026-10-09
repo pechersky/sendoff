@@ -55,7 +55,7 @@
      """
      Handle a single molecule block from an SD file.
 
-@@ -178,13 +211,7 @@
+@@ -180,13 +213,7 @@
          A block is true even without records, as before it had a length.
          """
 
@@ -70,7 +70,7 @@
          """
          Whether any record is named `name`: `name in block.names()`.
 
-@@ -203,7 +230,7 @@
+@@ -205,7 +232,7 @@
          """
 
      def __deepcopy__(self, memo: dict[int, Any], /) -> SDBlock[AnyStr]: ...
@@ -79,7 +79,7 @@
          """
          Remove every record named `name`, as `remove_record(name)` does.
 
-@@ -213,7 +240,7 @@
+@@ -215,7 +242,7 @@
          """
 
      def __eq__(self, value: object, /) -> bool: ...
@@ -88,7 +88,7 @@
          """
          Return the value of the last record named `name`, like a dict.
 
-@@ -222,7 +249,7 @@
+@@ -224,7 +251,7 @@
              TypeError: if `name` is not the block's type
          """
 
@@ -97,7 +97,7 @@
          """
          Lazily iterate over the record names in input order, duplicates
          included, as `names()` lists them. Like a dict, the iterator raises
-@@ -276,7 +303,7 @@
+@@ -278,7 +305,7 @@
          instead of raising.
          """
 
@@ -106,26 +106,8 @@
          """
          Set a record as `set_record(name, value)` does.
 
-@@ -320,7 +347,7 @@
-             ValueError: for another `header`
-         """
-
--    def ctable(self, /) -> CTable:
-+    def ctable(self: SDBlock[str], /) -> CTable:
-         """
-         Parse out the underlying CTable object from a text SDBlock.
-
-@@ -334,7 +361,7 @@
-             NotImplementedError: for byte-backed SDBlocks
-         """
-
--    def fix_counts(self, /) -> None:
-+    def fix_counts(self: SDBlock[str], /) -> None:
-         """
-         Set the counts line to the number of atom and bond lines.
-
-@@ -346,10 +373,26 @@
-                 CTable.fix_counts raises
+@@ -349,10 +376,26 @@
+             NotImplementedError: as CTable.fix_counts raises
          """
 
 +    @overload
@@ -152,7 +134,7 @@
          ),
      ) -> _SDBlockIterator[Any]:
          """
-@@ -386,6 +429,13 @@
+@@ -389,6 +432,13 @@
                  reads that are not str or bytes or that mix the two
          """
 
@@ -166,7 +148,7 @@
      @staticmethod
      def from_sdf(sdf: str | bytes) -> _SDBlockIterator[Any]:
          """
-@@ -406,7 +456,10 @@
+@@ -409,7 +459,10 @@
              TypeError: if `sdf` is not str or bytes
          """
 
@@ -178,7 +160,7 @@
          """
          Return the value of the last record named `name`, or `default`.
 
-@@ -434,7 +487,7 @@
+@@ -437,7 +490,7 @@
          """
 
      @property
@@ -187,7 +169,7 @@
          """
          Return the CTAB after the title, through `M  END`, as one value.
 
-@@ -444,7 +497,7 @@
+@@ -447,7 +500,7 @@
          """
 
      @property
@@ -196,7 +178,7 @@
          """
          Return the title line and CTAB through `M  END` as one value.
 
-@@ -453,7 +506,7 @@
+@@ -456,7 +509,7 @@
          """
 
      @molblock.setter
@@ -204,15 +186,6 @@
 +    def molblock(self, /, molblock: AnyStr) -> None:
          """
          Replace the title line and CTAB, keeping the SD data.
-
-@@ -521,7 +574,7 @@
-             TypeError: if `name` is not the block's type
-         """
-
--    def renumber_indices(self, /) -> None:
-+    def renumber_indices(self: SDBlock[str], /) -> None:
-         """
-         Renumber atom and bond indices to be 1-indexed and in order.
 
 @@ -587,7 +640,7 @@
          """

@@ -349,9 +349,12 @@ class SDBlock(Generic[AnyStr]):
             ValueError: for another `header`
         """
 
-    def ctable(self: SDBlock[str], /) -> CTable:
+    def ctable(self, /) -> CTable:
         """
-        Parse out the underlying CTable object from a text SDBlock.
+        Parse out the underlying CTable object.
+
+        A bytes block's lines are decoded as Latin-1, so
+        `line.encode("latin-1")` gives the bytes back.
 
         Returns:
             The CTable titled with this block's title, parsed from its MDL
@@ -360,10 +363,9 @@ class SDBlock(Generic[AnyStr]):
         Raises:
             MalformedCTableError: if the table is shorter than its header,
                 or its format or counts cannot be read
-            NotImplementedError: for byte-backed SDBlocks
         """
 
-    def fix_counts(self: SDBlock[str], /) -> None:
+    def fix_counts(self, /) -> None:
         """
         Set the counts line to the number of atom and bond lines.
 
@@ -371,8 +373,7 @@ class SDBlock(Generic[AnyStr]):
 
         Raises:
             MalformedCTableError: as ctable and CTable.fix_counts raise
-            NotImplementedError: for byte-backed SDBlocks, or as
-                CTable.fix_counts raises
+            NotImplementedError: as CTable.fix_counts raises
         """
 
     @overload
@@ -574,7 +575,7 @@ class SDBlock(Generic[AnyStr]):
             TypeError: if `name` is not the block's type
         """
 
-    def renumber_indices(self: SDBlock[str], /) -> None:
+    def renumber_indices(self, /) -> None:
         """
         Renumber atom and bond indices to be 1-indexed and in order.
 
@@ -584,8 +585,7 @@ class SDBlock(Generic[AnyStr]):
         Raises:
             MalformedCTableError: as ctable and CTable.renumber_indices raise
             IndicesDuplicateError: as CTable.renumber_indices raises
-            NotImplementedError: for byte-backed SDBlocks, or as
-                CTable.renumber_indices raises
+            NotImplementedError: as CTable.renumber_indices raises
         """
 
     def replace_records(

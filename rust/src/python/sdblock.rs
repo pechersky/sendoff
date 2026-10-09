@@ -3,8 +3,7 @@
 use std::borrow::Cow;
 
 use pyo3::exceptions::{
-    PyKeyError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyUnicodeDecodeError,
-    PyValueError,
+    PyKeyError, PyRuntimeError, PyTypeError, PyUnicodeDecodeError, PyValueError,
 };
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -249,18 +248,24 @@ impl PySDBlock {
         ))
     }
 
-    /// Parse the title and MDL lines of a text block as a CTable.
+    /// Parse the title and MDL lines as a CTable, decoding a bytes block's
+    /// as Latin-1, so every byte round-trips.
     fn parse_ctable(&self, py: Python<'_>) -> PyResult<CTable> {
-        self.require_text()?;
-        let noted = |error| self.noted(py, error, || "Reading the CTAB of".into());
-        let mut decoded = vec![
-            decode(py, self.block.title(Strip::Str))
-                .map_err(noted)?
-                .to_owned(),
-        ];
-        for line in lines(self.block.mdl()) {
-            decoded.push(decode(py, line).map_err(noted)?.to_owned());
-        }
+        let title = self.block.title(self.kind.strip());
+        let decoded = match self.kind {
+            Kind::Text => {
+                let noted = |error| self.noted(py, error, || "Reading the CTAB of".into());
+                let mut decoded = vec![decode(py, title).map_err(noted)?.to_owned()];
+                for line in lines(self.block.mdl()) {
+                    decoded.push(decode(py, line).map_err(noted)?.to_owned());
+                }
+                decoded
+            }
+            Kind::Bytes => std::iter::once(title)
+                .chain(lines(self.block.mdl()))
+                .map(|line| line.iter().map(|&byte| char::from(byte)).collect())
+                .collect(),
+        };
         Ok(CTable::parse(decoded)?)
     }
 
@@ -273,8 +278,18 @@ impl PySDBlock {
     ) -> PyResult<()> {
         let mut ctable = self.parse_ctable(py)?;
         edit(&mut ctable)?;
-        self.block
-            .replace_mdl(ctable.lines[1..].iter().map(String::as_bytes));
+        let lines = &ctable.lines[1..];
+        match self.kind {
+            Kind::Text => self.block.replace_mdl(lines.iter().map(String::as_bytes)),
+            Kind::Bytes => {
+                // Edits write ASCII, so every char is a Latin-1 byte.
+                let encoded: Vec<Vec<u8>> = lines
+                    .iter()
+                    .map(|line| line.chars().map(|c| c as u8).collect())
+                    .collect();
+                self.block.replace_mdl(encoded.iter().map(Vec::as_slice));
+            }
+        }
         Ok(())
     }
 
@@ -294,15 +309,6 @@ impl PySDBlock {
             }
         }
         error
-    }
-
-    fn require_text(&self) -> PyResult<()> {
-        match self.kind {
-            Kind::Text => Ok(()),
-            Kind::Bytes => Err(PyNotImplementedError::new_err(
-                "ctable operations are not supported for byte-backed SDBlocks",
-            )),
-        }
     }
 
     /// The bytes of a str or bytes argument, which must match the block's
@@ -932,7 +938,10 @@ impl PySDBlock {
         Ok(())
     }
 
-    /// Parse out the underlying CTable object from a text SDBlock.
+    /// Parse out the underlying CTable object.
+    ///
+    /// A bytes block's lines are decoded as Latin-1, so
+    /// `line.encode("latin-1")` gives the bytes back.
     ///
     /// Returns:
     ///     The CTable titled with this block's title, parsed from its MDL
@@ -941,7 +950,6 @@ impl PySDBlock {
     /// Raises:
     ///     MalformedCTableError: if the table is shorter than its header,
     ///         or its format or counts cannot be read
-    ///     NotImplementedError: for byte-backed SDBlocks
     fn ctable(&self, py: Python<'_>) -> PyResult<PyCTable> {
         Ok(self.parse_ctable(py)?.into())
     }
@@ -972,8 +980,7 @@ impl PySDBlock {
     /// Raises:
     ///     MalformedCTableError: as ctable and CTable.renumber_indices raise
     ///     IndicesDuplicateError: as CTable.renumber_indices raises
-    ///     NotImplementedError: for byte-backed SDBlocks, or as
-    ///         CTable.renumber_indices raises
+    ///     NotImplementedError: as CTable.renumber_indices raises
     fn renumber_indices(&mut self, py: Python<'_>) -> PyResult<()> {
         self.edit_ctable(py, CTable::renumber_indices)
     }
@@ -984,8 +991,7 @@ impl PySDBlock {
     ///
     /// Raises:
     ///     MalformedCTableError: as ctable and CTable.fix_counts raise
-    ///     NotImplementedError: for byte-backed SDBlocks, or as
-    ///         CTable.fix_counts raises
+    ///     NotImplementedError: as CTable.fix_counts raises
     fn fix_counts(&mut self, py: Python<'_>) -> PyResult<()> {
         self.edit_ctable(py, CTable::fix_counts)
     }

@@ -97,9 +97,6 @@ def test_bytes_lines_preserve_invalid_bytes() -> None:
     assert reparsed.title == block.title
     assert reparsed.records() == block.records()
 
-    with pytest.raises(NotImplementedError, match="byte-backed"):
-        block.ctable()  # type: ignore[misc]
-
 
 def test_bytes_path_uses_binary_input(tmp_path: Path) -> None:
     """A bytes filesystem path yields bytes and preserves invalid UTF-8.
