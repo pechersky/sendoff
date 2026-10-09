@@ -45,14 +45,12 @@ class CTable:
     """
     Handle a Connection table (CTAB) from a single molecule block.
 
-    Parsed in based on https://en.wikipedia.org/wiki/Chemical_table_file.
-    As part of parsing, record the title, the source line, the comment line,
-    and the counts line. The rest of the lines are kept but not parsed.
-    The counts line is parsed to infer the format and the number of atoms.
-    Note, the number of atoms in the counts line might not actually
-    be the number of lines of atoms.
+    See https://en.wikipedia.org/wiki/Chemical_table_file. Construction
+    parses only the counts line, for the format and the atom and bond
+    counts, which may differ from the number of atom and bond lines; the
+    other lines are kept as written.
 
-    Errors about the table's contents are sendoff.ctable.CTableError, a
+    Errors about the table's contents are sendoff.CTableError, a
     ValueError; MalformedCTableError names the CTable line (the title is
     line 1). Operations a table's format or constructs do not support raise
     NotImplementedError.

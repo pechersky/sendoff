@@ -31,7 +31,7 @@ Usage
 .. code-block:: python
 
    from rdkit import Chem
-   from sendoff.sdblock import SDBlock, parse_sdf, write_sdf
+   from sendoff import SDBlock, parse_sdf, write_sdf
 
    # str paths give SDBlock[str]; bytes paths give SDBlock[bytes], for feeds
    # that are not valid UTF-8.
@@ -84,7 +84,7 @@ Shell pipelines
    sdf-record() {  # one value per block, newlines escaped
        python -c '
    import signal, sys
-   from sendoff.sdblock import parse_sdf
+   from sendoff import parse_sdf
    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
    for block in parse_sdf("/dev/stdin"):
        value = block.get(sys.argv[1])
@@ -104,7 +104,7 @@ CTable errors
 
 ``CTable`` and the ``SDBlock`` CTable methods raise the same exception for a
 problem whichever method meets it. All but ``NotImplementedError`` are
-``sendoff.ctable.CTableError``, a ``ValueError``:
+``sendoff.CTableError``, a ``ValueError``:
 
 - ``MalformedCTableError``: a line breaks the format. The message names the
   line, numbered from the title as line 1, as the block numbers it.

@@ -42,3 +42,13 @@ def test_native_stub_matches_extension(tmp_path: Path) -> None:
 def test_package_is_marked_typed() -> None:
     """The PEP 561 marker ships, so downstream type checkers read the stub."""
     assert (resources.files("sendoff") / "py.typed").is_file()
+
+
+def test_package_exports_the_api() -> None:
+    """The package exports what its submodules define, as the same objects."""
+    import sendoff
+    from sendoff import ctable, sdblock
+
+    for name in sendoff.__all__:
+        module = sdblock if hasattr(sdblock, name) else ctable
+        assert getattr(sendoff, name) is getattr(module, name)

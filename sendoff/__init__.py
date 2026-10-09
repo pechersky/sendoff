@@ -6,5 +6,26 @@ files as possible.
 """
 
 import sendoff.native as native
+from sendoff.ctable import (
+    CTable,
+    CTableError,
+    IndicesDuplicateError,
+    IndicesMismatchError,
+    IndicesOutOfOrderError,
+    MalformedCTableError,
+)
+from sendoff.native import SDBlock, parse_sdf, write_sdf
+
+__all__ = [
+    "CTable",
+    "CTableError",
+    "IndicesDuplicateError",
+    "IndicesMismatchError",
+    "IndicesOutOfOrderError",
+    "MalformedCTableError",
+    "SDBlock",
+    "parse_sdf",
+    "write_sdf",
+]
 
 __version__ = native.__version__
