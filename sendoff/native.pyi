@@ -448,8 +448,9 @@ class SDBlock(Generic[AnyStr]):
         """
         Lazily iterate over SD data records in input order.
 
-        Names and values are owned and have the block's type. Iteration reads
-        the records as they were when called, so the loop may edit the block.
+        Names and values are owned and have the block's type. Like a dict,
+        the iterator raises RuntimeError if the records change; to edit them
+        in a loop, loop over `records()`.
         """
 
     @property
@@ -672,7 +673,7 @@ class _SDBlockIterator(Iterator[SDBlock[AnyStr]]):
 @final
 class _SDRecordIterator(Iterator[tuple[AnyStr, AnyStr]]):
     """
-    Lazily iterate over a copy of one block's SD data records.
+    Lazily iterate over one block's SD data records.
     """
 
     def __iter__(self, /) -> _SDRecordIterator[AnyStr]: ...

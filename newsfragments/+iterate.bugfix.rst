@@ -1,2 +1,3 @@
-``iter_records`` reads the records as they were when called, so a loop may
-edit the block. Editing it mid-iteration used to end the iteration early.
+``iter_records`` raises ``RuntimeError`` if the block's records change during
+iteration, like a dict; it used to end early. Loop over ``records()`` to edit
+them.

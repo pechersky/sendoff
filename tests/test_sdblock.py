@@ -112,23 +112,34 @@ def test_iter_records_preserves_bytes_and_owns_its_block() -> None:
     assert list(iterator) == [(b"Record", b"third")]
 
 
-def test_iter_records_reads_the_records_as_they_were_when_called() -> None:
-    """Editing the block mid-iteration neither skips nor adds records."""
+def test_iter_records_raises_when_the_records_change() -> None:
+    """Like a dict, iteration stops loudly rather than skipping records."""
     block = SDBlock(
         "Title\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\nM  END\n"
         "> <A>\n1\n\n> <B>\n2\n\n$$$$\n"
     )
     iterator = block.iter_records()
     assert next(iterator) == ("A", "1")
-
     block.title = "Changed"
-    block.set_record("A", "10")
-    block.append_record("C", "3")
+    block.remove_record("missing")
+    assert next(iterator) == ("B", "2")
 
-    assert list(iterator) == [("B", "2")]
-    for name, value in block.iter_records():
+    for edit in (
+        lambda: block.set_record("A", "10"),
+        lambda: block.append_record("C", "3"),
+        lambda: block.remove_record("C"),
+        lambda: block.replace_records(block.records()),
+    ):
+        iterator = block.iter_records()
+        next(iterator)
+        edit()
+        with pytest.raises(RuntimeError, match="changed during iteration"):
+            next(iterator)
+        assert list(iterator) == []
+
+    for name, value in block.records():
         block.set_record(name, value * 2)
-    assert block.records() == [("A", "1010"), ("B", "22"), ("C", "33")]
+    assert block.records() == [("A", "1010"), ("B", "22")]
 
 
 def test_get_and_to_dict_match_dict_of_records() -> None:

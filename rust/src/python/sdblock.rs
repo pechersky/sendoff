@@ -2,7 +2,9 @@
 
 use std::borrow::Cow;
 
-use pyo3::exceptions::{PyNotImplementedError, PyTypeError, PyUnicodeDecodeError, PyValueError};
+use pyo3::exceptions::{
+    PyNotImplementedError, PyRuntimeError, PyTypeError, PyUnicodeDecodeError, PyValueError,
+};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyList, PyString, PyTuple, PyType};
@@ -12,7 +14,7 @@ use crate::core::ctable::CTable;
 use crate::core::ctable::error::CTableError;
 use crate::core::lines::lines;
 use crate::core::newline::{translated, universal_newlines};
-use crate::core::record::{HeaderStyle, Record, Records};
+use crate::core::record::{HeaderStyle, Record};
 use crate::core::split::single_block;
 use crate::core::strip::Strip;
 use crate::python::ctable::PyCTable;
@@ -44,12 +46,11 @@ fn header_style(header: &str) -> PyResult<HeaderStyle> {
     }
 }
 
-/// Lazily iterate over a copy of one block's SD data records.
+/// Lazily iterate over one block's SD data records.
 #[pyclass(name = "_SDRecordIterator", module = "sendoff.native")]
 pub(crate) struct PySDRecordIterator {
     block: Py<PySDBlock>,
-    metadata: Box<[u8]>,
-    kind: Kind,
+    edits: u64,
     pos: usize,
     finished: bool,
 }
@@ -64,15 +65,18 @@ impl PySDRecordIterator {
         if self.finished {
             return Ok(None);
         }
-        let kind = self.kind;
-        let mut records = Records::new(&self.metadata, self.pos, kind.strip());
+        let block = self.block.bind(py).try_borrow()?;
+        if block.edits != self.edits {
+            self.finished = true;
+            return Err(PyRuntimeError::new_err(
+                "SDBlock records changed during iteration",
+            ));
+        }
+        let mut records = block.block.records_at(self.pos, block.kind.strip());
         let result = match records.next() {
-            Some(Ok(record)) => Namer::with(kind, |names| names.lookup(py, record.name))
-                .and_then(|name| PyTuple::new(py, [name, kind.value(py, &record.value)?]))
-                .map_err(|error| match self.block.bind(py).try_borrow() {
-                    Ok(block) => block.noted(py, error, || reading_record(record.name)),
-                    Err(_) => error,
-                })
+            Some(Ok(record)) => Namer::with(block.kind, |names| names.lookup(py, record.name))
+                .and_then(|name| PyTuple::new(py, [name, block.kind.value(py, &record.value)?]))
+                .map_err(|error| block.noted(py, error, || reading_record(record.name)))
                 .map(Some),
             None => Ok(None),
             Some(Err(error)) => Err(error.into()),
@@ -100,13 +104,34 @@ impl PySDRecordIterator {
 /// their line endings, joined with "\n". Lines that `str.strip()`, or
 /// `bytes.strip()` for bytes blocks, empties are blank.
 #[pyclass(name = "SDBlock", module = "sendoff.native", eq, skip_from_py_object)]
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(crate) struct PySDBlock {
     pub(super) block: Block,
     pub(super) kind: Kind,
+    /// Counts edits to the SD data, so record iterators can tell they are
+    /// stale without copying the records.
+    edits: u64,
+}
+
+impl PartialEq for PySDBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.block == other.block
+    }
 }
 
 impl PySDBlock {
+    pub(super) fn wrap(block: Block, kind: Kind) -> Self {
+        Self {
+            block,
+            kind,
+            edits: 0,
+        }
+    }
+
+    fn edited(&mut self) {
+        self.edits = self.edits.wrapping_add(1);
+    }
+
     /// The name and value objects of a record read in block order.
     ///
     /// Inlined into records() and to_dict(): called out of line once per
@@ -309,7 +334,7 @@ impl PySDBlock {
                 "SDBlock() takes one block; use SDBlock.from_sdf to parse several",
             )
         })?;
-        let mut slf = Self { block, kind };
+        let mut slf = Self::wrap(block, kind);
         if let Some(records) = records {
             for (name, value) in record_pairs(records)? {
                 let name = slf.arg_bytes(&name, "record names")?;
@@ -442,18 +467,15 @@ impl PySDBlock {
 
     /// Lazily iterate over SD data records in input order.
     ///
-    /// Names and values are owned and have the block's type. Iteration reads
-    /// the records as they were when called, so the loop may edit the block.
+    /// Names and values are owned and have the block's type. Like a dict,
+    /// the iterator raises RuntimeError if the records change; to edit them
+    /// in a loop, loop over `records()`.
     #[pyo3(signature = () -> "_SDRecordIterator[AnyStr]")]
     fn iter_records(slf: Bound<'_, Self>) -> PySDRecordIterator {
-        let (metadata, kind) = {
-            let block = slf.borrow();
-            (block.block.metadata().into(), block.kind)
-        };
+        let edits = slf.borrow().edits;
         PySDRecordIterator {
             block: slf.unbind(),
-            metadata,
-            kind,
+            edits,
             pos: 0,
             finished: false,
         }
@@ -598,7 +620,7 @@ impl PySDBlock {
         // Text blocks from str paths decode on access, so their state need
         // not be UTF-8.
         Block::from_parts(data.to_vec(), title_end, mdl_end)
-            .map(|block| Self { block, kind })
+            .map(|block| Self::wrap(block, kind))
             .ok_or_else(|| PyValueError::new_err("invalid SDBlock state"))
     }
 
@@ -692,6 +714,7 @@ impl PySDBlock {
         let value = self.arg_bytes(value, "values")?;
         self.block
             .append_record(name, value, self.kind.strip(), style);
+        self.edited();
         Ok(())
     }
 
@@ -722,8 +745,9 @@ impl PySDBlock {
         let name = self.arg_bytes(name, "record names")?;
         let value = self.arg_bytes(value, "values")?;
         self.block
-            .set_record(name, value, self.kind.strip(), style)
-            .map_err(PyErr::from)
+            .set_record(name, value, self.kind.strip(), style)?;
+        self.edited();
+        Ok(())
     }
 
     /// Remove every record named `name`.
@@ -739,9 +763,11 @@ impl PySDBlock {
     #[pyo3(signature = (name: "AnyStr"))]
     fn remove_record(&mut self, name: &Bound<'_, PyAny>) -> PyResult<usize> {
         let name = self.arg_bytes(name, "record names")?;
-        self.block
-            .remove_records(name, self.kind.strip())
-            .map_err(PyErr::from)
+        let removed = self.block.remove_records(name, self.kind.strip())?;
+        if removed > 0 {
+            self.edited();
+        }
+        Ok(removed)
     }
 
     /// Replace all SD data with the given records.
@@ -784,6 +810,7 @@ impl PySDBlock {
             .collect::<PyResult<Vec<_>>>()?;
         let strip = this.kind.strip();
         this.block.replace_records(records, strip, style);
+        this.edited();
         Ok(())
     }
 

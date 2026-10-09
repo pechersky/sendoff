@@ -259,10 +259,10 @@ impl PySDBlockIterator {
 
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<PySDBlock>> {
         match self.next_block(py) {
-            Ok(Some(block)) => Ok(Some(PySDBlock {
+            Ok(Some(block)) => Ok(Some(PySDBlock::wrap(
                 block,
-                kind: self.kind.unwrap_or(Kind::Text),
-            })),
+                self.kind.unwrap_or(Kind::Text),
+            ))),
             Ok(None) => {
                 self.close();
                 Ok(None)
