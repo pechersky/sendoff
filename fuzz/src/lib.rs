@@ -1,0 +1,63 @@
+//! The native extension's pure-Rust core, compiled without PyO3 for fuzzing,
+//! and invariants that every block keeps.
+
+#[path = "../../rust/src/core/mod.rs"]
+pub mod core;
+
+use crate::core::block::Block;
+use crate::core::ctable::CTable;
+use crate::core::lines::lines;
+use crate::core::record::Record;
+use crate::core::strip::Strip;
+
+pub const STRIPS: [Strip; 2] = [Strip::Bytes, Strip::Str];
+
+/// Check what holds for any block, however it was read or edited.
+pub fn check_block(block: &Block) {
+    let parts = block.parts();
+    let rebuilt = Block::from_parts(parts.data.to_vec(), parts.title_end, parts.mdl_end);
+    assert_eq!(
+        rebuilt.as_ref(),
+        Some(block),
+        "parts do not rebuild the block"
+    );
+
+    for strip in STRIPS {
+        let mut into = Vec::new();
+        block.serialize_into(strip, &mut into);
+        assert_eq!(*block.serialized(strip), *into);
+        let _ = block.molblock(strip);
+
+        let records: Vec<_> = block.records(strip).collect();
+        let headers: Vec<_> = block.headers(strip).collect();
+        assert_eq!(records.len(), headers.len());
+        for (record, header) in records.iter().zip(&headers) {
+            match (record, header) {
+                (Ok(record), Ok(header)) => {
+                    assert_eq!((record.name, record.start), (header.name, header.start));
+                    assert!(header.start < header.end && header.end <= block.metadata().len());
+                }
+                (Err(_), Err(_)) => {}
+                _ => panic!("records and headers disagree: {record:?} {header:?}"),
+            }
+        }
+    }
+
+    let mut source = vec![String::new()];
+    source.extend(lines(block.mdl()).map(|line| String::from_utf8_lossy(line).into_owned()));
+    let parsed =
+        CTable::parse(source).map(|table| (table.format, table.num_atoms, table.num_bonds));
+    let counts = block
+        .counts()
+        .map(|counts| (counts.format, counts.atoms, counts.bonds));
+    assert_eq!(parsed, counts);
+}
+
+/// The named records, as `(name, value)` pairs.
+pub fn named(block: &Block, strip: Strip) -> Vec<(Vec<u8>, Vec<u8>)> {
+    block
+        .records(strip)
+        .filter_map(Result::ok)
+        .map(|Record { name, value, .. }| (name.to_vec(), value.into_owned()))
+        .collect()
+}

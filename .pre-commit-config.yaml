@@ -6,7 +6,7 @@ fail_fast: true
 
 ci:
     # pre-commit.ci has no Rust toolchain; Clippy also runs in GitHub Actions.
-    skip: [cargo-fmt, cargo-clippy, native-stub]
+    skip: [cargo-fmt, cargo-clippy, cargo-fmt-fuzz, cargo-clippy-fuzz, native-stub]
 
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
@@ -61,6 +61,18 @@ repos:
         entry: cargo clippy --locked --all-targets --all-features -- -D warnings
         language: system
         files: '(^Cargo\.(toml|lock)$|^rust/.*\.rs$)'
+        pass_filenames: false
+    -   id: cargo-fmt-fuzz
+        name: cargo fmt (fuzz)
+        entry: cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+        language: system
+        files: '^fuzz/.*\.(rs|toml)$'
+        pass_filenames: false
+    -   id: cargo-clippy-fuzz
+        name: cargo clippy (fuzz)
+        entry: cargo clippy --manifest-path fuzz/Cargo.toml --locked -- -D warnings
+        language: system
+        files: '(^fuzz/(Cargo\.(toml|lock)|.*\.rs)$|^rust/src/core/.*\.rs$)'
         pass_filenames: false
     -   id: native-stub
         name: regenerate sendoff/native.pyi

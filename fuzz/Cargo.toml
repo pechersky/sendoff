@@ -1,0 +1,49 @@
+[package]
+name = "sendoff-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+libfuzzer-sys = "0.4"
+memchr = "2"
+memmap2 = "0.9"
+thiserror = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[[bin]]
+name = "text"
+path = "fuzz_targets/text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "split"
+path = "fuzz_targets/split.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "block"
+path = "fuzz_targets/block.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ctable"
+path = "fuzz_targets/ctable.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
