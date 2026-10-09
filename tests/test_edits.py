@@ -1,8 +1,9 @@
 # mypy: allow-untyped-decorators
 """Pin the exact SDF text each record edit writes.
 
-A header the block writes copies the text around the name on the first
-header with a name, so after RDKit's ``>  <A>  (1)`` it writes
+A header the block writes is ``> <C>``, or ``>  <C>`` with
+``header="padded"``. With ``header="copy"`` it copies the text around the name
+on the first header with a name, so after RDKit's ``>  <A>  (1)`` it writes
 ``>  <C>  (1)`` with the same trailing space; without such a header, or when
 its name has no closing ``>``, it writes ``> <C>``. Value lines and one blank
 line follow, every line ending as the block's title line does.
@@ -11,6 +12,7 @@ line follow, every line ending as the block's title line does.
 with that name. Edits copy every line they do not rewrite byte for byte,
 including lines between records, which ``replace_records`` drops.
 """
+from functools import partial
 from textwrap import dedent
 from typing import Any, Callable
 
@@ -146,7 +148,7 @@ CASES = [
         >  <A>
         dup
 
-        >  <C>  (1)\x20
+        > <C>
         x
 
         $$$$
@@ -172,7 +174,7 @@ CASES = [
         >  <A>
         dup
 
-        >  <A>  (1)\x20
+        > <A>
         x
 
         $$$$
@@ -198,7 +200,7 @@ CASES = [
         >  <A>
         dup
 
-        >  <C>  (1)\x20
+        > <C>
         x
         y
 
@@ -285,23 +287,6 @@ CASES = [
         id="append-an-empty-value",
     ),
     pytest.param(
-        UNCLOSED,
-        "append_record",
-        ("C", "x"),
-        """\
-        t
-        M  END
-        >  <A
-        1
-
-        > <C>
-        x
-
-        $$$$
-        """,
-        id="append-after-an-unclosed-name",
-    ),
-    pytest.param(
         SOURCE,
         "remove_record",
         ("A",),
@@ -375,7 +360,7 @@ CASES = [
         >  <A>
         z
 
-        >  <A>  (1)\x20
+        > <A>
         w
 
         $$$$
@@ -389,7 +374,7 @@ CASES = [
         """\
         t
         M  END
-        >  <C>  (1)\x20
+        > <C>
         x
 
         >  <A>  (1)\x20
@@ -430,6 +415,20 @@ def convert(value: Any, form: Callable[[str], Any]) -> Any:
     return [tuple(map(form, pair)) for pair in value]
 
 
+def assert_writes(block: SDBlock[Any], expected: Any) -> None:
+    """Assert that ``block`` writes ``expected``, which reads back the same.
+
+    Args:
+        block: the edited block
+        expected: its SDF, in the block's type
+    """
+    written = block.to_sdf()
+    assert written == expected
+    reread = next(SDBlock.from_sdf(written))
+    assert reread.records() == block.records()
+    assert reread.to_sdf() == written
+
+
 @pytest.mark.parametrize("form", FORMS.values(), ids=FORMS.keys())
 @pytest.mark.parametrize("source, method, args, expected", CASES)
 def test_edit_writes_exactly(
@@ -450,8 +449,154 @@ def test_edit_writes_exactly(
     """
     block = next(SDBlock.from_sdf(form(source)))
     getattr(block, method)(*(convert(arg, form) for arg in args))
-    written = block.to_sdf()
-    assert written == form(dedent(expected))
-    reread = next(SDBlock.from_sdf(written))
-    assert reread.records() == block.records()
-    assert reread.to_sdf() == written
+    assert_writes(block, form(dedent(expected)))
+
+
+# SOURCE with a record C appended under a {header} line.
+APPENDED = """\
+t
+M  END
+>  <A>  (1)\x20
+1
+
+> 7 <B> (MFCD01)
+b1
+b2
+
+note
+
+>  <A>
+dup
+
+{header}
+x
+
+$$$$
+"""
+
+# SOURCE with its SD data replaced by a record C.
+REPLACED = """\
+t
+M  END
+{header}
+x
+
+$$$$
+"""
+
+# The header line each style writes for C after SOURCE's headers; None passes
+# no style.
+STYLES = {
+    None: "> <C>",
+    "plain": "> <C>",
+    "padded": ">  <C>",
+    "copy": ">  <C>  (1)\x20",
+}
+
+# Each way to write a new header: a method, or the constructor, and its
+# arguments after SOURCE, and the SDF it writes.
+STYLED = [
+    pytest.param("append_record", ("C", "x"), APPENDED, id="append"),
+    pytest.param("set_record", ("C", "x"), APPENDED, id="set"),
+    pytest.param("replace_records", ({"C": "x"},), REPLACED, id="replace"),
+    pytest.param("SDBlock", ({"C": "x"},), APPENDED, id="construct"),
+]
+
+
+@pytest.mark.parametrize("form", FORMS.values(), ids=FORMS.keys())
+@pytest.mark.parametrize(
+    "header, line", STYLES.items(), ids=[str(style) for style in STYLES]
+)
+@pytest.mark.parametrize("method, args, expected", STYLED)
+def test_new_headers_follow_the_style(
+    form: Callable[[str], Any],
+    header: str | None,
+    line: str,
+    method: str,
+    args: tuple[Any, ...],
+    expected: str,
+) -> None:
+    """Every way to write a new header line writes it in the asked style.
+
+    Args:
+        form: str, bytes, or bytes with CRLF line endings
+        header: the style, or None for the default
+        line: the header line the style writes
+        method: the edit, or "SDBlock" for the constructor
+        args: the edit's arguments after SOURCE, as str
+        expected: the block's SDF after the edit, with a {header} line
+    """
+    styled: dict[str, Any] = {} if header is None else {"header": header}
+    converted = [convert(arg, form) for arg in args]
+    if method == "SDBlock":
+        block = SDBlock(form(SOURCE), *converted, **styled)
+    else:
+        block = next(SDBlock.from_sdf(form(SOURCE)))
+        getattr(block, method)(*converted, **styled)
+    assert_writes(block, form(expected.format(header=line)))
+
+
+@pytest.mark.parametrize("form", FORMS.values(), ids=FORMS.keys())
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        pytest.param(
+            EMPTY,
+            """\
+            t
+            M  END
+            > <C>
+            x
+
+            $$$$
+            """,
+            id="no-records",
+        ),
+        pytest.param(
+            UNCLOSED,
+            """\
+            t
+            M  END
+            >  <A
+            1
+
+            > <C>
+            x
+
+            $$$$
+            """,
+            id="unclosed-name",
+        ),
+    ],
+)
+def test_copy_without_a_named_header_writes_plain(
+    form: Callable[[str], Any], source: str, expected: str
+) -> None:
+    """With no header to copy, ``header="copy"`` writes ``> <C>``.
+
+    Args:
+        form: str, bytes, or bytes with CRLF line endings
+        source: the block's SDF before the edit
+        expected: the block's SDF after the edit, dedented
+    """
+    block = next(SDBlock.from_sdf(form(source)))
+    block.append_record(form("C"), form("x"), header="copy")
+    assert_writes(block, form(dedent(expected)))
+
+
+@pytest.mark.parametrize("method, args, expected", STYLED)
+def test_other_styles_raise_before_editing(
+    method: str, args: tuple[Any, ...], expected: str
+) -> None:
+    """Another ``header`` raises ValueError and leaves the block as it was.
+
+    Args:
+        method: the edit, or "SDBlock" for the constructor
+        args: the edit's arguments after SOURCE
+        expected: unused
+    """
+    block = next(SDBlock.from_sdf(SOURCE))
+    edit = partial(SDBlock, SOURCE) if method == "SDBlock" else getattr(block, method)
+    with pytest.raises(ValueError, match="'plain', 'padded', or 'copy', not 'Plain'"):
+        edit(*args, header="Plain")  # type: ignore[arg-type]
+    assert block.to_sdf() == SOURCE

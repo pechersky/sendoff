@@ -8,7 +8,8 @@ endings survive: a ``$$$$`` line that is exactly ``$$$$`` and a newline is kept,
 and lines the block writes or ends itself end like its title line (a line
 ending in a bare ``\r`` gets just ``\n``). An appended record follows a blank
 line, so that it does not run on from a last record without one, and its
-header copies the first named header's line around the name. A block whose
+header is ``> <name>``, ``>  <name>``, or a copy of the first named header's
+line around the name, as its ``header`` style asks. A block whose
 first line starts with ``$$$$`` is an empty record, as the CTfile spec reads
 any such line as a terminator, rather than a ``$$$$`` title that each write
 doubled. Divergences that are accepted but not modeled here are kept out of
@@ -113,21 +114,26 @@ class RefBlock(Generic[AnyStr]):
             records.append((name, _lit(record_line, "\n").join(chunk)))
         return records
 
-    def append_record(self, name: AnyStr, value: AnyStr) -> None:
+    def append_record(self, name: AnyStr, value: AnyStr, header: str = "plain") -> None:
         """Append a record as main's append_record does.
 
         Unlike main, a blank line comes first if the SD data ends in a line
-        that is not blank, and the header copies the first named header.
+        that is not blank, and the header follows ``header``.
 
         Args:
             name: record name
             value: record value without a trailing newline
+            header: "plain" ``> <name>``, "padded" ``>  <name>``, or "copy"
+                the first named header, else plain
         """
         newline = self.newline
         self.titled = True
         if self.metadata and self.metadata[-1].strip():
             self.metadata.append(newline)
-        before, after = self._template() or (_lit(name, "> <"), _lit(name, ">"))
+        before = _lit(name, ">  <" if header == "padded" else "> <")
+        after = _lit(name, ">")
+        if header == "copy":
+            before, after = self._template() or (before, after)
         self.metadata.extend(
             [before + name + after + newline, value + newline, newline]
         )

@@ -6,6 +6,7 @@ from typing import (
     Generic,
     Iterable,
     Iterator,
+    Literal,
     Mapping,
     Protocol,
     TypeVar,
@@ -241,6 +242,8 @@ class SDBlock(Generic[AnyStr]):
         records: (
             Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]] | None
         ) = None,
+        *,
+        header: Literal["plain", "padded", "copy"] = "plain",
     ) -> SDBlock[AnyStr]:
         """
         Parse one block from SDF str or bytes, such as a molblock.
@@ -252,9 +255,12 @@ class SDBlock(Generic[AnyStr]):
             sdf: a molblock or one SDF record, as str or bytes
             records: SD data to append after any in `sdf`, as a mapping or
                 an iterable of (name, value) tuples of the same type
+            header: how to write the records' header lines, as in
+                `append_record`
 
         Raises:
-            ValueError: if `sdf` holds more than one block
+            ValueError: if `sdf` holds more than one block, or for another
+                `header`
             TypeError: if `sdf` is not str or bytes, or a record is not its type
         """
 
@@ -281,19 +287,29 @@ class SDBlock(Generic[AnyStr]):
             ValueError: if the state cannot come from a block
         """
 
-    def append_record(self, /, record_name: AnyStr, value: AnyStr) -> None:
+    def append_record(
+        self,
+        /,
+        record_name: AnyStr,
+        value: AnyStr,
+        *,
+        header: Literal["plain", "padded", "copy"] = "plain",
+    ) -> None:
         """
         Append a field and value of the same type as the input block.
 
-        The header copies the first named header's line around the name, as
-        `>  <C>  (1)` after RDKit's `>  <A>  (1)`, or is `> <C>` without one.
-
         Args:
-            record_name: field name
+            record_name: field name, written as given; see SDBlock
             value: field value, with no terminating newline
+            header: how to write the header line: "plain" `> <C>`; "padded"
+                `>  <C>`, as RDKit and Open Babel write; or "copy" the text
+                around the name on the first named header line, as
+                `>  <C>  (1)` after RDKit's `>  <A>  (1)`, or `> <C>` without
+                one. "copy" reads that header first, so it is a bit slower.
 
         Raises:
             TypeError: if `record_name` or `value` is not the block's type
+            ValueError: for another `header`
         """
 
     def ctable(self: SDBlock[str], /) -> CTable:
@@ -537,23 +553,37 @@ class SDBlock(Generic[AnyStr]):
         """
 
     def replace_records(
-        self, /, records: Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]]
+        self,
+        /,
+        records: Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]],
+        *,
+        header: Literal["plain", "padded", "copy"] = "plain",
     ) -> None:
         """
         Replace all SD data with the given records.
 
         The k-th record with a name keeps the k-th old header line with that
-        name; other headers are written as `append_record` writes them.
+        name.
 
         Args:
             records: a mapping, or an iterable of (name, value) tuples, in
-                the block's type
+                the block's type; names are written as given, see SDBlock
+            header: how to write other header lines, as in `append_record`;
+                "copy" copies from the old SD data
 
         Raises:
             TypeError: if a name or value is not the block's type
+            ValueError: for another `header`
         """
 
-    def set_record(self, /, name: AnyStr, value: AnyStr) -> None:
+    def set_record(
+        self,
+        /,
+        name: AnyStr,
+        value: AnyStr,
+        *,
+        header: Literal["plain", "padded", "copy"] = "plain",
+    ) -> None:
         """
         Set a record, keeping the header line and position of the first with
         that name.
@@ -562,11 +592,15 @@ class SDBlock(Generic[AnyStr]):
         record is appended.
 
         Args:
-            name: record name in the block's type
+            name: record name in the block's type, written as given; see
+                SDBlock
             value: record value in the block's type
+            header: how to write an appended record's header line, as in
+                `append_record`
 
         Raises:
             TypeError: if `name` or `value` is not the block's type
+            ValueError: for another `header`
         """
 
     @property

@@ -171,6 +171,11 @@ def assert_blocks_match(
                 lambda: key in expected_dict.keys()
             ), context
         name, value = ("Z", "v\u00e9") if text else (b"Z", "v\u00e9".encode())
+        for header in ("padded", "copy"):
+            styled, model = copy.copy(block), copy.deepcopy(expected)
+            styled.append_record(name, value, header=header)
+            model.append_record(name, value, header)
+            assert serialized(styled, text) == model.serialize(), context
         block.append_record(name, value)
         expected.append_record(name, value)
         assert serialized(block, text) == expected.serialize(), context

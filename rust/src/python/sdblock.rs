@@ -12,7 +12,7 @@ use crate::core::ctable::CTable;
 use crate::core::ctable::error::CTableError;
 use crate::core::lines::lines;
 use crate::core::newline::{translated, universal_newlines};
-use crate::core::record::Record;
+use crate::core::record::{HeaderStyle, Record};
 use crate::core::split::single_block;
 use crate::core::strip::Strip;
 use crate::python::ctable::PyCTable;
@@ -30,6 +30,18 @@ fn record_pairs<'py>(
         Err(_) => records.clone(),
     };
     items.try_iter()?.map(|item| item?.extract()).collect()
+}
+
+/// The style a `header` argument names.
+fn header_style(header: &str) -> PyResult<HeaderStyle> {
+    match header {
+        "plain" => Ok(HeaderStyle::Plain),
+        "padded" => Ok(HeaderStyle::Padded),
+        "copy" => Ok(HeaderStyle::Copy),
+        _ => Err(PyValueError::new_err(format!(
+            "header must be 'plain', 'padded', or 'copy', not '{header}'"
+        ))),
+    }
 }
 
 /// Lazily iterate over one block's SD data records.
@@ -254,16 +266,26 @@ impl PySDBlock {
     ///     sdf: a molblock or one SDF record, as str or bytes
     ///     records: SD data to append after any in `sdf`, as a mapping or
     ///         an iterable of (name, value) tuples of the same type
+    ///     header: how to write the records' header lines, as in
+    ///         `append_record`
     ///
     /// Raises:
-    ///     ValueError: if `sdf` holds more than one block
+    ///     ValueError: if `sdf` holds more than one block, or for another
+    ///         `header`
     ///     TypeError: if `sdf` is not str or bytes, or a record is not its type
     #[new]
     #[pyo3(signature = (
         sdf: "AnyStr",
         records: "Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]] | None" = None,
+        *,
+        header: "Literal['plain', 'padded', 'copy']" = "plain",
     ) -> "SDBlock[AnyStr]")]
-    fn new(sdf: &Bound<'_, PyAny>, records: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+    fn new(
+        sdf: &Bound<'_, PyAny>,
+        records: Option<&Bound<'_, PyAny>>,
+        header: &str,
+    ) -> PyResult<Self> {
+        let style = header_style(header)?;
         let Some((kind, bytes)) = bytes_of(sdf)? else {
             return Err(PyTypeError::new_err(
                 "SDBlock() argument must be str or bytes",
@@ -283,7 +305,8 @@ impl PySDBlock {
             for (name, value) in record_pairs(records)? {
                 let name = slf.arg_bytes(&name, "record names")?;
                 let value = slf.arg_bytes(&value, "values")?;
-                slf.block.append_record(name, value, slf.kind.strip());
+                slf.block
+                    .append_record(name, value, slf.kind.strip(), style);
             }
         }
         Ok(slf)
@@ -635,24 +658,30 @@ impl PySDBlock {
 
     /// Append a field and value of the same type as the input block.
     ///
-    /// The header copies the first named header's line around the name, as
-    /// `>  <C>  (1)` after RDKit's `>  <A>  (1)`, or is `> <C>` without one.
-    ///
     /// Args:
-    ///     record_name: field name
+    ///     record_name: field name, written as given; see SDBlock
     ///     value: field value, with no terminating newline
+    ///     header: how to write the header line: "plain" `> <C>`; "padded"
+    ///         `>  <C>`, as RDKit and Open Babel write; or "copy" the text
+    ///         around the name on the first named header line, as
+    ///         `>  <C>  (1)` after RDKit's `>  <A>  (1)`, or `> <C>` without
+    ///         one. "copy" reads that header first, so it is a bit slower.
     ///
     /// Raises:
     ///     TypeError: if `record_name` or `value` is not the block's type
-    #[pyo3(signature = (record_name: "AnyStr", value: "AnyStr"))]
+    ///     ValueError: for another `header`
+    #[pyo3(signature = (record_name: "AnyStr", value: "AnyStr", *, header: "Literal['plain', 'padded', 'copy']" = "plain"))]
     fn append_record(
         &mut self,
         record_name: &Bound<'_, PyAny>,
         value: &Bound<'_, PyAny>,
+        header: &str,
     ) -> PyResult<()> {
+        let style = header_style(header)?;
         let name = self.arg_bytes(record_name, "record names")?;
         let value = self.arg_bytes(value, "values")?;
-        self.block.append_record(name, value, self.kind.strip());
+        self.block
+            .append_record(name, value, self.kind.strip(), style);
         Ok(())
     }
 
@@ -663,17 +692,27 @@ impl PySDBlock {
     /// record is appended.
     ///
     /// Args:
-    ///     name: record name in the block's type
+    ///     name: record name in the block's type, written as given; see
+    ///         SDBlock
     ///     value: record value in the block's type
+    ///     header: how to write an appended record's header line, as in
+    ///         `append_record`
     ///
     /// Raises:
     ///     TypeError: if `name` or `value` is not the block's type
-    #[pyo3(signature = (name: "AnyStr", value: "AnyStr"))]
-    fn set_record(&mut self, name: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+    ///     ValueError: for another `header`
+    #[pyo3(signature = (name: "AnyStr", value: "AnyStr", *, header: "Literal['plain', 'padded', 'copy']" = "plain"))]
+    fn set_record(
+        &mut self,
+        name: &Bound<'_, PyAny>,
+        value: &Bound<'_, PyAny>,
+        header: &str,
+    ) -> PyResult<()> {
+        let style = header_style(header)?;
         let name = self.arg_bytes(name, "record names")?;
         let value = self.arg_bytes(value, "values")?;
         self.block
-            .set_record(name, value, self.kind.strip())
+            .set_record(name, value, self.kind.strip(), style)
             .map_err(PyErr::from)
     }
 
@@ -698,16 +737,28 @@ impl PySDBlock {
     /// Replace all SD data with the given records.
     ///
     /// The k-th record with a name keeps the k-th old header line with that
-    /// name; other headers are written as `append_record` writes them.
+    /// name.
     ///
     /// Args:
     ///     records: a mapping, or an iterable of (name, value) tuples, in
-    ///         the block's type
+    ///         the block's type; names are written as given, see SDBlock
+    ///     header: how to write other header lines, as in `append_record`;
+    ///         "copy" copies from the old SD data
     ///
     /// Raises:
     ///     TypeError: if a name or value is not the block's type
-    #[pyo3(signature = (records: "Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]]"))]
-    fn replace_records(slf: &Bound<'_, Self>, records: &Bound<'_, PyAny>) -> PyResult<()> {
+    ///     ValueError: for another `header`
+    #[pyo3(signature = (
+        records: "Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]]",
+        *,
+        header: "Literal['plain', 'padded', 'copy']" = "plain",
+    ))]
+    fn replace_records(
+        slf: &Bound<'_, Self>,
+        records: &Bound<'_, PyAny>,
+        header: &str,
+    ) -> PyResult<()> {
+        let style = header_style(header)?;
         // Collect the records before borrowing the block to change it, as
         // they may come from the block itself.
         let pairs = record_pairs(records)?;
@@ -722,7 +773,7 @@ impl PySDBlock {
             })
             .collect::<PyResult<Vec<_>>>()?;
         let strip = this.kind.strip();
-        this.block.replace_records(records, strip);
+        this.block.replace_records(records, strip, style);
         Ok(())
     }
 

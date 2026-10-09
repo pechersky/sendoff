@@ -51,9 +51,29 @@ pub struct Record<'a> {
     pub start: usize,
 }
 
-/// What a header line holds around its name when there is no header to
-/// copy: `> <name>`.
-pub const PLAIN_HEADER: (&[u8], &[u8]) = (b"> <", b">");
+/// How a new header line is written around its name.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HeaderStyle {
+    /// `> <name>`.
+    #[default]
+    Plain,
+    /// `>  <name>`, as RDKit and Open Babel write.
+    Padded,
+    /// The text around the name on the first named header line, so
+    /// `>  <B>  (1)` after `>  <A>  (1)`; `Plain` without one, or when that
+    /// name has no closing `>`.
+    Copy,
+}
+
+impl HeaderStyle {
+    /// The text around a name, which `Copy` falls back to.
+    pub fn fixed(self) -> (&'static [u8], &'static [u8]) {
+        match self {
+            Self::Padded => (b">  <", b">"),
+            Self::Plain | Self::Copy => (b"> <", b">"),
+        }
+    }
+}
 
 /// Append a header line of `before`, `name`, and `after`, ending in
 /// `newline`.
@@ -90,16 +110,18 @@ pub struct HeaderPool<'a> {
 }
 
 impl<'a> HeaderPool<'a> {
-    /// Pool the headers of `metadata`, skipping those without a name. The
-    /// template copies the first one's line around its name.
-    pub fn new(metadata: &'a [u8], strip: Strip) -> Self {
+    /// Pool the headers of `metadata`, skipping those without a name, for
+    /// new headers in `style`.
+    pub fn new(metadata: &'a [u8], strip: Strip, style: HeaderStyle) -> Self {
         let mut headers = Records::new(metadata, 0, strip).headers();
         let next = headers.find_map(Result::ok);
-        let template = next
-            .and_then(|header| header.around_name(metadata))
-            .map_or(PLAIN_HEADER, |(before, after)| {
-                (&metadata[before], &metadata[after])
-            });
+        let copied = match style {
+            HeaderStyle::Copy => next.and_then(|header| header.around_name(metadata)),
+            HeaderStyle::Plain | HeaderStyle::Padded => None,
+        };
+        let template = copied.map_or(style.fixed(), |(before, after)| {
+            (&metadata[before], &metadata[after])
+        });
         Self {
             metadata,
             headers,
@@ -364,7 +386,7 @@ mod tests {
     #[test]
     fn header_pool_gives_each_name_its_lines_in_order() {
         let metadata = b"> bad\n> <A>\n\n>  <A> (1) \na\n\n> 7 <B>\r\nb\n\n> <A>\na\n\n";
-        let mut pool = HeaderPool::new(metadata, Strip::Bytes);
+        let mut pool = HeaderPool::new(metadata, Strip::Bytes, HeaderStyle::Copy);
         assert_eq!(pool.template, (&b">  <"[..], &b"> (1) "[..]));
         assert_eq!(pool.take(b"A"), Some(&b">  <A> (1) \n"[..]));
         assert_eq!(pool.take(b"A"), Some(&b"> <A>\n"[..]));
@@ -372,14 +394,17 @@ mod tests {
         assert_eq!(pool.take(b"A"), None);
         assert_eq!(pool.take(b"C"), None);
 
-        let mut pool = HeaderPool::new(metadata, Strip::Bytes);
+        let mut pool = HeaderPool::new(metadata, Strip::Bytes, HeaderStyle::Plain);
+        assert_eq!(pool.template, (&b"> <"[..], &b">"[..]));
         for name in [&b"A"[..], b"B", b"A"] {
             assert!(pool.take(name).is_some());
         }
         assert_eq!(pool.take(b"A"), None);
+        let pool = HeaderPool::new(metadata, Strip::Bytes, HeaderStyle::Padded);
+        assert_eq!(pool.template, (&b">  <"[..], &b">"[..]));
 
-        let mut empty = HeaderPool::new(b"x\n", Strip::Bytes);
-        assert_eq!(empty.template, PLAIN_HEADER);
+        let mut empty = HeaderPool::new(b"x\n", Strip::Bytes, HeaderStyle::Copy);
+        assert_eq!(empty.template, HeaderStyle::Plain.fixed());
         assert_eq!(empty.take(b"A"), None);
     }
 }
