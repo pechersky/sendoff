@@ -31,7 +31,13 @@ fn full_mask(window: &[u8; WINDOW], byte: u8) -> u64 {
     #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
     // SAFETY: the cfg guarantees SSE2, the only requirement.
     let mask = unsafe { sse2_mask(window, byte) };
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "sse2")))]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    // SAFETY: the cfg guarantees NEON, the only requirement.
+    let mask = unsafe { neon_mask(window, byte) };
+    #[cfg(not(any(
+        all(target_arch = "x86_64", target_feature = "sse2"),
+        all(target_arch = "aarch64", target_feature = "neon"),
+    )))]
     let mask = swar_mask(window, byte);
     mask
 }
@@ -63,8 +69,39 @@ fn sse2_mask(window: &[u8; WINDOW], byte: u8) -> u64 {
         })
 }
 
+/// NEON has no movemask: weight each match by its bit, then add pairwise
+/// until each byte of the result sums one 8-byte group.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+#[target_feature(enable = "neon")]
+#[inline]
+fn neon_mask(window: &[u8; WINDOW], byte: u8) -> u64 {
+    use std::arch::aarch64::{
+        uint8x16_t, vandq_u8, vceqq_u8, vdupq_n_u8, vdupq_n_u64, vgetq_lane_u64, vpaddq_u8,
+        vreinterpretq_u8_u64, vreinterpretq_u64_u8, vsetq_lane_u64,
+    };
+    const WEIGHTS: u128 =
+        u128::from_le_bytes([1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128]);
+    let vector = |bits: u128| {
+        vreinterpretq_u8_u64(vsetq_lane_u64::<1>(
+            (bits >> 64) as u64,
+            vdupq_n_u64(bits as u64),
+        ))
+    };
+    let (weights, needle) = (vector(WEIGHTS), vdupq_n_u8(byte));
+    let [a, b, c, d]: [uint8x16_t; 4] =
+        lanes(window).map(|lane| vandq_u8(vceqq_u8(vector(lane), needle), weights));
+    let sums = vpaddq_u8(vpaddq_u8(a, b), vpaddq_u8(c, d));
+    vgetq_lane_u64::<0>(vreinterpretq_u64_u8(vpaddq_u8(sums, sums)))
+}
+
 /// Portable fallback: exact per-byte zero test on `word ^ byte`, 8 at a time.
-#[cfg(any(test, not(all(target_arch = "x86_64", target_feature = "sse2"))))]
+#[cfg(any(
+    test,
+    not(any(
+        all(target_arch = "x86_64", target_feature = "sse2"),
+        all(target_arch = "aarch64", target_feature = "neon"),
+    ))
+))]
 fn swar_mask(window: &[u8; WINDOW], byte: u8) -> u64 {
     const LOW: u64 = 0x7f7f_7f7f_7f7f_7f7f;
     let splat = u64::from_ne_bytes([byte; 8]);
