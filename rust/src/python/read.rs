@@ -321,13 +321,8 @@ impl PySDBlockIterator {
 /// read in chunks. As with any mapped file, truncating the file while
 /// iterating can kill the process with SIGBUS, so write results to a new
 /// path. str paths give str values decoded as UTF-8 on access, with
-/// universal newlines translated to "\n", as `open(path, errors=errors)`
-/// reads; bytes paths give bytes split on b"\n" only. From a str path,
-/// text that is not UTF-8 raises UnicodeDecodeError with a note naming the
-/// block and record, unless `errors` names another handler. The handler
-/// applies wherever text becomes str: writing the blocks to a path writes
-/// their bytes as read, and only "surrogateescape" round-trips names and
-/// values passed back.
+/// universal newlines translated to "\n", as `open(path)` reads; bytes
+/// paths give bytes split on b"\n" only.
 ///
 /// A file object, such as `sys.stdin.buffer`, is read as
 /// `SDBlock.from_lines` reads one, from its position and through Python;
@@ -337,9 +332,26 @@ impl PySDBlockIterator {
 /// Args:
 ///     source: a str, bytes, or os.PathLike path, or a file object with a
 ///         `read1` or `read` method
-///     errors: how a str path's blocks decode bytes that are not UTF-8:
-///         "strict", "replace", "backslashreplace", or "surrogateescape",
-///         as `bytes.decode` does
+///     errors: keyword-only; how blocks from a str path decode bytes that
+///         are not UTF-8, as `bytes.decode` does. Decoding happens on
+///         access, so a bad byte surfaces from the title, name, or value
+///         holding it:
+///
+///         - "strict" (default) raises UnicodeDecodeError with a note
+///           naming the block and record.
+///         - "replace" decodes each bad byte as U+FFFD.
+///         - "backslashreplace" decodes each bad byte as an escape such as
+///           `\xff`.
+///         - "surrogateescape" decodes each bad byte as a lone surrogate,
+///           so names and values passed back encode to the original bytes.
+///           With the other handlers a name holding a bad byte cannot be
+///           looked up.
+///
+///         Writing such blocks to a path writes their bytes as read; to a
+///         text file, their decoded text. "ignore" is not offered, since
+///         dropping bytes can blank a line or make one "$$$$". Other
+///         sources take only "strict": read a binary file object as
+///         bytes, or wrap it in `io.TextIOWrapper(f, errors="replace")`.
 ///
 /// Returns:
 ///     An iterator of SDBlocks; `close()` releases the file early
