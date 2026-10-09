@@ -356,6 +356,17 @@ def test_appended_records_follow_a_blank_line() -> None:
     assert constructed.records() == [("A", "1"), ("B", "2")]
 
 
+def test_record_edits_and_write_take_keywords() -> None:
+    """Record edits name their arguments `name` and `value`; write, `file`."""
+    block = SDBlock("t\nM  END\n$$$$\n")
+    block.append_record(name="A", value="1")
+    block.set_record(name="B", value="2")
+    block.remove_record(name="B")
+    out = io.StringIO()
+    block.write(file=out)
+    assert out.getvalue() == "t\nM  END\n> <A>\n1\n\n$$$$\n"
+
+
 def test_replace_records_can_read_the_block_itself() -> None:
     """Records to replace with may come from, or change, the same block."""
     block = SDBlock("t\nM  END\n> <A>\n1\n\n> <B>\n2\n\n$$$$\n")

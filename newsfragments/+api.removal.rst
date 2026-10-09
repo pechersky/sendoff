@@ -27,7 +27,9 @@ The ``SDBlock`` API changed. Migrate 0.1.x code as follows:
 - ``SDBlock.from_lines`` no longer takes a ``str`` or ``bytes``, which it
   iterated character by character: ``from_lines(text.splitlines(True))``
   becomes ``SDBlock.from_sdf(text)``. ``from_lines`` also takes file objects.
-- ``write(outh, with_newlines=...)`` becomes ``write(outh)``. Replace
+- ``write(outh, with_newlines=...)`` becomes ``write(file)``, and
+  ``append_record(record_name=..., value=...)`` becomes
+  ``append_record(name=..., value=...)``, matching ``set_record``. Replace
   ``block.write(handle)`` loops with ``write_sdf(dest, blocks)``;
   ``block.to_sdf()`` returns the text.
 - ``parse_sdf`` decodes ``str`` paths as UTF-8, not with the locale encoding.

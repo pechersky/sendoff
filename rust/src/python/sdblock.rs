@@ -798,22 +798,22 @@ impl PySDBlock {
     /// unbuffered (`buffering=0`) or nonblocking handle may write part of it.
     ///
     /// Args:
-    ///     outh: a text or binary file-like handle matching the input type
-    #[pyo3(signature = (outh: "_SupportsWrite[AnyStr]"))]
-    fn write(&self, outh: &Bound<'_, PyAny>) -> PyResult<()> {
-        let py = outh.py();
+    ///     file: a text or binary file-like handle matching the input type
+    #[pyo3(signature = (file: "_SupportsWrite[AnyStr]"))]
+    fn write(&self, file: &Bound<'_, PyAny>) -> PyResult<()> {
+        let py = file.py();
         let output = self
             .kind
             .value(py, self.block.serialized())
             .map_err(|error| self.noted(py, error, || "Writing".into()))?;
-        outh.call_method1(intern!(py, "write"), (output,))?;
+        file.call_method1(intern!(py, "write"), (output,))?;
         Ok(())
     }
 
     /// Append a field and value of the same type as the input block.
     ///
     /// Args:
-    ///     record_name: field name, written as given; see SDBlock
+    ///     name: field name, written as given; see SDBlock
     ///     value: field value, with no terminating newline
     ///     header: how to write the header line: "plain" `> <C>`; "padded"
     ///         `>  <C>`, as RDKit and Open Babel write; or "copy" the text
@@ -822,17 +822,17 @@ impl PySDBlock {
     ///         one. "copy" reads that header first, so it is a bit slower.
     ///
     /// Raises:
-    ///     TypeError: if `record_name` or `value` is not the block's type
+    ///     TypeError: if `name` or `value` is not the block's type
     ///     ValueError: for another `header`
-    #[pyo3(signature = (record_name: "AnyStr", value: "AnyStr", *, header: "Literal['plain', 'padded', 'copy']" = "plain"))]
+    #[pyo3(signature = (name: "AnyStr", value: "AnyStr", *, header: "Literal['plain', 'padded', 'copy']" = "plain"))]
     fn append_record(
         &mut self,
-        record_name: &Bound<'_, PyAny>,
+        name: &Bound<'_, PyAny>,
         value: &Bound<'_, PyAny>,
         header: &str,
     ) -> PyResult<()> {
         let style = header_style(header)?;
-        let name = self.arg_bytes(record_name, "record names")?;
+        let name = self.arg_bytes(name, "record names")?;
         let value = self.arg_bytes(value, "values")?;
         self.block
             .append_record(name, value, self.kind.strip(), style);

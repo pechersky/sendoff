@@ -325,7 +325,7 @@ class SDBlock(Generic[AnyStr]):
     def append_record(
         self,
         /,
-        record_name: AnyStr,
+        name: AnyStr,
         value: AnyStr,
         *,
         header: Literal["plain", "padded", "copy"] = "plain",
@@ -334,7 +334,7 @@ class SDBlock(Generic[AnyStr]):
         Append a field and value of the same type as the input block.
 
         Args:
-            record_name: field name, written as given; see SDBlock
+            name: field name, written as given; see SDBlock
             value: field value, with no terminating newline
             header: how to write the header line: "plain" `> <C>`; "padded"
                 `>  <C>`, as RDKit and Open Babel write; or "copy" the text
@@ -343,7 +343,7 @@ class SDBlock(Generic[AnyStr]):
                 one. "copy" reads that header first, so it is a bit slower.
 
         Raises:
-            TypeError: if `record_name` or `value` is not the block's type
+            TypeError: if `name` or `value` is not the block's type
             ValueError: for another `header`
         """
 
@@ -672,7 +672,7 @@ class SDBlock(Generic[AnyStr]):
         The inverse of `SDBlock(sdf)`, and what `write` writes.
         """
 
-    def write(self, /, outh: _SupportsWrite[AnyStr]) -> None:
+    def write(self, /, file: _SupportsWrite[AnyStr]) -> None:
         """
         Write the block, ending with $$$$, to a file-like handle.
 
@@ -684,7 +684,7 @@ class SDBlock(Generic[AnyStr]):
         unbuffered (`buffering=0`) or nonblocking handle may write part of it.
 
         Args:
-            outh: a text or binary file-like handle matching the input type
+            file: a text or binary file-like handle matching the input type
         """
 
 @final
