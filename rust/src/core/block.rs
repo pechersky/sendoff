@@ -279,7 +279,10 @@ impl Block {
 
     /// The ranges of the data before and after the name on the first named
     /// header line, without its ending, for new headers to copy; `None`
-    /// without one, or when that name has no closing `>`.
+    /// without one, or when that name has no closing `>`. Out of line, so
+    /// the default styles do not carry a header parser.
+    #[cold]
+    #[inline(never)]
     fn template(&self, strip: Strip) -> Option<(Range<usize>, Range<usize>)> {
         let header = self.headers(strip).find_map(Result::ok)?;
         let (before, after) = header.around_name(self.metadata())?;
