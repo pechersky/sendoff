@@ -28,37 +28,43 @@ fn low_bits(len: usize) -> u64 {
 
 #[inline]
 fn full_mask(window: &[u8; WINDOW], byte: u8) -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        sse2_mask(window, byte)
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        swar_mask(window, byte)
-    }
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+    // SAFETY: the cfg guarantees SSE2, the only requirement.
+    let mask = unsafe { sse2_mask(window, byte) };
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "sse2")))]
+    let mask = swar_mask(window, byte);
+    mask
 }
 
-/// SSE2 is part of the x86_64 baseline, so no runtime detection is needed.
-#[cfg(target_arch = "x86_64")]
+/// The window's four 16-byte lanes, as integers that compile to vector loads.
+#[inline]
+fn lanes(window: &[u8; WINDOW]) -> [u128; 4] {
+    std::array::from_fn(|index| {
+        u128::from_le_bytes(window[16 * index..16 * (index + 1)].try_into().unwrap())
+    })
+}
+
+/// A compare and movemask per lane. Safe intrinsics need the feature on the
+/// function; building lanes from integers compiles to the same unaligned
+/// loads that a raw pointer would.
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+#[target_feature(enable = "sse2")]
 #[inline]
 fn sse2_mask(window: &[u8; WINDOW], byte: u8) -> u64 {
-    use std::arch::x86_64::{_mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8};
-    window
-        .chunks_exact(16)
+    use std::arch::x86_64::{_mm_cmpeq_epi8, _mm_movemask_epi8, _mm_set_epi64x, _mm_set1_epi8};
+    let needle = _mm_set1_epi8(byte as i8);
+    lanes(window)
+        .into_iter()
         .enumerate()
         .fold(0, |mask, (index, lane)| {
-            // SAFETY: SSE2 is enabled on every x86_64 target, and `lane` is
-            // 16 readable bytes for the unaligned load.
-            let bits = unsafe {
-                let lane = _mm_loadu_si128(lane.as_ptr().cast());
-                _mm_movemask_epi8(_mm_cmpeq_epi8(lane, _mm_set1_epi8(byte as i8)))
-            } as u16;
+            let lane = _mm_set_epi64x((lane >> 64) as i64, lane as i64);
+            let bits = _mm_movemask_epi8(_mm_cmpeq_epi8(lane, needle)) as u16;
             mask | (u64::from(bits) << (16 * index))
         })
 }
 
 /// Portable fallback: exact per-byte zero test on `word ^ byte`, 8 at a time.
-#[cfg(any(test, not(target_arch = "x86_64")))]
+#[cfg(any(test, not(all(target_arch = "x86_64", target_feature = "sse2"))))]
 fn swar_mask(window: &[u8; WINDOW], byte: u8) -> u64 {
     const LOW: u64 = 0x7f7f_7f7f_7f7f_7f7f;
     let splat = u64::from_ne_bytes([byte; 8]);
