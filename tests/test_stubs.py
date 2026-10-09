@@ -7,9 +7,12 @@ from pathlib import Path
 
 import pytest
 
-# Generic[AnyStr] supplies __class_getitem__ in the stub.
+# Generic[AnyStr] supplies __class_getitem__ in the stub. PyO3 lists every
+# export, private iterators included, in the runtime __all__; sendoff's own
+# __all__ is the public one.
 ALLOWLIST = """\
 sendoff.native.SDBlock.__class_getitem__
+sendoff.native.__all__
 """
 
 
