@@ -29,9 +29,11 @@ fn low_bits(len: usize) -> u64 {
 #[inline]
 fn full_mask(window: &[u8; WINDOW], byte: u8) -> u64 {
     #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+    #[allow(unsafe_code)]
     // SAFETY: the cfg guarantees SSE2, the only requirement.
     let mask = unsafe { sse2_mask(window, byte) };
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    #[allow(unsafe_code)]
     // SAFETY: the cfg guarantees NEON, the only requirement.
     let mask = unsafe { neon_mask(window, byte) };
     #[cfg(not(any(

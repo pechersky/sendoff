@@ -46,6 +46,7 @@ impl MappedBlocks {
         if !metadata.is_file() || metadata.len() == 0 {
             return None;
         }
+        #[allow(unsafe_code)]
         // SAFETY: the map is read-only and private to this struct, which
         // only copies blocks out of it. As with any mapped file, another
         // process truncating the file raises SIGBUS on the next read of a
@@ -88,6 +89,7 @@ impl MappedBlocks {
         if upto < self.dropped + RESIDENT {
             return;
         }
+        #[allow(unsafe_code)]
         // SAFETY: dropped pages of a read-only file mapping read back from
         // the file, and blocks behind the cursor were already copied out.
         let dropped = unsafe {
@@ -125,11 +127,14 @@ fn is_local(file: &File) -> bool {
         libc::XFS_SUPER_MAGIC as u32,
     ];
     let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    #[allow(unsafe_code)]
     // SAFETY: fstatfs fills `stat` when it returns 0, and only then is it read.
-    if unsafe { libc::fstatfs(file.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
-        return false;
-    }
-    let kind = unsafe { stat.assume_init() }.f_type;
+    let kind = unsafe {
+        if libc::fstatfs(file.as_raw_fd(), stat.as_mut_ptr()) != 0 {
+            return false;
+        }
+        stat.assume_init().f_type
+    };
     LOCAL.contains(&(kind as u32))
 }
 

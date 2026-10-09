@@ -36,7 +36,11 @@ thiserror = "2"
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 
+[lints.rust]
+unsafe_code = "deny"
+
 [lints.clippy]
+undocumented_unsafe_blocks = "warn"
 redundant_clone = "warn"
 needless_collect = "warn"
 needless_pass_by_value = "warn"

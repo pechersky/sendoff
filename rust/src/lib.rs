@@ -36,11 +36,13 @@ mod native {
 
     #[cfg(feature = "coverage")]
     #[pyfunction]
+    #[allow(unsafe_code)]
     fn flush_coverage() -> pyo3::PyResult<()> {
         unsafe extern "C" {
             #[link_name = "__llvm_profile_dump"]
             fn dump_profile() -> std::ffi::c_int;
         }
+        // SAFETY: the coverage runtime defines this, taking no arguments.
         if unsafe { dump_profile() } != 0 {
             return Err(pyo3::exceptions::PyOSError::new_err(
                 "failed to write the Rust coverage profile",
