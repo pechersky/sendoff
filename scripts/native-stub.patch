@@ -70,7 +70,43 @@
          """
          Whether any record is named `name`: `name in block.names()`.
 
-@@ -287,7 +314,7 @@
+@@ -203,7 +230,7 @@
+         """
+
+     def __deepcopy__(self, memo: dict[int, Any], /) -> SDBlock[AnyStr]: ...
+-    def __delitem__(self, name: Any, /) -> None:
++    def __delitem__(self, name: AnyStr, /) -> None:
+         """
+         Remove every record named `name`, as `remove_record(name)` does.
+
+@@ -213,7 +240,7 @@
+         """
+
+     def __eq__(self, value: object, /) -> bool: ...
+-    def __getitem__(self, name: Any, /) -> Any:
++    def __getitem__(self, name: AnyStr, /) -> AnyStr:
+         """
+         Return the value of the last record named `name`, like a dict.
+
+@@ -222,7 +249,7 @@
+             TypeError: if `name` is not the block's type
+         """
+
+-    def __iter__(self, /) -> _SDNameIterator:
++    def __iter__(self, /) -> _SDNameIterator[AnyStr]:
+         """
+         Lazily iterate over the record names in input order, duplicates
+         included, as `names()` lists them. Like a dict, the iterator raises
+@@ -276,7 +303,7 @@
+         instead of raising.
+         """
+
+-    def __setitem__(self, name: Any, value: Any, /) -> None:
++    def __setitem__(self, name: AnyStr, value: AnyStr, /) -> None:
+         """
+         Set a record as `set_record(name, value)` does.
+
+@@ -320,7 +347,7 @@
              ValueError: for another `header`
          """
 
@@ -79,7 +115,7 @@
          """
          Parse out the underlying CTable object from a text SDBlock.
 
-@@ -301,7 +328,7 @@
+@@ -334,7 +361,7 @@
              NotImplementedError: for byte-backed SDBlocks
          """
 
@@ -88,7 +124,7 @@
          """
          Set the counts line to the number of atom and bond lines.
 
-@@ -313,10 +340,26 @@
+@@ -346,10 +373,26 @@
                  CTable.fix_counts raises
          """
 
@@ -116,7 +152,7 @@
          ),
      ) -> _SDBlockIterator[Any]:
          """
-@@ -353,6 +396,13 @@
+@@ -386,6 +429,13 @@
                  reads that are not str or bytes or that mix the two
          """
 
@@ -130,7 +166,7 @@
      @staticmethod
      def from_sdf(sdf: str | bytes) -> _SDBlockIterator[Any]:
          """
-@@ -373,7 +423,10 @@
+@@ -406,7 +456,10 @@
              TypeError: if `sdf` is not str or bytes
          """
 
@@ -142,7 +178,7 @@
          """
          Return the value of the last record named `name`, or `default`.
 
-@@ -401,7 +454,7 @@
+@@ -434,7 +487,7 @@
          """
 
      @property
@@ -151,7 +187,7 @@
          """
          Return the CTAB after the title, through `M  END`, as one value.
 
-@@ -411,7 +464,7 @@
+@@ -444,7 +497,7 @@
          """
 
      @property
@@ -160,7 +196,7 @@
          """
          Return the title line and CTAB through `M  END` as one value.
 
-@@ -420,7 +473,7 @@
+@@ -453,7 +506,7 @@
          """
 
      @molblock.setter
@@ -169,7 +205,7 @@
          """
          Replace the title line and CTAB, keeping the SD data.
 
-@@ -488,7 +541,7 @@
+@@ -521,7 +574,7 @@
              TypeError: if `name` is not the block's type
          """
 
@@ -178,7 +214,7 @@
          """
          Renumber atom and bond indices to be 1-indexed and in order.
 
-@@ -554,7 +607,7 @@
+@@ -587,7 +640,7 @@
          """
 
      @property
@@ -187,7 +223,7 @@
          """
          Return the title line without trailing whitespace, in the input type.
 
-@@ -564,7 +617,7 @@
+@@ -597,7 +650,7 @@
          """
 
      @title.setter
@@ -196,7 +232,7 @@
          """
          Replace the title line.
 
-@@ -604,13 +657,13 @@
+@@ -637,13 +690,13 @@
          """
 
  @final
@@ -213,8 +249,20 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -618,14 +671,19 @@
+@@ -651,23 +704,28 @@
          """
+
+ @final
+-class _SDNameIterator:
++class _SDNameIterator(Iterator[AnyStr]):
+     """
+     Lazily iterate over one block's record names.
+     """
+
+-    def __iter__(self, /) -> _SDNameIterator: ...
+-    def __next__(self, /) -> Any: ...
++    def __iter__(self, /) -> _SDNameIterator[AnyStr]: ...
++    def __next__(self, /) -> AnyStr: ...
 
  @final
 -class _SDRecordIterator:
@@ -237,7 +285,7 @@
  def parse_sdf(
      path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
  ) -> _SDBlockIterator[Any]:
-@@ -650,10 +708,13 @@
+@@ -692,10 +750,13 @@
          An iterator of SDBlocks; `close()` releases the file early
      """
 

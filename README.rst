@@ -37,10 +37,12 @@ Usage
    # that are not valid UTF-8.
    for block in parse_sdf("compounds.sdf"):
        block.title
-       block.get("ID")  # the last value named "ID", or None
+       block["ID"]  # the last value named "ID"; KeyError if none
+       block.get("ID")  # or None
        block.to_dict()  # every record, later duplicates winning
        block.records()  # [(name, value), ...] in file order
-       "ID" in block, len(block), block.names()  # names only, no values built
+       block.iter_records()  # the same, lazily
+       "ID" in block, len(block), list(block)  # names only, no values built
        "V3000" in block.mdl  # the CTAB after the title, through M  END
        mol = Chem.MolFromMolBlock(block.molblock)
 
@@ -54,7 +56,7 @@ Edit blocks and write them back:
 .. code-block:: python
 
    def tag(block):
-       block.set_record("Source", "vendor")  # replace in place, or append
+       block["Source"] = "vendor"  # set_record: replace in place, or append
        block.remove_record("Internal note")
        return block
 
@@ -129,6 +131,7 @@ Migrating from 0.1.x
    any(s in line for line in block.mdl)  # s in block.mdl
    block.title + "\n" + str.join("", block.mdl)  # block.molblock
    dict(block.records())  # block.to_dict()
+   dict(block.records())[name]  # block[name]
    dict(block.records()).get(name)  # block.get(name)
    len(list(block.records()))  # len(block)
    name in dict(block.records())  # name in block

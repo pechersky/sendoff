@@ -3,7 +3,8 @@
 use std::borrow::Cow;
 
 use pyo3::exceptions::{
-    PyNotImplementedError, PyRuntimeError, PyTypeError, PyUnicodeDecodeError, PyValueError,
+    PyKeyError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyUnicodeDecodeError,
+    PyValueError,
 };
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -65,13 +66,7 @@ impl PySDRecordIterator {
         if self.finished {
             return Ok(None);
         }
-        let block = self.block.bind(py).try_borrow()?;
-        if block.edits != self.edits {
-            self.finished = true;
-            return Err(PyRuntimeError::new_err(
-                "SDBlock records changed during iteration",
-            ));
-        }
+        let block = unchanged(self.block.bind(py), self.edits, &mut self.finished)?;
         let mut records = block.block.records_at(self.pos, block.kind.strip());
         let result = match records.next() {
             Some(Ok(record)) => Namer::with(block.kind, |names| names.lookup(py, record.name))
@@ -89,6 +84,64 @@ impl PySDRecordIterator {
     }
 }
 
+/// Lazily iterate over one block's record names.
+#[pyclass(name = "_SDNameIterator", module = "sendoff.native")]
+pub(crate) struct PySDNameIterator {
+    block: Py<PySDBlock>,
+    edits: u64,
+    pos: usize,
+    finished: bool,
+}
+
+#[pymethods]
+impl PySDNameIterator {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__<'py>(&mut self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        if self.finished {
+            return Ok(None);
+        }
+        let block = unchanged(self.block.bind(py), self.edits, &mut self.finished)?;
+        let mut headers = block
+            .block
+            .records_at(self.pos, block.kind.strip())
+            .headers();
+        let result = match headers.next() {
+            Some(Ok(header)) => {
+                self.pos = header.end;
+                Namer::with(block.kind, |names| names.lookup(py, header.name))
+                    .map_err(|error| block.noted(py, error, || reading_record(header.name)))
+                    .map(Some)
+            }
+            None => Ok(None),
+            Some(Err(error)) => Err(error.into()),
+        };
+        if !matches!(result, Ok(Some(_))) {
+            self.finished = true;
+        }
+        result
+    }
+}
+
+/// Borrow an iterator's block, or end the iteration with RuntimeError if
+/// its records changed since the iterator was made.
+fn unchanged<'py>(
+    block: &Bound<'py, PySDBlock>,
+    edits: u64,
+    finished: &mut bool,
+) -> PyResult<PyRef<'py, PySDBlock>> {
+    let block = block.try_borrow()?;
+    if block.edits != edits {
+        *finished = true;
+        return Err(PyRuntimeError::new_err(
+            "SDBlock records changed during iteration",
+        ));
+    }
+    Ok(block)
+}
+
 /// Handle a single molecule block from an SD file.
 ///
 /// `SDBlock[str]` blocks come from text input and `SDBlock[bytes]` blocks
@@ -103,7 +156,13 @@ impl PySDRecordIterator {
 /// A record's value is its lines up to a blank one, as read but without
 /// their line endings, joined with "\n". Lines that `str.strip()`, or
 /// `bytes.strip()` for bytes blocks, empties are blank.
-#[pyclass(name = "SDBlock", module = "sendoff.native", eq, skip_from_py_object)]
+#[pyclass(
+    name = "SDBlock",
+    module = "sendoff.native",
+    eq,
+    mapping,
+    skip_from_py_object
+)]
 #[derive(Clone)]
 pub(crate) struct PySDBlock {
     pub(super) block: Block,
@@ -130,6 +189,44 @@ impl PySDBlock {
 
     fn edited(&mut self) {
         self.edits = self.edits.wrapping_add(1);
+    }
+
+    /// The value of the last record named `name`, if any.
+    fn last_value<'py>(&self, name: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let py = name.py();
+        let name = self.arg_bytes(name, "record names")?;
+        let strip = self.kind.strip();
+        let mut found = None;
+        for header in self.block.headers(strip) {
+            let header = header?;
+            if header.name == name {
+                found = Some(header.start);
+            }
+        }
+        let Some(start) = found else {
+            return Ok(None);
+        };
+        let record = self.block.records_at(start, strip).next();
+        let record = record.and_then(Result::ok).expect("a record starts here");
+        self.kind
+            .value(py, &record.value)
+            .map(Some)
+            .map_err(|error| self.noted(py, error, || reading_record(record.name)))
+    }
+
+    /// Set the record `name` as `set_record` does.
+    fn put(
+        &mut self,
+        name: &Bound<'_, PyAny>,
+        value: &Bound<'_, PyAny>,
+        style: HeaderStyle,
+    ) -> PyResult<()> {
+        let name = self.arg_bytes(name, "record names")?;
+        let value = self.arg_bytes(value, "values")?;
+        self.block
+            .set_record(name, value, self.kind.strip(), style)?;
+        self.edited();
+        Ok(())
     }
 
     /// The name and value objects of a record read in block order.
@@ -501,25 +598,53 @@ impl PySDBlock {
         name: &Bound<'py, PyAny>,
         default: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        let py = name.py();
-        let name = self.arg_bytes(name, "record names")?;
-        let strip = self.kind.strip();
-        let mut found = None;
-        for header in self.block.headers(strip) {
-            let header = header?;
-            if header.name == name {
-                found = Some(header.start);
-            }
+        match self.last_value(name)? {
+            Some(value) => Ok(Some(value)),
+            None => Ok(default.cloned()),
         }
-        let Some(start) = found else {
-            return Ok(default.cloned());
-        };
-        let record = self.block.records_at(start, strip).next();
-        let record = record.and_then(Result::ok).expect("a record starts here");
-        self.kind
-            .value(py, &record.value)
-            .map(Some)
-            .map_err(|error| self.noted(py, error, || reading_record(record.name)))
+    }
+
+    /// Return the value of the last record named `name`, like a dict.
+    ///
+    /// Raises:
+    ///     KeyError: if no record has that name
+    ///     TypeError: if `name` is not the block's type
+    fn __getitem__<'py>(&self, name: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        self.last_value(name)?
+            .ok_or_else(|| PyKeyError::new_err(name.clone().unbind()))
+    }
+
+    /// Set a record as `set_record(name, value)` does.
+    ///
+    /// Raises:
+    ///     TypeError: if `name` or `value` is not the block's type
+    fn __setitem__(&mut self, name: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.put(name, value, HeaderStyle::Plain)
+    }
+
+    /// Remove every record named `name`, as `remove_record(name)` does.
+    ///
+    /// Raises:
+    ///     KeyError: if no record has that name
+    ///     TypeError: if `name` is not the block's type
+    fn __delitem__(&mut self, name: &Bound<'_, PyAny>) -> PyResult<()> {
+        if self.remove_record(name)? == 0 {
+            return Err(PyKeyError::new_err(name.clone().unbind()));
+        }
+        Ok(())
+    }
+
+    /// Lazily iterate over the record names in input order, duplicates
+    /// included, as `names()` lists them. Like a dict, the iterator raises
+    /// RuntimeError if the records change.
+    fn __iter__(slf: Bound<'_, Self>) -> PySDNameIterator {
+        let edits = slf.borrow().edits;
+        PySDNameIterator {
+            block: slf.unbind(),
+            edits,
+            pos: 0,
+            finished: false,
+        }
     }
 
     /// Return the record names in input order, duplicates included.
@@ -741,13 +866,7 @@ impl PySDBlock {
         value: &Bound<'_, PyAny>,
         header: &str,
     ) -> PyResult<()> {
-        let style = header_style(header)?;
-        let name = self.arg_bytes(name, "record names")?;
-        let value = self.arg_bytes(value, "values")?;
-        self.block
-            .set_record(name, value, self.kind.strip(), style)?;
-        self.edited();
-        Ok(())
+        self.put(name, value, header_style(header)?)
     }
 
     /// Remove every record named `name`.

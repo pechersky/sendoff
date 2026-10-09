@@ -230,7 +230,32 @@ class SDBlock(Generic[AnyStr]):
         """
 
     def __deepcopy__(self, memo: dict[int, Any], /) -> SDBlock[AnyStr]: ...
+    def __delitem__(self, name: AnyStr, /) -> None:
+        """
+        Remove every record named `name`, as `remove_record(name)` does.
+
+        Raises:
+            KeyError: if no record has that name
+            TypeError: if `name` is not the block's type
+        """
+
     def __eq__(self, value: object, /) -> bool: ...
+    def __getitem__(self, name: AnyStr, /) -> AnyStr:
+        """
+        Return the value of the last record named `name`, like a dict.
+
+        Raises:
+            KeyError: if no record has that name
+            TypeError: if `name` is not the block's type
+        """
+
+    def __iter__(self, /) -> _SDNameIterator[AnyStr]:
+        """
+        Lazily iterate over the record names in input order, duplicates
+        included, as `names()` lists them. Like a dict, the iterator raises
+        RuntimeError if the records change.
+        """
+
     def __len__(self, /) -> int:
         """
         The number of records, duplicates included: `len(block.records())`.
@@ -276,6 +301,14 @@ class SDBlock(Generic[AnyStr]):
         """
         Show the title; a str block's undecodable title bytes show as U+FFFD
         instead of raising.
+        """
+
+    def __setitem__(self, name: AnyStr, value: AnyStr, /) -> None:
+        """
+        Set a record as `set_record(name, value)` does.
+
+        Raises:
+            TypeError: if `name` or `value` is not the block's type
         """
 
     @classmethod
@@ -669,6 +702,15 @@ class _SDBlockIterator(Iterator[SDBlock[AnyStr]]):
         Stop iterating and release the input source, closing files that
         `parse_sdf` opened.
         """
+
+@final
+class _SDNameIterator(Iterator[AnyStr]):
+    """
+    Lazily iterate over one block's record names.
+    """
+
+    def __iter__(self, /) -> _SDNameIterator[AnyStr]: ...
+    def __next__(self, /) -> AnyStr: ...
 
 @final
 class _SDRecordIterator(Iterator[tuple[AnyStr, AnyStr]]):

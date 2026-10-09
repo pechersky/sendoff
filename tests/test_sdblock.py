@@ -160,6 +160,39 @@ def test_get_and_to_dict_match_dict_of_records() -> None:
         block.get(b"A")  # type: ignore[call-overload]
 
 
+def test_dict_style_access_matches_the_record_methods() -> None:
+    """block[name], assignment, del, and iteration follow get/set/remove/names."""
+    text = "t\nM  END\n> <A>  (1)\n1\n\n> <B>\nx\ny\n\n> <A>\n2\n\n$$$$\n"
+    block = next(SDBlock.from_lines(io.StringIO(text)))
+    byte_block = next(SDBlock.from_lines(io.BytesIO(text.encode())))
+
+    assert block["A"] == block.get("A") == "2"
+    assert byte_block[b"B"] == b"x\ny"
+    assert list(block) == block.names() == ["A", "B", "A"]
+    assert list(byte_block) == [b"A", b"B", b"A"]
+    with pytest.raises(KeyError) as missing:
+        block["missing"]
+    assert missing.value.args == ("missing",)
+    with pytest.raises(TypeError, match="must be bytes"):
+        byte_block["A"]  # type: ignore[index]
+    with pytest.raises(TypeError):
+        block[0]  # type: ignore[index]
+    assert not isinstance(block, typing.Sequence)
+
+    block["A"] = "new"
+    block["C"] = "c"
+    del block["B"]
+    with pytest.raises(KeyError):
+        del block["B"]
+    assert block.to_sdf() == "t\nM  END\n> <A>  (1)\nnew\n\n> <C>\nc\n\n$$$$\n"
+
+    names = iter(block)
+    assert next(names) == "A"
+    block["D"] = "d"
+    with pytest.raises(RuntimeError, match="changed during iteration"):
+        next(names)
+
+
 def test_record_mutators_keep_order_and_other_lines() -> None:
     """set_record edits in place; remove_record and replace_records rebuild."""
     text = "t\nM  END\n> <A>  (1)\n1\n\nnote\n\n> <B>\nb\n\n> <A>\n2\n\n$$$$\n"

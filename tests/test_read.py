@@ -508,6 +508,8 @@ DECODING: dict[str, tuple[bytes, typing.Callable[[SDBlock[str]], object], str]] 
         "Reading record 'F' of",
     ),
     "get": (LATIN1_BODY, lambda block: block.get("F"), "Reading record 'F' of"),
+    "getitem": (LATIN1_BODY, lambda block: block["F"], "Reading record 'F' of"),
+    "iter": (LATIN1_BODY, lambda block: list(block), "Reading record '\ufffd' of"),
     "to_dict": (LATIN1_BODY, lambda block: block.to_dict(), "Reading record 'F' of"),
     "names": (LATIN1_BODY, lambda block: block.names(), "Reading record '\ufffd' of"),
     "to_sdf": (LATIN1_BODY, lambda block: block.to_sdf(), "Writing"),
@@ -532,7 +534,7 @@ NOT_DECODING = {
 def test_decoding_accessors_are_listed() -> None:
     """Every public SDBlock name is listed as decoding block text or not."""
     public = {name for name in dir(SDBlock) if not name.startswith("_")}
-    assert public == DECODING.keys() | NOT_DECODING
+    assert public == DECODING.keys() - {"getitem", "iter"} | NOT_DECODING
 
 
 @pytest.mark.parametrize(
