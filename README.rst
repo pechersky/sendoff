@@ -99,7 +99,8 @@ Shell pipelines
 
 Write SDF to a pipe with ``write_sdf(sys.stdout, blocks)``; the path
 ``"/dev/stdout"`` is opened with truncation. For non-UTF-8 feeds, parse
-``b"/dev/stdin"`` and write to ``sys.stdout.buffer``.
+``b"/dev/stdin"`` and write to ``sys.stdout.buffer``. ``parse_sdf`` also reads
+file objects such as ``sys.stdin.buffer``.
 
 CTable errors
 -------------

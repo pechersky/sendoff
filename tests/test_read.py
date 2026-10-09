@@ -144,11 +144,14 @@ class _Reads:
 @pytest.mark.parametrize(
     ("lines", "message"),
     [
-        ([1], "lines must be str or bytes"),
-        (["t\n", None], "lines must be str or bytes"),
-        ([b"t\n", "M  END\n"], "does not accept mixed str and bytes lines"),
+        ([1], "SDBlock.from_lines lines must be str or bytes"),
+        (["t\n", None], "SDBlock.from_lines lines must be str or bytes"),
+        (
+            [b"t\n", "M  END\n"],
+            "SDBlock.from_lines does not accept mixed str and bytes lines",
+        ),
         (_Reads(["t\n"]), "file objects must read str or bytes"),
-        (_Reads("t\n", b"M  END\n"), "does not accept mixed str and bytes lines"),
+        (_Reads("t\n", b"M  END\n"), "file objects must not mix str and bytes reads"),
     ],
     ids=["item", "later-item", "mixed-items", "read", "mixed-reads"],
 )
@@ -162,7 +165,7 @@ def test_from_lines_rejects_items_as_blocks_are_produced(
         message: the TypeError's message
     """
     blocks = SDBlock.from_lines(lines)
-    with pytest.raises(TypeError, match=f"^SDBlock.from_lines {message}$"):
+    with pytest.raises(TypeError, match=f"^{message}$"):
         next(blocks)
 
 
@@ -447,8 +450,37 @@ def test_parse_sdf_raises_open_errors_on_first_next(tmp_path: Path) -> None:
     assert info.value.filename == str(missing)
     with pytest.raises(IsADirectoryError):
         next(parse_sdf(os.fsencode(tmp_path)))
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="path or a file object, not int"):
         parse_sdf(1)  # type: ignore[call-overload]
+
+
+def test_parse_sdf_reads_file_objects_from_their_position(tmp_path: Path) -> None:
+    """File objects give their own type's blocks, as from_lines reads them.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+    """
+    sdf = "skip\n\nM  END\n$$$$\nt\r\n\r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$\r\n"
+    path = tmp_path / "in.sdf"
+    path.write_bytes(sdf.encode())
+
+    with path.open("rb") as handle:
+        handle.readline()
+        handle.read(len("\nM  END\n$$$$\n"))
+        blocks = list(parse_sdf(handle))
+        assert not handle.closed
+    assert [block.to_sdf() for block in blocks] == [sdf.split("$$$$\n", 1)[1].encode()]
+    assert blocks == list(SDBlock.from_lines(io.BytesIO(sdf.encode())))[1:]
+
+    with path.open() as handle:
+        assert [block.to_dict() for block in parse_sdf(handle)] == [{}, {"A": "1"}]
+    assert [block.title for block in parse_sdf(io.StringIO(sdf))] == ["skip", "t"]
+
+    read, write = os.pipe()
+    with os.fdopen(write, "wb") as writer:
+        writer.write(sdf.encode())
+    with os.fdopen(read, "rb") as reader:
+        assert [block[b"A"] for block in parse_sdf(reader) if b"A" in block] == [b"1"]
 
 
 # A str-path block with valid title but undecodable CTAB, value, and name,

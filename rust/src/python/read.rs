@@ -6,8 +6,9 @@ use std::io::{ErrorKind, Read};
 use std::path::PathBuf;
 
 use pyo3::exceptions::PyTypeError;
+use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyIterator, PyString};
+use pyo3::types::{PyBytes, PyIterator, PyString};
 use pyo3::{PyTraverseError, PyVisit};
 
 use crate::core::block::Block;
@@ -24,16 +25,24 @@ use crate::python::sdblock::PySDBlock;
 /// file objects, and used less memory.
 const CHUNK: usize = 128 << 10;
 
-/// Settle `kind` on the kind of `from_lines` input found, which must not
-/// change.
-fn set_kind(kind: &mut Option<Kind>, found: Kind) -> PyResult<()> {
+/// Settle `kind` on the kind of input found, which must not change, or raise
+/// `TypeError(mixed)`.
+fn set_kind(kind: &mut Option<Kind>, found: Kind, mixed: &'static str) -> PyResult<()> {
     if same_kind(kind, found) {
         Ok(())
     } else {
-        Err(PyTypeError::new_err(
-            "SDBlock.from_lines does not accept mixed str and bytes lines",
-        ))
+        Err(PyTypeError::new_err(mixed))
     }
+}
+
+/// A file object's bound `read1` or `read` method, preferring `read1`,
+/// which returns what one raw read gives instead of filling the chunk.
+pub(super) fn reader(source: &Bound<'_, PyAny>) -> Option<Py<PyAny>> {
+    let py = source.py();
+    [intern!(py, "read1"), intern!(py, "read")]
+        .into_iter()
+        .find_map(|method| source.getattr(method).ok())
+        .map(Bound::unbind)
 }
 
 /// Where `_SDBlockIterator` reads SDF from.
@@ -131,7 +140,11 @@ impl Source {
                             "SDBlock.from_lines lines must be str or bytes",
                         ));
                     };
-                    set_kind(kind, found)?;
+                    set_kind(
+                        kind,
+                        found,
+                        "SDBlock.from_lines does not accept mixed str and bytes lines",
+                    )?;
                     tail.extend(bytes);
                     let newline = *newline.get_or_insert_with(|| title_newline(bytes));
                     if !bytes.ends_with(b"\n") {
@@ -146,14 +159,12 @@ impl Source {
             Source::Reader(read) => {
                 let chunk = read.bind(py).call1((CHUNK,))?;
                 let Some((found, bytes)) = bytes_of(&chunk)? else {
-                    return Err(PyTypeError::new_err(
-                        "SDBlock.from_lines file objects must read str or bytes",
-                    ));
+                    return Err(PyTypeError::new_err("file objects must read str or bytes"));
                 };
                 if bytes.is_empty() {
                     return Ok(true);
                 }
-                set_kind(kind, found)?;
+                set_kind(kind, found, "file objects must not mix str and bytes reads")?;
                 tail.extend(bytes);
                 Ok(false)
             }
@@ -301,9 +312,9 @@ impl PySDBlockIterator {
     }
 }
 
-/// Lazily parse SDBlocks from an SDF path.
+/// Lazily parse SDBlocks from an SDF path or file object.
 ///
-/// The file is opened on the first `next()`. Regular files on local Linux
+/// A path is opened on the first `next()`. Regular files on local Linux
 /// filesystems are memory-mapped and split a batch of blocks at a time
 /// without holding the GIL; pipes, network filesystems, and other files are
 /// read in chunks. As with any mapped file, truncating the file while
@@ -314,15 +325,37 @@ impl PySDBlockIterator {
 /// are not valid UTF-8: from a str path, their text raises
 /// UnicodeDecodeError with a note naming the block and record.
 ///
+/// A file object, such as `sys.stdin.buffer`, is read as
+/// `SDBlock.from_lines` reads one, from its position and through Python;
+/// binary ones give bytes blocks and text ones str blocks. It is not
+/// closed.
+///
 /// Args:
-///     path: a str, bytes, or os.PathLike path
+///     source: a str, bytes, or os.PathLike path, or a file object with a
+///         `read1` or `read` method
 ///
 /// Returns:
 ///     An iterator of SDBlocks; `close()` releases the file early
+///
+/// Raises:
+///     TypeError: if `source` is neither a path nor a file object
 #[pyfunction]
-#[pyo3(signature = (path: "str | bytes | os.PathLike[str] | os.PathLike[bytes]") -> "_SDBlockIterator[Any]")]
-pub(crate) fn parse_sdf(path: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
-    let (filename, path) = fs_path(path)?;
+#[pyo3(signature = (source: "str | bytes | os.PathLike[str] | os.PathLike[bytes]") -> "_SDBlockIterator[Any]")]
+pub(crate) fn parse_sdf(source: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
+    let py = source.py();
+    let path = source.is_instance_of::<PyString>()
+        || source.is_instance_of::<PyBytes>()
+        || source.hasattr(intern!(py, "__fspath__"))?;
+    if !path {
+        return match reader(source) {
+            Some(read) => Ok(PySDBlockIterator::new(Source::Reader(read))),
+            None => Err(PyTypeError::new_err(format!(
+                "parse_sdf takes a path or a file object, not {}",
+                source.get_type().name()?
+            ))),
+        };
+    }
+    let (filename, path) = fs_path(source)?;
     let text = filename.is_instance_of::<PyString>();
     Ok(PySDBlockIterator::new(Source::Path {
         path,

@@ -21,7 +21,7 @@ use crate::core::strip::Strip;
 use crate::python::ctable::PyCTable;
 use crate::python::kind::{Kind, bytes_of, decode};
 use crate::python::names::Namer;
-use crate::python::read::{PySDBlockIterator, Source};
+use crate::python::read::{PySDBlockIterator, Source, reader};
 
 /// Collect `(name, value)` pairs from a mapping or an iterable of pairs.
 fn record_pairs<'py>(
@@ -371,17 +371,14 @@ impl PySDBlock {
         lines: "Iterable[str] | Iterable[bytes] | _SupportsRead[str] | _SupportsRead[bytes]",
     ) -> "_SDBlockIterator[Any]")]
     fn from_lines(lines: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
-        let py = lines.py();
         if lines.is_instance_of::<PyString>() || lines.is_instance_of::<PyBytes>() {
             return Err(PyTypeError::new_err(
                 "SDBlock.from_lines takes lines or a file object; \
                  use SDBlock.from_sdf to parse SDF str or bytes",
             ));
         }
-        for method in [intern!(py, "read1"), intern!(py, "read")] {
-            if let Ok(read) = lines.getattr(method) {
-                return Ok(PySDBlockIterator::new(Source::Reader(read.unbind())));
-            }
+        if let Some(read) = reader(lines) {
+            return Ok(PySDBlockIterator::new(Source::Reader(read)));
         }
         Ok(PySDBlockIterator::new(Source::Lines(
             lines.try_iter()?.unbind(),

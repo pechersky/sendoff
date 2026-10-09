@@ -722,17 +722,30 @@ class _SDRecordIterator(Iterator[tuple[AnyStr, AnyStr]]):
     def __next__(self, /) -> tuple[AnyStr, AnyStr]: ...
 
 @overload
-def parse_sdf(path: str | os.PathLike[str]) -> _SDBlockIterator[str]: ...
-@overload
-def parse_sdf(path: bytes | os.PathLike[bytes]) -> _SDBlockIterator[bytes]: ...
+def parse_sdf(
+    source: str | os.PathLike[str] | _SupportsRead[str] | _SupportsRead1[str],
+) -> _SDBlockIterator[str]: ...
 @overload
 def parse_sdf(
-    path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+    source: bytes | os.PathLike[bytes] | _SupportsRead[bytes] | _SupportsRead1[bytes],
+) -> _SDBlockIterator[bytes]: ...
+@overload
+def parse_sdf(
+    source: (
+        str
+        | bytes
+        | os.PathLike[str]
+        | os.PathLike[bytes]
+        | _SupportsRead[str]
+        | _SupportsRead[bytes]
+        | _SupportsRead1[str]
+        | _SupportsRead1[bytes]
+    ),
 ) -> _SDBlockIterator[Any]:
     """
-    Lazily parse SDBlocks from an SDF path.
+    Lazily parse SDBlocks from an SDF path or file object.
 
-    The file is opened on the first `next()`. Regular files on local Linux
+    A path is opened on the first `next()`. Regular files on local Linux
     filesystems are memory-mapped and split a batch of blocks at a time
     without holding the GIL; pipes, network filesystems, and other files are
     read in chunks. As with any mapped file, truncating the file while
@@ -743,11 +756,20 @@ def parse_sdf(
     are not valid UTF-8: from a str path, their text raises
     UnicodeDecodeError with a note naming the block and record.
 
+    A file object, such as `sys.stdin.buffer`, is read as
+    `SDBlock.from_lines` reads one, from its position and through Python;
+    binary ones give bytes blocks and text ones str blocks. It is not
+    closed.
+
     Args:
-        path: a str, bytes, or os.PathLike path
+        source: a str, bytes, or os.PathLike path, or a file object with a
+            `read1` or `read` method
 
     Returns:
         An iterator of SDBlocks; `close()` releases the file early
+
+    Raises:
+        TypeError: if `source` is neither a path nor a file object
     """
 
 @overload

@@ -249,7 +249,7 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -651,23 +704,28 @@
+@@ -651,25 +704,43 @@
          """
 
  @final
@@ -278,15 +278,31 @@
 +    def __next__(self, /) -> tuple[AnyStr, AnyStr]: ...
 +
 +@overload
-+def parse_sdf(path: str | os.PathLike[str]) -> _SDBlockIterator[str]: ...
-+@overload
-+def parse_sdf(path: bytes | os.PathLike[bytes]) -> _SDBlockIterator[bytes]: ...
-+@overload
  def parse_sdf(
-     path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+-    source: str | bytes | os.PathLike[str] | os.PathLike[bytes],
++    source: str | os.PathLike[str] | _SupportsRead[str] | _SupportsRead1[str],
++) -> _SDBlockIterator[str]: ...
++@overload
++def parse_sdf(
++    source: bytes | os.PathLike[bytes] | _SupportsRead[bytes] | _SupportsRead1[bytes],
++) -> _SDBlockIterator[bytes]: ...
++@overload
++def parse_sdf(
++    source: (
++        str
++        | bytes
++        | os.PathLike[str]
++        | os.PathLike[bytes]
++        | _SupportsRead[str]
++        | _SupportsRead[bytes]
++        | _SupportsRead1[str]
++        | _SupportsRead1[bytes]
++    ),
  ) -> _SDBlockIterator[Any]:
-@@ -692,10 +750,13 @@
-         An iterator of SDBlocks; `close()` releases the file early
+     """
+     Lazily parse SDBlocks from an SDF path or file object.
+@@ -701,10 +772,13 @@
+         TypeError: if `source` is neither a path nor a file object
      """
 
 +@overload

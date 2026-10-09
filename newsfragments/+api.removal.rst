@@ -32,6 +32,7 @@ The ``SDBlock`` API changed. Migrate 0.1.x code as follows:
   ``block.to_sdf()`` returns the text.
 - ``parse_sdf`` decodes ``str`` paths as UTF-8, not with the locale encoding.
   Pass a ``bytes`` path for other encodings to get ``bytes`` titles and values.
+  Its ``sdfpath`` keyword is now ``source``.
 - ``CTable`` loses ``title``, ``source``, ``comment``, ``counts``, ``format``,
   ``CTableFormat``, the ``parse_*`` static methods, and ``atomlines`` and
   ``bondlines``; ``lines`` is a list. ``SDBlock.num_atoms()`` and
