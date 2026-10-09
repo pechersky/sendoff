@@ -35,8 +35,10 @@ The ``SDBlock`` API changed. Migrate 0.1.x code as follows:
   Its ``sdfpath`` keyword is now ``source``.
 - ``CTable`` loses ``title``, ``source``, ``comment``, ``counts``, ``format``,
   ``CTableFormat``, the ``parse_*`` static methods, and ``atomlines`` and
-  ``bondlines``; ``lines`` is a list. ``SDBlock.num_atoms()`` and
-  ``num_bonds()`` read the counts line without building a ``CTable``.
+  ``bondlines``; ``lines`` is a list.
+- ``block.num_atoms()`` and ``block.num_bonds()`` become properties,
+  ``block.num_atoms`` and ``block.num_bonds``, as on ``CTable``. They read the
+  counts line without building a ``CTable``.
 - ``renumber_indices`` no longer rewrites the V3000 ``COUNTS`` line, so it no
   longer repairs counts after atom or bond lines are added or removed. Call
   ``fix_counts()`` for that.

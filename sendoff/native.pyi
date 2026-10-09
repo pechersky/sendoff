@@ -531,24 +531,22 @@ class SDBlock(Generic[AnyStr]):
         across a file with `Counter(n for b in blocks for n in b.names())`.
         """
 
+    @property
     def num_atoms(self, /) -> int:
         """
-        Get the number of atoms declared by the counts line.
+        The number of atoms declared by the counts line.
 
-        The count may differ from the number of atom lines.
-
-        Raises:
-            MalformedCTableError: as ctable raises
+        The count may differ from the number of atom lines. Reading it
+        raises MalformedCTableError as ctable does.
         """
 
+    @property
     def num_bonds(self, /) -> int:
         """
-        Get the number of bonds declared by the counts line.
+        The number of bonds declared by the counts line.
 
-        The count may differ from the number of bond lines.
-
-        Raises:
-            MalformedCTableError: as ctable raises
+        The count may differ from the number of bond lines. Reading it
+        raises MalformedCTableError as ctable does.
         """
 
     def records(self, /) -> list[tuple[AnyStr, AnyStr]]:

@@ -24,7 +24,7 @@ def test_counts_mol_read(counted_mol_sdf: CountedMol) -> None:
         counted_mol_sdf: pytest fixture of a Path to the sdf, and its counts
     """
     mol: SDBlock[str] = next(parse_sdf(counted_mol_sdf.path))
-    assert (mol.num_atoms(), mol.num_bonds()) == (
+    assert (mol.num_atoms, mol.num_bonds) == (
         counted_mol_sdf.atoms,
         counted_mol_sdf.bonds,
     )
@@ -307,6 +307,8 @@ def run_ctable_operation(block: SDBlock[str], operation: str) -> object:
     """
     if operation.startswith("valid_"):
         return getattr(block.ctable(), operation)()
+    if operation.startswith("num_"):
+        return getattr(block, operation)
     return getattr(block, operation)()
 
 
@@ -579,7 +581,7 @@ def test_renumber_leaves_counts() -> None:
     assert "M  V30 COUNTS 5 3 0 0 0" in ctable.lines
     assert (ctable.num_atoms, ctable.num_bonds) == (5, 3)
     block.renumber_indices()
-    assert (block.num_atoms(), block.num_bonds()) == (5, 3)
+    assert (block.num_atoms, block.num_bonds) == (5, 3)
 
 
 @pytest.mark.parametrize("ending", ["\n", "\r\n", ""])
@@ -603,7 +605,7 @@ def test_fix_counts_sets_counts_to_table_lines(ending: str) -> None:
     reparsed = CTable(ctable.lines)
     assert (reparsed.num_atoms, reparsed.num_bonds) == (2, 1)
     block.fix_counts()
-    assert (block.num_atoms(), block.num_bonds()) == (2, 1)
+    assert (block.num_atoms, block.num_bonds) == (2, 1)
     assert block.to_sdf() == v3000_block(counts=fixed.rstrip()).to_sdf()
 
 
@@ -612,7 +614,7 @@ def test_fix_counts_reads_section_markers() -> None:
     ctab = "M  V30 BEGIN CTAB\nM  V30 COUNTS 3 1 0 0 0\nM  V30 END CTAB\nM  END\n"
     block = next(SDBlock.from_sdf(V3000_HEADER + ctab + "$$$$\n"))
     block.fix_counts()
-    assert (block.num_atoms(), block.num_bonds()) == (0, 0)
+    assert (block.num_atoms, block.num_bonds) == (0, 0)
 
 
 @pytest.mark.parametrize("section", ["ATOM", "BOND"])
@@ -809,7 +811,7 @@ def test_continued_lines_are_one_logical_line(ending: str) -> None:
     assert ctable.valid_atom_indices(strict=True)
     assert ctable.valid_bond_indices(strict=True)
     block.fix_counts()
-    assert (block.num_atoms(), block.num_bonds()) == (2, 1)
+    assert (block.num_atoms, block.num_bonds) == (2, 1)
 
 
 def test_continued_lines_are_numbered_by_their_first_line() -> None:

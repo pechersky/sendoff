@@ -944,22 +944,20 @@ impl PySDBlock {
         Ok(self.parse_ctable(py)?.into())
     }
 
-    /// Get the number of atoms declared by the counts line.
+    /// The number of atoms declared by the counts line.
     ///
-    /// The count may differ from the number of atom lines.
-    ///
-    /// Raises:
-    ///     MalformedCTableError: as ctable raises
+    /// The count may differ from the number of atom lines. Reading it
+    /// raises MalformedCTableError as ctable does.
+    #[getter]
     fn num_atoms(&self) -> PyResult<i64> {
         Ok(self.block.counts()?.atoms)
     }
 
-    /// Get the number of bonds declared by the counts line.
+    /// The number of bonds declared by the counts line.
     ///
-    /// The count may differ from the number of bond lines.
-    ///
-    /// Raises:
-    ///     MalformedCTableError: as ctable raises
+    /// The count may differ from the number of bond lines. Reading it
+    /// raises MalformedCTableError as ctable does.
+    #[getter]
     fn num_bonds(&self) -> PyResult<i64> {
         Ok(self.block.counts()?.bonds)
     }

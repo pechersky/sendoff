@@ -619,7 +619,7 @@ def test_byte_level_methods_work_on_undecodable_text(tmp_path: Path) -> None:
     path.write_bytes(LATIN1_TITLE + LATIN1_BODY)
     bad_title, block = parse_sdf(path)
     assert repr(bad_title) == "<SDBlock title='\ufffd'>"
-    assert (block.num_atoms(), block.num_bonds()) == (0, 0)
+    assert (block.num_atoms, block.num_bonds) == (0, 0)
     assert len(block) == 2 and "F" in block and "G" not in block
     block.set_record("F", "ok")
     block.append_record("G", "1")
