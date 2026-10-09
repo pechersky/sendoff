@@ -43,9 +43,13 @@ impl Sink<'_> {
                         "write_sdf does not accept mixed str and bytes blocks",
                     ));
                 }
-                Ok(kind == Kind::Text && !serialized.is_ascii())
+                // Chunks are ASCII, or one block, so they decode with the
+                // latest block's handler.
+                *expected = Some(kind);
+                Ok(kind.is_text() && !serialized.is_ascii())
             }
-            Sink::File { .. } if kind == Kind::Text => decode(py, serialized).map(|_| false),
+            Sink::File { .. } if kind == Kind::TEXT => decode(py, serialized).map(|_| false),
+            // Bytes, and text that decodes with a handler, are written as read.
             Sink::File { .. } => Ok(false),
         }
     }
@@ -68,7 +72,9 @@ impl Sink<'_> {
 /// Blocks are written as `SDBlock.write` would, but 64-256 KiB at a time:
 /// to a path without holding the GIL, or to a file object with one
 /// `write` call per chunk, as str for text blocks or bytes for byte-backed
-/// ones. Text blocks must be valid UTF-8.
+/// ones. Text blocks must be valid UTF-8, except those `parse_sdf` read
+/// with an `errors` handler: a path gets their bytes as read, and a file
+/// object their text decoded with the handler.
 ///
 /// An error stops writing as it would a loop of `SDBlock.write` calls:
 /// the blocks before the failing one are written, a path keeps them, and
@@ -92,7 +98,7 @@ impl Sink<'_> {
 /// Raises:
 ///     TypeError: if `blocks` is not iterable, produces something other
 ///         than an SDBlock, or mixes str and bytes blocks for a file object
-///     UnicodeDecodeError: for a str block that is not UTF-8
+///     UnicodeDecodeError: for a str block without a handler that is not UTF-8
 ///     OSError: if `dest` cannot be created or written
 #[pyfunction]
 #[pyo3(signature = (

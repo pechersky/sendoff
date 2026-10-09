@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::path::PathBuf;
 
-use pyo3::exceptions::PyTypeError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyIterator, PyString};
@@ -15,7 +15,7 @@ use crate::core::block::Block;
 use crate::core::mapped::MappedBlocks;
 use crate::core::newline::{TRANSLATE_SLACK, missing_ending, title_newline, translate_newlines};
 use crate::core::split::{Scanner, Tail};
-use crate::python::kind::{Kind, bytes_of, same_kind};
+use crate::python::kind::{Errors, Kind, bytes_of, same_kind};
 use crate::python::os::{fs_path, os_error};
 use crate::python::sdblock::PySDBlock;
 
@@ -59,11 +59,12 @@ pub(super) enum Source {
         text: bool,
         pending_cr: bool,
     },
-    /// A path to open on the first read; `text` translates newlines.
+    /// A path to open on the first read for blocks of `kind`; text
+    /// translates newlines.
     Path {
         path: PathBuf,
         filename: Py<PyAny>,
-        text: bool,
+        kind: Kind,
     },
     /// A file mapped from `Path`, split a batch of blocks at a time without
     /// holding the GIL.
@@ -88,21 +89,21 @@ impl Source {
         let Source::Path {
             path,
             filename,
-            text,
+            kind: path_kind,
         } = self
         else {
             return Ok(());
         };
-        let text_mode = *text;
+        let text = path_kind.is_text();
         // Opening a FIFO waits for a writer, which may be a Python thread.
         let (file, mapped) = py
             .detach(|| {
                 let file = File::open(&*path)?;
-                let mapped = MappedBlocks::open(&file, text_mode);
+                let mapped = MappedBlocks::open(&file, text);
                 Ok((file, mapped))
             })
             .map_err(|error| os_error(py, error, filename))?;
-        *kind = Some(Kind::of(*text));
+        *kind = Some(*path_kind);
         *self = match mapped {
             Some(blocks) => Source::Mapped {
                 blocks,
@@ -111,7 +112,7 @@ impl Source {
             None => Source::File {
                 file,
                 filename: filename.clone_ref(py),
-                text: *text,
+                text,
                 pending_cr: false,
             },
         };
@@ -272,7 +273,7 @@ impl PySDBlockIterator {
         match self.next_block(py) {
             Ok(Some(block)) => Ok(Some(PySDBlock::wrap(
                 block,
-                self.kind.unwrap_or(Kind::Text),
+                self.kind.unwrap_or(Kind::TEXT),
             ))),
             Ok(None) => {
                 self.close();
@@ -320,10 +321,13 @@ impl PySDBlockIterator {
 /// read in chunks. As with any mapped file, truncating the file while
 /// iterating can kill the process with SIGBUS, so write results to a new
 /// path. str paths give str values decoded as UTF-8 on access, with
-/// universal newlines translated to "\n", as `open(path)` reads; bytes
-/// paths give bytes split on b"\n" only. Use a bytes path for feeds that
-/// are not valid UTF-8: from a str path, their text raises
-/// UnicodeDecodeError with a note naming the block and record.
+/// universal newlines translated to "\n", as `open(path, errors=errors)`
+/// reads; bytes paths give bytes split on b"\n" only. From a str path,
+/// text that is not UTF-8 raises UnicodeDecodeError with a note naming the
+/// block and record, unless `errors` names another handler. The handler
+/// applies wherever text becomes str: writing the blocks to a path writes
+/// their bytes as read, and only "surrogateescape" round-trips names and
+/// values passed back.
 ///
 /// A file object, such as `sys.stdin.buffer`, is read as
 /// `SDBlock.from_lines` reads one, from its position and through Python;
@@ -333,20 +337,34 @@ impl PySDBlockIterator {
 /// Args:
 ///     source: a str, bytes, or os.PathLike path, or a file object with a
 ///         `read1` or `read` method
+///     errors: how a str path's blocks decode bytes that are not UTF-8:
+///         "strict", "replace", "backslashreplace", or "surrogateescape",
+///         as `bytes.decode` does
 ///
 /// Returns:
 ///     An iterator of SDBlocks; `close()` releases the file early
 ///
 /// Raises:
 ///     TypeError: if `source` is neither a path nor a file object
+///     ValueError: for another `errors`, or a handler with a source other
+///         than a str path
 #[pyfunction]
-#[pyo3(signature = (source: "str | bytes | os.PathLike[str] | os.PathLike[bytes]") -> "_SDBlockIterator[Any]")]
-pub(crate) fn parse_sdf(source: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
+#[pyo3(signature = (
+    source: "str | bytes | os.PathLike[str] | os.PathLike[bytes]",
+    *,
+    errors: "Literal['strict', 'replace', 'backslashreplace', 'surrogateescape']" = "strict",
+) -> "_SDBlockIterator[Any]")]
+pub(crate) fn parse_sdf(source: &Bound<'_, PyAny>, errors: &str) -> PyResult<PySDBlockIterator> {
     let py = source.py();
+    let errors = Errors::named(errors)?;
     let path = source.is_instance_of::<PyString>()
         || source.is_instance_of::<PyBytes>()
         || source.hasattr(intern!(py, "__fspath__"))?;
+    let lenient = || PyValueError::new_err("parse_sdf errors applies only to str paths");
     if !path {
+        if errors != Errors::Strict {
+            return Err(lenient());
+        }
         return match reader(source) {
             Some(read) => Ok(PySDBlockIterator::new(Source::Reader(read))),
             None => Err(PyTypeError::new_err(format!(
@@ -356,10 +374,16 @@ pub(crate) fn parse_sdf(source: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator
         };
     }
     let (filename, path) = fs_path(source)?;
-    let text = filename.is_instance_of::<PyString>();
+    let kind = if filename.is_instance_of::<PyString>() {
+        Kind::Text(errors)
+    } else if errors == Errors::Strict {
+        Kind::Bytes
+    } else {
+        return Err(lenient());
+    };
     Ok(PySDBlockIterator::new(Source::Path {
         path,
         filename: filename.unbind(),
-        text,
+        kind,
     }))
 }

@@ -1,9 +1,12 @@
 # mypy: allow-untyped-decorators
 """Test reading SDFs into blocks: parse_sdf, from_lines, from_sdf, decoding."""
+import contextlib
+import copy
 import errno
 import gc
 import io
 import os
+import pickle
 import subprocess
 import sys
 import threading
@@ -492,7 +495,8 @@ LATIN1_TITLE = b"\xa6\n\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\nM  END\n$$$$
 
 
 DECODE_HINT = (
-    "parse_sdf(os.fsencode(path)) reads such files as bytes, and "
+    'parse_sdf(path, errors="replace") decodes such files leniently, '
+    "parse_sdf(os.fsencode(path)) reads them as bytes, and "
     "SDBlock.from_lines(open(path, encoding=...)) decodes another encoding."
 )
 
@@ -626,6 +630,171 @@ def test_byte_level_methods_work_on_undecodable_text(tmp_path: Path) -> None:
     assert block.records() == [("F", "new")]
     with pytest.raises(UnicodeDecodeError):
         block.mdl
+
+
+Lenient = typing.Literal["replace", "backslashreplace", "surrogateescape"]
+LENIENT: list[Lenient] = ["replace", "backslashreplace", "surrogateescape"]
+
+
+@pytest.mark.parametrize("errors", LENIENT)
+def test_parse_sdf_errors_decode_text_with_the_handler(
+    tmp_path: Path, errors: Lenient
+) -> None:
+    """A handler decodes every accessor's text as bytes.decode would.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+        errors: the handler to parse with
+    """
+    path = tmp_path / "latin1.sdf"
+    path.write_bytes(LATIN1_TITLE + LATIN1_BODY)
+
+    def decoded(data: bytes) -> str:
+        return data.decode(errors=errors)
+
+    bad_title, block = parse_sdf(path, errors=errors)
+    assert bad_title.title == decoded(b"\xa6")
+    assert block.to_sdf() == decoded(LATIN1_BODY)
+    assert block.molblock == block.title + "\n" + block.mdl
+    assert block.to_sdf().startswith(block.molblock)
+    assert block.records() == [("F", decoded(b"\xa6 bad")), (decoded(b"\xa6"), "v")]
+    for _, read, _ in DECODING.values():
+        # V2000 CTable edits raise NotImplementedError once decoding works.
+        with contextlib.suppress(NotImplementedError):
+            read(block)
+
+
+@pytest.mark.parametrize("errors", LENIENT)
+def test_parse_sdf_errors_write_bytes_to_paths_and_text_to_files(
+    tmp_path: Path, errors: Lenient
+) -> None:
+    """Paths get a lenient block's bytes as read; text files its decoded text.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixtures.
+        errors: the handler to parse with
+    """
+    data = LATIN1_TITLE + b"ok\n\nM  END\n> <A>\n\xc3\xa9\n\n$$$$\n" + LATIN1_BODY
+    path = tmp_path / "latin1.sdf"
+    path.write_bytes(data)
+    out = tmp_path / "out.sdf"
+    assert write_sdf(out, parse_sdf(path, errors=errors)) == 3
+    assert out.read_bytes() == data
+    handle = io.StringIO()
+    write_sdf(handle, parse_sdf(path, errors=errors))
+    assert handle.getvalue() == data.decode(errors=errors)
+    handle = io.StringIO()
+    for block in parse_sdf(path, errors=errors):
+        block.write(handle)
+    assert handle.getvalue() == data.decode(errors=errors)
+
+
+def test_parse_sdf_errors_strict_blocks_still_raise_when_mixed(tmp_path: Path) -> None:
+    """A text file object decodes each block with its own handler.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+    """
+    path = tmp_path / "latin1.sdf"
+    path.write_bytes(LATIN1_BODY)
+    blocks = [*parse_sdf(path, errors="replace"), *parse_sdf(path)]
+    with pytest.raises(UnicodeDecodeError):
+        write_sdf(io.StringIO(), blocks)
+
+
+def test_parse_sdf_surrogateescape_round_trips_names_and_values(
+    tmp_path: Path,
+) -> None:
+    """Only surrogateescape gives back names and values that find the bytes.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+    """
+    path = tmp_path / "latin1.sdf"
+    path.write_bytes(LATIN1_BODY)
+    (block,) = parse_sdf(path, errors="surrogateescape")
+    name = block.names()[1]
+    assert block[name] == "v"
+    block.set_record(name, block["F"])
+    block.title = "\udcff"
+    out = tmp_path / "out.sdf"
+    write_sdf(out, [block])
+    assert out.read_bytes() == LATIN1_BODY.replace(b"first", b"\xff").replace(
+        b"<\xa6>\nv", b"<\xa6>\n\xa6 bad"
+    )
+    (replaced,) = parse_sdf(path, errors="replace")
+    assert replaced.names()[1] not in replaced
+    with pytest.raises(UnicodeEncodeError):
+        replaced.set_record("F", "\udcff")
+
+
+@pytest.mark.parametrize("errors", LENIENT)
+def test_parse_sdf_errors_survive_copies_and_pickles(
+    tmp_path: Path, errors: Lenient
+) -> None:
+    """Copies and pickles keep the handler; equality ignores it.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+        errors: the handler to parse with
+    """
+    path = tmp_path / "latin1.sdf"
+    path.write_bytes(LATIN1_BODY)
+    (block,) = parse_sdf(path, errors=errors)
+    for copied in (
+        copy.copy(block),
+        copy.deepcopy(block),
+        pickle.loads(pickle.dumps(block)),
+    ):
+        assert copied == block
+        assert copied.records() == block.records()
+    assert block == next(parse_sdf(path))
+    assert len(next(parse_sdf(path)).__reduce__()[1]) == 4
+
+
+def test_parse_sdf_errors_do_not_share_cached_names(tmp_path: Path) -> None:
+    """Names that are not UTF-8 decode with each block's own handler.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+    """
+    path = tmp_path / "latin1.sdf"
+    path.write_bytes(LATIN1_BODY * 2)
+    for _ in range(2):
+        for errors in LENIENT:
+            for block in parse_sdf(path, errors=errors):
+                assert block.names() == ["F", b"\xa6".decode(errors=errors)]
+                assert list(block) == block.names()
+
+
+@pytest.mark.parametrize(
+    ("source", "errors", "message"),
+    [
+        ("{path}", "ignore", "errors must be 'strict', 'replace'"),
+        ("{bytes}", "replace", "applies only to str paths"),
+        ("{file}", "replace", "applies only to str paths"),
+    ],
+)
+def test_parse_sdf_rejects_other_errors(
+    tmp_path: Path, source: str, errors: str, message: str
+) -> None:
+    """Unsupported handlers, and handlers for sources that do not decode, raise.
+
+    Args:
+        tmp_path: Temporary directory for the SDF fixture.
+        source: which source to pass
+        errors: the handler to pass
+        message: what the ValueError says
+    """
+    path = tmp_path / "latin1.sdf"
+    path.write_bytes(LATIN1_BODY)
+    sources: dict[str, object] = {
+        "{path}": path,
+        "{bytes}": os.fsencode(path),
+        "{file}": io.BytesIO(LATIN1_BODY),
+    }
+    with pytest.raises(ValueError, match=message):
+        parse_sdf(sources[source], errors=errors)  # type: ignore[call-overload]
 
 
 def test_from_lines_reads_file_objects_in_chunks() -> None:

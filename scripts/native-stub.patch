@@ -106,7 +106,7 @@
          """
          Set a record as `set_record(name, value)` does.
 
-@@ -349,10 +376,26 @@
+@@ -358,10 +385,26 @@
              NotImplementedError: as CTable.fix_counts raises
          """
 
@@ -134,7 +134,7 @@
          ),
      ) -> _SDBlockIterator[Any]:
          """
-@@ -389,6 +432,13 @@
+@@ -398,6 +441,13 @@
                  reads that are not str or bytes or that mix the two
          """
 
@@ -148,7 +148,7 @@
      @staticmethod
      def from_sdf(sdf: str | bytes) -> _SDBlockIterator[Any]:
          """
-@@ -409,7 +459,10 @@
+@@ -418,7 +468,10 @@
              TypeError: if `sdf` is not str or bytes
          """
 
@@ -160,7 +160,7 @@
          """
          Return the value of the last record named `name`, or `default`.
 
-@@ -437,7 +490,7 @@
+@@ -446,7 +499,7 @@
          """
 
      @property
@@ -169,7 +169,7 @@
          """
          Return the CTAB after the title, through `M  END`, as one value.
 
-@@ -447,7 +500,7 @@
+@@ -456,7 +509,7 @@
          """
 
      @property
@@ -178,7 +178,7 @@
          """
          Return the title line and CTAB through `M  END` as one value.
 
-@@ -456,7 +509,7 @@
+@@ -465,7 +518,7 @@
          """
 
      @molblock.setter
@@ -187,7 +187,7 @@
          """
          Replace the title line and CTAB, keeping the SD data.
 
-@@ -587,7 +640,7 @@
+@@ -596,7 +649,7 @@
          """
 
      @property
@@ -196,7 +196,7 @@
          """
          Return the title line without trailing whitespace, in the input type.
 
-@@ -597,7 +650,7 @@
+@@ -606,7 +659,7 @@
          """
 
      @title.setter
@@ -205,7 +205,7 @@
          """
          Replace the title line.
 
-@@ -637,13 +690,13 @@
+@@ -646,13 +699,13 @@
          """
 
  @final
@@ -222,7 +222,7 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -651,25 +704,43 @@
+@@ -660,25 +713,49 @@
          """
 
  @final
@@ -254,10 +254,16 @@
  def parse_sdf(
 -    source: str | bytes | os.PathLike[str] | os.PathLike[bytes],
 +    source: str | os.PathLike[str] | _SupportsRead[str] | _SupportsRead1[str],
++    *,
++    errors: Literal[
++        "strict", "replace", "backslashreplace", "surrogateescape"
++    ] = "strict",
 +) -> _SDBlockIterator[str]: ...
 +@overload
 +def parse_sdf(
 +    source: bytes | os.PathLike[bytes] | _SupportsRead[bytes] | _SupportsRead1[bytes],
++    *,
++    errors: Literal["strict"] = "strict",
 +) -> _SDBlockIterator[bytes]: ...
 +@overload
 +def parse_sdf(
@@ -271,11 +277,11 @@
 +        | _SupportsRead1[str]
 +        | _SupportsRead1[bytes]
 +    ),
- ) -> _SDBlockIterator[Any]:
-     """
-     Lazily parse SDBlocks from an SDF path or file object.
-@@ -701,10 +772,13 @@
-         TypeError: if `source` is neither a path nor a file object
+     *,
+     errors: Literal[
+         "strict", "replace", "backslashreplace", "surrogateescape"
+@@ -722,10 +799,13 @@
+             than a str path
      """
 
 +@overload

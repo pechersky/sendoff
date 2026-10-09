@@ -33,8 +33,8 @@ Usage
    from rdkit import Chem
    from sendoff import SDBlock, parse_sdf, write_sdf
 
-   # str paths give SDBlock[str]; bytes paths give SDBlock[bytes], for feeds
-   # that are not valid UTF-8.
+   # str paths give SDBlock[str], and errors="replace" decodes feeds that
+   # are not valid UTF-8 leniently; bytes paths give SDBlock[bytes].
    for block in parse_sdf("compounds.sdf"):
        block.title
        block["ID"]  # the last value named "ID"; KeyError if none
