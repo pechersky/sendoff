@@ -11,6 +11,7 @@ pyo3::import_exception!(sendoff.ctable, IndicesDuplicateError);
 pyo3::import_exception!(sendoff.ctable, IndicesMismatchError);
 pyo3::import_exception!(sendoff.ctable, IndicesOutOfOrderError);
 pyo3::import_exception!(sendoff.ctable, MalformedCTableError);
+pyo3::import_exception!(sendoff.sdblock, MalformedRecordError);
 
 impl From<CTableError> for PyErr {
     fn from(error: CTableError) -> Self {
@@ -33,7 +34,7 @@ impl From<CTableError> for PyErr {
 
 impl From<MissingFieldName> for PyErr {
     fn from(error: MissingFieldName) -> Self {
-        PyValueError::new_err(error.to_string())
+        MalformedRecordError::new_err(error.to_string())
     }
 }
 

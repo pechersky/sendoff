@@ -203,7 +203,9 @@ class SDBlock(Generic[AnyStr]):
 
     A record's value is its lines up to a blank one, as read but without
     their line endings, joined with "\\n". Lines that `str.strip()`, or
-    `bytes.strip()` for bytes blocks, empties are blank.
+    `bytes.strip()` for bytes blocks, empties are blank. Methods that read
+    records raise sendoff.MalformedRecordError, a ValueError, at a header
+    line with no `<name>`.
     """
 
     def __bool__(self, /) -> bool:
@@ -220,7 +222,7 @@ class SDBlock(Generic[AnyStr]):
 
         Raises:
             TypeError: if `name` is not the block's type
-            ValueError: if a record header has no `<name>`
+            MalformedRecordError: if a record header has no `<name>`
         """
 
     def __copy__(self, /) -> SDBlock[AnyStr]:

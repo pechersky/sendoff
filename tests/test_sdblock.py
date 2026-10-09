@@ -7,7 +7,7 @@ import typing
 
 import pytest
 
-from sendoff.sdblock import SDBlock
+from sendoff.sdblock import MalformedRecordError, SDBlock
 
 
 def test_bytes_block_requires_binary_append_values() -> None:
@@ -76,11 +76,11 @@ def test_iter_records_defers_malformed_field_error() -> None:
     iterator = block.iter_records()
 
     assert next(iterator) == ("Good", "value")
-    with pytest.raises(ValueError, match="missing a name"):
+    with pytest.raises(MalformedRecordError, match="missing a name"):
         next(iterator)
     with pytest.raises(StopIteration):
         next(iterator)
-    with pytest.raises(ValueError, match="missing a name"):
+    with pytest.raises(MalformedRecordError, match="missing a name"):
         block.records()
 
 
@@ -233,9 +233,9 @@ def test_record_mutators_check_types_and_headers() -> None:
         byte_block.replace_records([b"AB"])  # type: ignore[list-item]
 
     bad = next(SDBlock.from_lines(["t\n", "M  END\n", "> no name\n", "1\n"]))
-    with pytest.raises(ValueError, match="missing a name"):
+    with pytest.raises(MalformedRecordError, match="missing a name"):
         bad.set_record("A", "1")
-    with pytest.raises(ValueError, match="missing a name"):
+    with pytest.raises(MalformedRecordError, match="missing a name"):
         bad.remove_record("A")
     bad.replace_records({"A": "1"})
     assert bad.records() == [("A", "1")]
@@ -341,8 +341,50 @@ def test_names_len_and_contains_skip_values() -> None:
     assert (block.names(), len(block), "A" in block) == (["B", "C"], 2, False)
     malformed = SDBlock("t\n\nM  END\n> <A>\n1\n\n> no name\n1\n\n$$$$\n")
     for call in (malformed.names, lambda: len(malformed), lambda: "A" in malformed):
-        with pytest.raises(ValueError):
+        with pytest.raises(MalformedRecordError):
             call()
+
+
+@pytest.mark.parametrize(
+    "read",
+    [
+        lambda block: block.records(),
+        lambda block: list(block.iter_records()),
+        lambda block: block.get("B"),
+        lambda block: block["A"],
+        lambda block: list(block),
+        lambda block: block.to_dict(),
+        lambda block: block.set_record("B", "2"),
+        lambda block: block.remove_record("B"),
+        lambda block: block.__setitem__("B", "2"),
+        lambda block: block.__delitem__("A"),
+    ],
+    ids=[
+        "records",
+        "iter_records",
+        "get",
+        "getitem",
+        "iter",
+        "to_dict",
+        "set_record",
+        "remove_record",
+        "setitem",
+        "delitem",
+    ],
+)
+def test_nameless_headers_raise_malformed_record_error(
+    read: typing.Callable[[SDBlock[str]], object],
+) -> None:
+    """Reading or editing records past a header without `<name>` raises.
+
+    Args:
+        read: what reads the records
+    """
+    block = SDBlock("t\n\nM  END\n> <A>\n1\n\n> no name\n1\n\n$$$$\n")
+    with pytest.raises(MalformedRecordError, match="^SD data field header is"):
+        read(block)
+    assert issubclass(MalformedRecordError, ValueError)
+    assert block.to_sdf() == "t\n\nM  END\n> <A>\n1\n\n> no name\n1\n\n$$$$\n"
 
 
 def test_appended_records_follow_a_blank_line() -> None:

@@ -71,7 +71,8 @@ New header lines are ``> <name>``; pass ``header="padded"`` for ``>  <name>``,
 as RDKit and Open Babel write, or ``header="copy"`` to follow the block's first
 header, which is a bit slower. Existing header lines are kept. Names are written
 unchecked; the CTfile format wants a letter, then letters, digits, or
-underscores.
+underscores. Reading records past a header line with no ``<name>`` raises
+``sendoff.MalformedRecordError``, a ``ValueError``.
 
 ``write_sdf`` to a path writes in large chunks with the GIL released, so prefer
 it to a ``block.write`` loop. ``parse_sdf`` memory-maps regular files on local
