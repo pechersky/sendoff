@@ -112,6 +112,25 @@ def test_iter_records_preserves_bytes_and_owns_its_block() -> None:
     assert list(iterator) == [(b"Record", b"third")]
 
 
+def test_iter_records_reads_the_records_as_they_were_when_called() -> None:
+    """Editing the block mid-iteration neither skips nor adds records."""
+    block = SDBlock(
+        "Title\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\nM  END\n"
+        "> <A>\n1\n\n> <B>\n2\n\n$$$$\n"
+    )
+    iterator = block.iter_records()
+    assert next(iterator) == ("A", "1")
+
+    block.title = "Changed"
+    block.set_record("A", "10")
+    block.append_record("C", "3")
+
+    assert list(iterator) == [("B", "2")]
+    for name, value in block.iter_records():
+        block.set_record(name, value * 2)
+    assert block.records() == [("A", "1010"), ("B", "22"), ("C", "33")]
+
+
 def test_get_and_to_dict_match_dict_of_records() -> None:
     """get() and to_dict() let later duplicate records win, like dict()."""
     text = "t\nM  END\n> <A>\n1\n\n> <B>\nx\ny\n\n> <A>\n2\n\n$$$$\n"

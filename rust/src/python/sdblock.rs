@@ -12,7 +12,7 @@ use crate::core::ctable::CTable;
 use crate::core::ctable::error::CTableError;
 use crate::core::lines::lines;
 use crate::core::newline::{translated, universal_newlines};
-use crate::core::record::{HeaderStyle, Record};
+use crate::core::record::{HeaderStyle, Record, Records};
 use crate::core::split::single_block;
 use crate::core::strip::Strip;
 use crate::python::ctable::PyCTable;
@@ -44,10 +44,12 @@ fn header_style(header: &str) -> PyResult<HeaderStyle> {
     }
 }
 
-/// Lazily iterate over one block's SD data records.
+/// Lazily iterate over a copy of one block's SD data records.
 #[pyclass(name = "_SDRecordIterator", module = "sendoff.native")]
 pub(crate) struct PySDRecordIterator {
     block: Py<PySDBlock>,
+    metadata: Box<[u8]>,
+    kind: Kind,
     pos: usize,
     finished: bool,
 }
@@ -62,12 +64,15 @@ impl PySDRecordIterator {
         if self.finished {
             return Ok(None);
         }
-        let block = self.block.bind(py).try_borrow()?;
-        let mut records = block.block.records_at(self.pos, block.kind.strip());
+        let kind = self.kind;
+        let mut records = Records::new(&self.metadata, self.pos, kind.strip());
         let result = match records.next() {
-            Some(Ok(record)) => Namer::with(block.kind, |names| names.lookup(py, record.name))
-                .and_then(|name| PyTuple::new(py, [name, block.kind.value(py, &record.value)?]))
-                .map_err(|error| block.noted(py, error, || reading_record(record.name)))
+            Some(Ok(record)) => Namer::with(kind, |names| names.lookup(py, record.name))
+                .and_then(|name| PyTuple::new(py, [name, kind.value(py, &record.value)?]))
+                .map_err(|error| match self.block.bind(py).try_borrow() {
+                    Ok(block) => block.noted(py, error, || reading_record(record.name)),
+                    Err(_) => error,
+                })
                 .map(Some),
             None => Ok(None),
             Some(Err(error)) => Err(error.into()),
@@ -437,11 +442,18 @@ impl PySDBlock {
 
     /// Lazily iterate over SD data records in input order.
     ///
-    /// Names and values are owned and have the block's type.
+    /// Names and values are owned and have the block's type. Iteration reads
+    /// the records as they were when called, so the loop may edit the block.
     #[pyo3(signature = () -> "_SDRecordIterator[AnyStr]")]
     fn iter_records(slf: Bound<'_, Self>) -> PySDRecordIterator {
+        let (metadata, kind) = {
+            let block = slf.borrow();
+            (block.block.metadata().into(), block.kind)
+        };
         PySDRecordIterator {
             block: slf.unbind(),
+            metadata,
+            kind,
             pos: 0,
             finished: false,
         }

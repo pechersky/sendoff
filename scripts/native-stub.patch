@@ -46,7 +46,7 @@
 
  @final
  class CTable:
-@@ -157,7 +190,7 @@
+@@ -155,7 +188,7 @@
          """
 
  @final
@@ -55,7 +55,7 @@
      """
      Handle a single molecule block from an SD file.
 
-@@ -176,13 +209,7 @@
+@@ -178,13 +211,7 @@
          A block is true even without records, as before it had a length.
          """
 
@@ -70,7 +70,7 @@
          """
          Whether any record is named `name`: `name in block.names()`.
 
-@@ -285,7 +312,7 @@
+@@ -287,7 +314,7 @@
              ValueError: for another `header`
          """
 
@@ -79,7 +79,7 @@
          """
          Parse out the underlying CTable object from a text SDBlock.
 
-@@ -299,7 +326,7 @@
+@@ -301,7 +328,7 @@
              NotImplementedError: for byte-backed SDBlocks
          """
 
@@ -88,7 +88,7 @@
          """
          Set the counts line to the number of atom and bond lines.
 
-@@ -311,10 +338,26 @@
+@@ -313,10 +340,26 @@
                  CTable.fix_counts raises
          """
 
@@ -116,7 +116,7 @@
          ),
      ) -> _SDBlockIterator[Any]:
          """
-@@ -351,6 +394,13 @@
+@@ -353,6 +396,13 @@
                  reads that are not str or bytes or that mix the two
          """
 
@@ -130,7 +130,7 @@
      @staticmethod
      def from_sdf(sdf: str | bytes) -> _SDBlockIterator[Any]:
          """
-@@ -371,7 +421,10 @@
+@@ -373,7 +423,10 @@
              TypeError: if `sdf` is not str or bytes
          """
 
@@ -142,7 +142,7 @@
          """
          Return the value of the last record named `name`, or `default`.
 
-@@ -397,7 +450,7 @@
+@@ -400,7 +453,7 @@
          """
 
      @property
@@ -151,7 +151,7 @@
          """
          Return the CTAB after the title, through `M  END`, as one value.
 
-@@ -407,7 +460,7 @@
+@@ -410,7 +463,7 @@
          """
 
      @property
@@ -160,7 +160,7 @@
          """
          Return the title line and CTAB through `M  END` as one value.
 
-@@ -416,7 +469,7 @@
+@@ -419,7 +472,7 @@
          """
 
      @molblock.setter
@@ -169,7 +169,7 @@
          """
          Replace the title line and CTAB, keeping the SD data.
 
-@@ -484,7 +537,7 @@
+@@ -487,7 +540,7 @@
              TypeError: if `name` is not the block's type
          """
 
@@ -178,7 +178,7 @@
          """
          Renumber atom and bond indices to be 1-indexed and in order.
 
-@@ -550,7 +603,7 @@
+@@ -553,7 +606,7 @@
          """
 
      @property
@@ -187,7 +187,7 @@
          """
          Return the title line without trailing whitespace, in the input type.
 
-@@ -561,7 +614,7 @@
+@@ -563,7 +616,7 @@
          """
 
      @title.setter
@@ -196,7 +196,7 @@
          """
          Replace the title line.
 
-@@ -601,13 +654,13 @@
+@@ -603,13 +656,13 @@
          """
 
  @final
@@ -213,14 +213,14 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -615,14 +668,19 @@
+@@ -617,14 +670,19 @@
          """
 
  @final
 -class _SDRecordIterator:
 +class _SDRecordIterator(Iterator[tuple[AnyStr, AnyStr]]):
      """
-     Lazily iterate over one block's SD data records.
+     Lazily iterate over a copy of one block's SD data records.
      """
 
 -    def __iter__(self, /) -> _SDRecordIterator: ...
@@ -237,7 +237,7 @@
  def parse_sdf(
      path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
  ) -> _SDBlockIterator[Any]:
-@@ -647,10 +705,13 @@
+@@ -649,10 +707,13 @@
          An iterator of SDBlocks; `close()` releases the file early
      """
 
