@@ -373,12 +373,9 @@ def _state_edge_blocks() -> list[SDBlock[str]]:
     Returns:
         Edited and unusual blocks
     """
-    delimiter_title = SDBlock("t\n  prog\n\nM  END\n> <A>\n1\n\n")
-    delimiter_title.title = "$$$$ not a delimiter"
     no_end = SDBlock("t\n  prog\n")
     no_end.append_record("A", "1")
-    padded = SDBlock(" t \n  prog\n\nM  END\n")
-    return [delimiter_title, no_end, padded, SDBlock("")]
+    return [no_end, SDBlock("")]
 
 
 @pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
@@ -450,8 +447,8 @@ def test_block_copies_are_independent(
 
 
 def test_block_repr_shows_the_title() -> None:
-    """The repr shows the stripped title in the block's type."""
-    assert repr(SDBlock(" aspirin \nM  END\n")) == "<SDBlock title='aspirin'>"
+    """The repr shows the title in the block's type."""
+    assert repr(SDBlock(" aspirin \nM  END\n")) == "<SDBlock title=' aspirin'>"
     assert repr(SDBlock(b"aspirin\nM  END\n")) == "<SDBlock title=b'aspirin'>"
 
 
@@ -470,6 +467,7 @@ def test_molblock_setter_replaces_the_structure_only() -> None:
         ("t\nx\n", "no M  END"),
         ("t\nM  END\n> <A>\n1\n", "after its M  END"),
         ("t\n$$$$\nM  END\n", r"\$\$\$\$ line"),
+        ("$$$$\nM  END\n", r"\$\$\$\$ line"),
     ]:
         with pytest.raises(ValueError, match=message):
             block.molblock = bad
@@ -491,28 +489,40 @@ def test_molblock_setter_replaces_the_structure_only() -> None:
 
 
 def test_title_setter_replaces_only_the_title() -> None:
-    """Setting the title keeps the CTAB and records and rejects line breaks."""
+    """Setting the title keeps the CTAB and records and rejects delimiters.
+
+    A title is written as given, so one starting with $$$$ would read back
+    as the end of the block; one starting with a space does not.
+    """
     block = next(SDBlock.from_lines(["old\n", "src\n", "M  END\n", "> <A>\n", "1\n"]))
 
     block.title = "a much longer title"
     assert block.title == "a much longer title"
     assert block.molblock == "a much longer title\nsrc\nM  END\n"
     assert block.records() == [("A", "1")]
-    block.title = " padded "
-    assert block.title == "padded"
-    for bad in ["two\nlines", "cr\r"]:
-        with pytest.raises(ValueError, match="single line"):
+    block.title = " $$$$ "
+    assert block.title == " $$$$"
+    assert block.to_sdf() == " $$$$ \nsrc\nM  END\n> <A>\n1\n$$$$\n"
+    assert [b.title for b in SDBlock.from_sdf(block.to_sdf())] == [" $$$$"]
+    for bad, message in [
+        ("two\nlines", "single line"),
+        ("cr\r", "single line"),
+        ("$$$$", "cannot start with"),
+        ("$$$$ x", "cannot start with"),
+    ]:
+        with pytest.raises(ValueError, match=message):
             block.title = bad
     with pytest.raises(TypeError, match="titles must be str"):
         block.title = b"bytes"  # type: ignore[assignment]
-    assert block.title == "padded"
+    assert block.title == " $$$$"
 
 
 def test_text_strips_like_str_and_bytes_like_bytes() -> None:
-    """Text blocks strip str.strip() whitespace; bytes blocks bytes.strip().
+    """Text blocks strip str whitespace; bytes blocks only ASCII whitespace.
 
-    A value line holding only Unicode whitespace is blank in text blocks, as
-    with str.strip() in pure-Python sendoff 0.1.x, so it ends the record.
+    Titles are right-stripped and values stripped. A value line holding only
+    Unicode whitespace is blank in text blocks, as with str.strip() in
+    pure-Python sendoff 0.1.x, so it ends the record.
     """
     text_block = next(
         SDBlock.from_lines(
@@ -545,7 +555,7 @@ def test_text_strips_like_str_and_bytes_like_bytes() -> None:
         )
     )
 
-    assert text_block.title == "Title"
+    assert text_block.title == " \u2003Title"
     assert text_block.records() == [("Record", "Text"), ("Blank", "")]
     assert byte_block.title == b"\xc2\xa0Title\xc2\xa0"
     assert byte_block.records() == [(b"Record", b"\xc2\xa0Bytes\x1f")]

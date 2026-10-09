@@ -653,8 +653,8 @@ def test_bytes_blocks_keep_crlf(tmp_path: Path) -> None:
     blocks = list(parse_sdf(os.fsencode(source)))
     out = io.BytesIO()
     assert write_sdf(out, blocks) == 2
-    assert out.getvalue() == data.replace(b" t1 ", b"t1")
-    assert blocks[0].molblock == b"t1\r\n  prog\r\n\r\nM  END\r\n"
+    assert out.getvalue() == data
+    assert blocks[0].molblock == b" t1 \r\n  prog\r\n\r\nM  END\r\n"
 
     blocks[1].title = b"new"
     blocks[1].append_record(b"C", b"3")
@@ -667,12 +667,10 @@ def test_bytes_blocks_keep_crlf(tmp_path: Path) -> None:
     source.write_bytes(data.removesuffix(b"\r\n"))
     out = io.BytesIO()
     write_sdf(out, parse_sdf(os.fsencode(source)))
-    assert out.getvalue() == data.replace(b" t1 ", b"t1")
+    assert out.getvalue() == data
     with open(source, "rb") as handle:
         lines = handle.readlines()
-    assert bytes.join(b"", (b.to_sdf() for b in SDBlock.from_lines(lines))) == (
-        data.replace(b" t1 ", b"t1")
-    )
+    assert bytes.join(b"", (b.to_sdf() for b in SDBlock.from_lines(lines))) == data
 
 
 def test_titled_mol_read(single_titled_mol_sdf: Pathy) -> None:

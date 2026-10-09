@@ -22,6 +22,7 @@ import tempfile
 import threading
 from typing import Any, Callable, Iterable, Union
 
+import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
@@ -148,10 +149,7 @@ def assert_blocks_match(
         written = serialized(block, text)
         assert written == expected.serialize(), context
         assert block.to_sdf() == written, context
-        if not (
-            block.title.startswith(cast_like(written, "$$$$"))  # reads as delimiter
-            or cast_like(written, "\r") in written  # SDBlock() translates str \r
-        ):
+        if cast_like(written, "\r") not in written:  # SDBlock() translates str \r
             assert serialized(SDBlock(written), text) == written, context
         assert block.molblock == expected.molblock(), context
         newline: Any = "\n" if text else b"\n"
@@ -212,8 +210,6 @@ def reparsed_records(block: SDBlock[Any], text: bool) -> Any:
     mdl = block.molblock.split(cast_like(written, "\n"))[1:]
     if not any(line.startswith(cast_like(written, "M  END")) for line in mdl):
         return block.records()  # records after MDL without M  END read as MDL
-    if block.title.startswith(cast_like(written, "$$$$")):
-        return block.records()  # a written $$$$ title reads as a delimiter
     handle: Any = io.StringIO(written) if text else io.BytesIO(written)
     (reference,) = ref_from_lines(handle)
     return reference.records()
@@ -259,9 +255,14 @@ def assert_mutations_match(block: SDBlock[Any], text: bool) -> None:
     assert reparsed_records(block, text) == block.records()
     assert (block.title, block.molblock) == (title, molblock)
 
-    block.title = cast(" \u3000new title\t" if text else " new title\t")
-    assert block.title == cast("new title")
-    assert block.molblock == cast("new title") + molblock.removeprefix(title)
+    line = cast(" \u3000new title\t" if text else " new title\t")
+    block.title = line
+    assert block.title == line.rstrip()
+    old_line = molblock.partition(cast("\n"))[0].removesuffix(cast("\r"))
+    assert block.molblock == line + molblock.removeprefix(old_line)
+    with pytest.raises(ValueError, match="cannot start with"):
+        block.title = cast("$$$$ new")
+    assert block.title == line.rstrip()
     assert block.records() == [(cast("B"), cast("x\ny")), (name, value)]
 
 

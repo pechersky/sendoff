@@ -6,10 +6,10 @@
 use std::convert::Infallible;
 
 use libfuzzer_sys::fuzz_target;
+use sendoff_fuzz::check_block;
 use sendoff_fuzz::core::block::Block;
 use sendoff_fuzz::core::newline::{TRANSLATE_SLACK, translate_newlines};
 use sendoff_fuzz::core::split::{Scanner, Tail, split_block};
-use sendoff_fuzz::{STRIPS, check_block};
 
 /// Blocks from a scanner filled in chunks of the cut lengths, translating
 /// newlines per chunk in text mode as the Python reader does.
@@ -51,15 +51,9 @@ fuzz_target!(|input: (bool, Vec<u16>, &[u8])| {
 
     for block in &blocks {
         check_block(block);
-        for strip in STRIPS {
-            // Stripping can make a title read back as a `$$$$` line.
-            if block.title(strip).starts_with(b"$$$$") {
-                continue;
-            }
-            let once = block.serialized(strip);
-            let (again, taken) = split_block(&once, false);
-            assert_eq!(taken, once.len());
-            assert_eq!(*again.serialized(strip), *once);
-        }
+        let once = block.serialized();
+        let (again, taken) = split_block(once, false);
+        assert_eq!(taken, once.len());
+        assert_eq!(again.serialized(), once);
     }
 });

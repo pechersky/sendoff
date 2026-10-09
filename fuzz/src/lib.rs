@@ -22,12 +22,9 @@ pub fn check_block(block: &Block) {
         "parts do not rebuild the block"
     );
 
+    assert!(block.serialized().starts_with(block.molblock()));
     for strip in STRIPS {
-        let mut into = Vec::new();
-        block.serialize_into(strip, &mut into);
-        assert_eq!(*block.serialized(strip), *into);
-        let _ = block.molblock(strip);
-
+        assert!(block.molblock().starts_with(block.title(strip)));
         let records: Vec<_> = block.records(strip).collect();
         let headers: Vec<_> = block.headers(strip).collect();
         assert_eq!(records.len(), headers.len());

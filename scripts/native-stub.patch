@@ -169,7 +169,7 @@
          """
          Replace the title line and CTAB, keeping the SD data.
 
-@@ -485,7 +538,7 @@
+@@ -484,7 +537,7 @@
              TypeError: if `name` is not the block's type
          """
 
@@ -178,16 +178,16 @@
          """
          Renumber atom and bond indices to be 1-indexed and in order.
 
-@@ -551,7 +604,7 @@
+@@ -550,7 +603,7 @@
          """
 
      @property
 -    def title(self, /) -> Any:
 +    def title(self, /) -> AnyStr:
          """
-         Return the molecule title in the input type.
+         Return the title line without trailing whitespace, in the input type.
 
-@@ -560,7 +613,7 @@
+@@ -561,7 +614,7 @@
          """
 
      @title.setter
@@ -196,7 +196,7 @@
          """
          Replace the title line.
 
-@@ -599,13 +652,13 @@
+@@ -601,13 +654,13 @@
          """
 
  @final
@@ -213,7 +213,7 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -613,14 +666,19 @@
+@@ -615,14 +668,19 @@
          """
 
  @final
@@ -237,7 +237,7 @@
  def parse_sdf(
      path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
  ) -> _SDBlockIterator[Any]:
-@@ -645,10 +703,13 @@
+@@ -647,10 +705,13 @@
          An iterator of SDBlocks; `close()` releases the file early
      """
 

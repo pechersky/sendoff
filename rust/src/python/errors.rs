@@ -3,7 +3,7 @@
 use pyo3::exceptions::{PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::core::block::InvalidMolblock;
+use crate::core::block::{InvalidMolblock, InvalidTitle};
 use crate::core::ctable::error::CTableError;
 use crate::core::record::MissingFieldName;
 
@@ -39,6 +39,12 @@ impl From<MissingFieldName> for PyErr {
 
 impl From<InvalidMolblock> for PyErr {
     fn from(error: InvalidMolblock) -> Self {
+        PyValueError::new_err(error.to_string())
+    }
+}
+
+impl From<InvalidTitle> for PyErr {
+    fn from(error: InvalidTitle) -> Self {
         PyValueError::new_err(error.to_string())
     }
 }

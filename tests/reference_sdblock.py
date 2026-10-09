@@ -12,8 +12,10 @@ header is ``> <name>``, ``>  <name>``, or a copy of the first named header's
 line around the name, as its ``header`` style asks. A block whose
 first line starts with ``$$$$`` is an empty record, as the CTfile spec reads
 any such line as a terminator, rather than a ``$$$$`` title that each write
-doubled. Divergences that are accepted but not modeled here are kept out of
-the generated inputs instead.
+doubled. The title line is kept and written as read, and ``title`` only
+right-strips it, since a stripped title such as `` $$$$`` written back reads
+as a delimiter. Divergences that are accepted but not modeled here are kept
+out of the generated inputs instead.
 """
 
 from __future__ import annotations
@@ -44,7 +46,7 @@ def _lit(sample: AnyStr, text: str) -> AnyStr:
 class RefBlock(Generic[AnyStr]):
     """A molecule block parsed by the reference implementation."""
 
-    title: AnyStr
+    title_line: AnyStr
     newline: AnyStr
     trailer: AnyStr
     mdl: list[AnyStr] = field(default_factory=list)
@@ -53,7 +55,7 @@ class RefBlock(Generic[AnyStr]):
 
     @classmethod
     def from_block_lines(cls, lines: list[AnyStr]) -> RefBlock[AnyStr]:
-        """Split block lines into a stripped title, MDL, and metadata.
+        """Split block lines into a title line, MDL, and metadata.
 
         Args:
             lines: one block's lines, including any ``$$$$`` delimiter
@@ -92,7 +94,16 @@ class RefBlock(Generic[AnyStr]):
             if line.startswith(delimiter):
                 break
             metadata.append(line)
-        return cls(first.strip(), newline, trailer, mdl, metadata)
+        return cls(first[: -len(newline)], newline, trailer, mdl, metadata)
+
+    @property
+    def title(self) -> AnyStr:
+        """Return the title line without trailing whitespace.
+
+        Returns:
+            The right-stripped title line.
+        """
+        return self.title_line.rstrip()
 
     def records(self) -> list[tuple[AnyStr, AnyStr]]:
         """Return (name, value) records exactly as main's generator yields them.
@@ -160,15 +171,15 @@ class RefBlock(Generic[AnyStr]):
         return None
 
     def molblock(self) -> AnyStr:
-        """Return the title and MDL lines as main's idiom joins them.
+        """Return the title line and MDL lines.
 
         Returns:
-            The stripped title, the title line's ending, and the MDL lines,
-            or nothing for an empty record.
+            The title line, its ending, and the MDL lines, or nothing for an
+            empty record.
         """
         if not self.titled:
-            return self.title
-        return self.title[:0].join([self.title, self.newline] + self.mdl)
+            return self.title_line
+        return self.title_line[:0].join([self.title_line, self.newline] + self.mdl)
 
     def serialize(self) -> AnyStr:
         """Return what main's ``write(outh)`` writes, as one value.
@@ -178,8 +189,8 @@ class RefBlock(Generic[AnyStr]):
         """
         if not self.titled:
             return self.trailer
-        return self.title[:0].join(
-            [self.title, self.newline] + self.mdl + self.metadata + [self.trailer]
+        return self.title_line[:0].join(
+            [self.title_line, self.newline] + self.mdl + self.metadata + [self.trailer]
         )
 
 

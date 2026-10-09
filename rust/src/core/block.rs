@@ -83,13 +83,21 @@ pub enum InvalidMolblock {
     Delimiter,
 }
 
+/// Why a value cannot be a block's title.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidTitle {
+    #[error("SDBlock titles must be a single line")]
+    LineBreak,
+    #[error("SDBlock titles cannot start with $$$$, which would end the block")]
+    Delimiter,
+}
+
 /// One molecule block: a title line, MDL lines, and SD data lines.
 ///
-/// `data` also ends with a `$$$$` line, so an unstripped block serializes
-/// as a single copy of `data`. Lines the block writes or ends itself (a
-/// stripped title, new records, a missing or normalized `$$$$`, a last line
-/// without `\n`) end like the title line, so CRLF input stays CRLF; a line
-/// ending in a bare `\r` gets just `\n`.
+/// `data` also ends with a `$$$$` line, so a block serializes as `data`.
+/// Lines the block writes or ends itself (new records, a missing or
+/// normalized `$$$$`, a last line without `\n`) end like the title line, so
+/// CRLF input stays CRLF; a line ending in a bare `\r` gets just `\n`.
 ///
 /// A record that is only a `$$$$` line has no title line (`title_end` is 0),
 /// since a line starting with `$$$$` always ends a record; it writes back as
@@ -133,9 +141,8 @@ impl Block {
     /// The data, ending with a `$$$$` line, and where the title and MDL end:
     /// what `from_parts` rebuilds the block from.
     ///
-    /// Re-parsing the serialized block does not always restore it: a title
-    /// set to start with `$$$$` reads back as a delimiter, and SD data can
-    /// follow an MDL without `M  END`.
+    /// Re-parsing the serialized block does not always restore it: SD data
+    /// can follow an MDL without `M  END`.
     pub fn parts(&self) -> Parts<'_> {
         Parts {
             data: &self.data,
@@ -194,9 +201,9 @@ impl Block {
         }
     }
 
-    /// The stripped title.
+    /// The title line without trailing whitespace.
     pub fn title(&self, strip: Strip) -> &[u8] {
-        strip.trim(&self.data[..self.title_end])
+        strip.trim_end(&self.data[..self.title_end])
     }
 
     /// The MDL lines after the title, through `M  END`, each ending in `\n`.
@@ -204,29 +211,9 @@ impl Block {
         &self.data[self.title_end..self.mdl_end]
     }
 
-    /// The stripped title line followed by the MDL lines: a mol block.
-    ///
-    /// Borrows from the block unless stripping changed the title.
-    pub fn molblock(&self, strip: Strip) -> Cow<'_, [u8]> {
-        self.retitled(strip, self.mdl_end)
-    }
-
-    /// The stripped title line and `data[title_end..end]`.
-    ///
-    /// Borrows from the block unless stripping changed more than the
-    /// title line's ending.
-    fn retitled(&self, strip: Strip, end: usize) -> Cow<'_, [u8]> {
-        let title = self.title(strip);
-        let newline = self.newline();
-        if self.title_end == 0 || title.len() + newline.len() == self.title_end {
-            return Cow::Borrowed(&self.data[..end]);
-        }
-        let rest = &self.data[self.title_end..end];
-        let mut output = Vec::with_capacity(title.len() + newline.len() + rest.len());
-        output.extend_from_slice(title);
-        output.extend_from_slice(newline);
-        output.extend_from_slice(rest);
-        Cow::Owned(output)
+    /// The title line followed by the MDL lines: a mol block.
+    pub fn molblock(&self) -> &[u8] {
+        &self.data[..self.mdl_end]
     }
 
     /// The SD data lines, each ending in `\n`.
@@ -234,20 +221,9 @@ impl Block {
         &self.data[self.mdl_end..self.body_end()]
     }
 
-    /// The stripped title, the remaining lines, and `$$$$`.
-    ///
-    /// Borrows from the block unless stripping changed the title.
-    pub fn serialized(&self, strip: Strip) -> Cow<'_, [u8]> {
-        self.retitled(strip, self.data.len())
-    }
-
-    /// Append what `serialized` returns to `out`.
-    pub fn serialize_into(&self, strip: Strip, out: &mut Vec<u8>) {
-        if self.title_end > 0 {
-            out.extend_from_slice(self.title(strip));
-            out.extend_from_slice(self.newline());
-        }
-        out.extend_from_slice(&self.data[self.title_end..]);
+    /// The block as written: its lines and `$$$$`.
+    pub fn serialized(&self) -> &[u8] {
+        &self.data
     }
 
     /// Append a record with a single value line, after a blank line unless
@@ -299,9 +275,14 @@ impl Block {
         !strip.trim(&body[start..]).is_empty()
     }
 
-    /// Replace the title line with `title`, which must not contain `\n`,
-    /// keeping the line's ending.
-    pub fn set_title(&mut self, title: &[u8]) {
+    /// Replace the title line with `title`, keeping the line's ending.
+    pub fn set_title(&mut self, title: &[u8]) -> Result<(), InvalidTitle> {
+        if title.iter().any(|&byte| byte == b'\n' || byte == b'\r') {
+            return Err(InvalidTitle::LineBreak);
+        }
+        if title.starts_with(b"$$$$") {
+            return Err(InvalidTitle::Delimiter);
+        }
         let old_end = self.title_end;
         let newline = self.newline();
         let mut line = Vec::with_capacity(title.len() + newline.len());
@@ -310,12 +291,13 @@ impl Block {
         self.data.splice(..old_end, line);
         self.title_end = title.len() + newline.len();
         self.mdl_end = self.mdl_end - old_end + self.title_end;
+        Ok(())
     }
 
     /// Replace the title line and MDL with `molblock`, keeping the SD data.
     ///
     /// `molblock` must run through an `M  END` line followed only by
-    /// whitespace, with no `$$$$` line after the title.
+    /// whitespace, with no line starting with `$$$$`.
     pub fn set_molblock(&mut self, molblock: &[u8]) -> Result<(), InvalidMolblock> {
         let title_end = line_end(molblock, 0);
         let mdl_end =
@@ -323,7 +305,7 @@ impl Block {
         if !molblock[mdl_end..].iter().all(u8::is_ascii_whitespace) {
             return Err(InvalidMolblock::TrailingData);
         }
-        if lines(&molblock[title_end..mdl_end]).any(|line| line.starts_with(b"$$$$")) {
+        if lines(&molblock[..mdl_end]).any(|line| line.starts_with(b"$$$$")) {
             return Err(InvalidMolblock::Delimiter);
         }
         let metadata = &self.data[self.mdl_end..];
@@ -491,7 +473,7 @@ mod tests {
     }
 
     fn written(block: &Block) -> String {
-        String::from_utf8(block.serialized(Strip::Bytes).into_owned()).unwrap()
+        String::from_utf8(block.serialized().to_vec()).unwrap()
     }
 
     fn records(block: &Block) -> Result<Vec<(String, String)>, MissingFieldName> {
@@ -510,7 +492,7 @@ mod tests {
     #[test]
     fn splits_title_mdl_and_metadata() {
         let block = block(" t \r\nsrc\nM  END\n> <A>\n a \nb\n\n> <B>\n\n$$$$\n", true);
-        assert_eq!(block.title(Strip::Bytes), b"t");
+        assert_eq!(block.title(Strip::Bytes), b" t");
         assert_eq!(block.mdl(), b"src\nM  END\n");
         assert_eq!(block.metadata(), b"> <A>\n a \nb\n\n> <B>\n\n");
         assert_eq!(
@@ -519,7 +501,7 @@ mod tests {
         );
         assert_eq!(
             written(&block),
-            "t\r\nsrc\nM  END\n> <A>\n a \nb\n\n> <B>\n\n$$$$\n"
+            " t \r\nsrc\nM  END\n> <A>\n a \nb\n\n> <B>\n\n$$$$\n"
         );
         let header_in_mdl = self::block("t\n> <A>\nM  END\n> <C>\nx\n$$$$\n", true);
         assert_eq!(records(&header_in_mdl).unwrap(), [("C".into(), "x".into())]);
@@ -541,12 +523,9 @@ mod tests {
         let block = block("$$$$ x\n", true);
         assert_eq!(block.title(Strip::Bytes), b"");
         assert_eq!(block.mdl(), b"");
-        assert_eq!(block.molblock(Strip::Bytes).as_ref(), b"");
+        assert_eq!(block.molblock(), b"");
         assert_eq!(records(&block).unwrap(), []);
         assert_eq!(written(&block), "$$$$\n");
-        let mut out = Vec::new();
-        block.serialize_into(Strip::Bytes, &mut out);
-        assert_eq!(out, b"$$$$\n");
         assert_eq!(written(&self::block("$$$$ x\r\n", true)), "$$$$\r\n");
         let Parts {
             data,
@@ -583,24 +562,23 @@ mod tests {
         mdl.replace_mdl([&b"M  END"[..]]);
         assert_eq!(written(&mdl), "\r\nM  END\r\n$$$$\r\n");
         let mut titled = empty;
-        titled.set_title(b"t");
+        titled.set_title(b"t").unwrap();
         assert_eq!(written(&titled), "t\r\n$$$$\r\n");
     }
 
     #[test]
     fn crlf_blocks_keep_their_line_endings() {
         let tidy = block("t\r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$\r\n", true);
-        assert!(matches!(tidy.serialized(Strip::Bytes), Cow::Borrowed(_)));
-        assert!(matches!(
-            tidy.molblock(Strip::Bytes),
-            Cow::Borrowed(b"t\r\nM  END\r\n")
-        ));
+        assert_eq!(tidy.molblock(), b"t\r\nM  END\r\n");
         assert_eq!(tidy.mdl(), b"M  END\r\n");
 
         // Lines the block writes itself end like the title line.
         let mut block = block(" t \r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$ x\r\n", true);
-        assert_eq!(block.title(Strip::Bytes), b"t");
-        assert_eq!(written(&block), "t\r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$\r\n");
+        assert_eq!(block.title(Strip::Bytes), b" t");
+        assert_eq!(
+            written(&block),
+            " t \r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$\r\n"
+        );
         assert_eq!(
             written(&self::block("t\r\nx\r\n", false)),
             "t\r\nx\r\n$$$$\r\n"
@@ -616,7 +594,7 @@ mod tests {
         assert_eq!(written(&self::block("t\r", false)), "t\r\n$$$$\r\n");
         assert_eq!(written(&self::block("t", false)), "t\n$$$$\n");
         block.append_record(b"B", b"2", Strip::Bytes, HeaderStyle::Plain);
-        block.set_title(b"new");
+        block.set_title(b"new").unwrap();
         block
             .set_record(b"A", b"3", Strip::Bytes, HeaderStyle::Plain)
             .unwrap();
@@ -741,6 +719,7 @@ mod tests {
             (b"M  END\n", InvalidMolblock::MissingEnd),
             (b"t\nM  END\n> <A>\n", InvalidMolblock::TrailingData),
             (b"t\n$$$$\nM  END\n", InvalidMolblock::Delimiter),
+            (b"$$$$ t\nM  END\n", InvalidMolblock::Delimiter),
         ] {
             assert_eq!(block.set_molblock(bad), Err(error));
         }
@@ -750,11 +729,23 @@ mod tests {
     #[test]
     fn set_title_keeps_the_rest() {
         let mut block = block(" old \nsrc\nM  END\n> <A>\na\n\n$$$$\n", true);
-        block.set_title(b"a much longer title");
+        block.set_title(b"a much longer title").unwrap();
         assert_eq!(block.title(Strip::Bytes), b"a much longer title");
         assert_eq!(block.mdl(), b"src\nM  END\n");
         assert_eq!(records(&block).unwrap(), [("A".into(), "a".into())]);
-        block.set_title(b"");
+        block.set_title(b" $$$$ ").unwrap();
+        assert_eq!(written(&block), " $$$$ \nsrc\nM  END\n> <A>\na\n\n$$$$\n");
+        let before = block.clone();
+        for (bad, error) in [
+            (&b"a\nb"[..], InvalidTitle::LineBreak),
+            (b"a\r", InvalidTitle::LineBreak),
+            (b"$$$$", InvalidTitle::Delimiter),
+            (b"$$$$x", InvalidTitle::Delimiter),
+        ] {
+            assert_eq!(block.set_title(bad), Err(error));
+        }
+        assert_eq!(block, before);
+        block.set_title(b"").unwrap();
         assert_eq!(written(&block), "\nsrc\nM  END\n> <A>\na\n\n$$$$\n");
     }
 
@@ -799,7 +790,7 @@ mod tests {
     fn str_strip_ends_records_at_unicode_blank_lines() {
         let text = "\u{3000}t\u{a0}\nM  END\n> <A>\u{2003}\n\u{3000}\n\u{1c}tail\n\n";
         let block = block(text, false);
-        assert_eq!(block.title(Strip::Str), b"t");
+        assert_eq!(block.title(Strip::Str), "\u{3000}t".as_bytes());
         let mut records = block.records(Strip::Str);
         let record = records.next().unwrap().unwrap();
         assert_eq!((record.name, &*record.value), (&b"A"[..], &b""[..]));
@@ -846,15 +837,13 @@ mod tests {
     }
 
     #[test]
-    fn molblock_is_the_stripped_title_and_mdl() {
+    fn molblock_is_the_title_line_and_mdl() {
         let plain = block("t\nsrc\nM  END\n> <A>\na\n\n", false);
-        assert!(matches!(plain.molblock(Strip::Bytes), Cow::Borrowed(_)));
-        assert_eq!(&*plain.molblock(Strip::Bytes), b"t\nsrc\nM  END\n");
+        assert_eq!(plain.molblock(), b"t\nsrc\nM  END\n");
         let padded = block(" t \nsrc\nM  END\n", false);
-        assert_eq!(&*padded.molblock(Strip::Bytes), b"t\nsrc\nM  END\n");
+        assert_eq!(padded.molblock(), b" t \nsrc\nM  END\n");
         let empty = block("\nM  END\n", false);
-        assert!(matches!(empty.molblock(Strip::Bytes), Cow::Borrowed(_)));
-        assert_eq!(&*empty.molblock(Strip::Bytes), b"\nM  END\n");
+        assert_eq!(empty.molblock(), b"\nM  END\n");
     }
 
     #[test]
@@ -862,6 +851,6 @@ mod tests {
         let mut block = block(" t\nold\nM  END\n> <A>\na\n\n", false);
         block.replace_mdl([&b"new"[..], b"M  END\n"]);
         assert_eq!(block.mdl(), b"new\nM  END\n");
-        assert_eq!(written(&block), "t\nnew\nM  END\n> <A>\na\n\n$$$$\n");
+        assert_eq!(written(&block), " t\nnew\nM  END\n> <A>\na\n\n$$$$\n");
     }
 }

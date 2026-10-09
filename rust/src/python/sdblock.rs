@@ -346,10 +346,12 @@ impl PySDBlock {
         ))
     }
 
-    /// Return the molecule title in the input type.
+    /// Return the title line without trailing whitespace, in the input type.
     ///
-    /// Titles, record names, and record values are stripped as `str.strip()`
-    /// does for str blocks and as `bytes.strip()` does for bytes blocks.
+    /// The title is right-stripped as `str.rstrip()` does for str blocks and
+    /// as `bytes.rstrip()` does for bytes blocks; `molblock` and writes keep
+    /// the whole title line. Record values are stripped as `str.strip()` and
+    /// `bytes.strip()` do.
     #[getter]
     fn title<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.kind
@@ -360,18 +362,13 @@ impl PySDBlock {
     /// Replace the title line.
     ///
     /// Raises:
-    ///     ValueError: if the title contains a line break
+    ///     ValueError: if the title contains a line break or starts with
+    ///         `$$$$`, which would end the block
     ///     TypeError: if the title is not the block's type
     #[setter(title)]
     fn set_title(&mut self, title: &Bound<'_, PyAny>) -> PyResult<()> {
         let title = self.arg_bytes(title, "titles")?;
-        if title.iter().any(|&byte| byte == b'\n' || byte == b'\r') {
-            return Err(PyValueError::new_err(
-                "SDBlock titles must be a single line",
-            ));
-        }
-        self.block.set_title(title);
-        Ok(())
+        self.block.set_title(title).map_err(PyErr::from)
     }
 
     /// Return the title line and CTAB through `M  END` as one value.
@@ -381,7 +378,7 @@ impl PySDBlock {
     #[getter]
     fn molblock<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.kind
-            .value(py, &self.block.molblock(self.kind.strip()))
+            .value(py, self.block.molblock())
             .map_err(|error| self.noted(py, error, || "Reading the molblock of".into()))
     }
 
@@ -390,9 +387,8 @@ impl PySDBlock {
     /// For example, `block.molblock = Chem.MolToMolBlock(mol)`. Text
     /// molblocks have CRLF and CR line endings translated to LF, and a
     /// molblock without a final newline gets its title line's ending. So
-    /// `block.molblock = block.molblock` strips the title, as the getter
-    /// does, translates a str block's title line and CTAB to LF, and
-    /// changes nothing else.
+    /// `block.molblock = block.molblock` translates a str block's title line
+    /// and CTAB to LF and changes nothing else.
     ///
     /// Raises:
     ///     ValueError: if the molblock has no `M  END` line, has more than
@@ -524,8 +520,8 @@ impl PySDBlock {
         true
     }
 
-    /// Show the stripped title; a str block's undecodable title bytes show
-    /// as U+FFFD instead of raising.
+    /// Show the title; a str block's undecodable title bytes show as U+FFFD
+    /// instead of raising.
     fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
         let title = self.block.title(self.kind.strip());
         let title = match self.kind {
@@ -629,7 +625,7 @@ impl PySDBlock {
     #[pyo3(signature = () -> "AnyStr")]
     fn to_sdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.kind
-            .value(py, &self.block.serialized(self.kind.strip()))
+            .value(py, self.block.serialized())
             .map_err(|error| self.noted(py, error, || "Writing".into()))
     }
 
@@ -637,8 +633,8 @@ impl PySDBlock {
     ///
     /// Lines end as they were read, so blocks from a bytes path keep "\r\n";
     /// str paths read universal newlines, so their lines end in "\n". Lines
-    /// the block adds or ends (a stripped title, new records, a missing $$$$,
-    /// a last line without "\n") end like the title line. The block is
+    /// the block adds or ends (new records, a missing $$$$, a last line
+    /// without "\n") end like the title line. The block is
     /// written in one `write` call, whose return value is not checked, so an
     /// unbuffered (`buffering=0`) or nonblocking handle may write part of it.
     ///
@@ -647,10 +643,9 @@ impl PySDBlock {
     #[pyo3(signature = (outh: "_SupportsWrite[AnyStr]"))]
     fn write(&self, outh: &Bound<'_, PyAny>) -> PyResult<()> {
         let py = outh.py();
-        let output = self.block.serialized(self.kind.strip());
         let output = self
             .kind
-            .value(py, &output)
+            .value(py, self.block.serialized())
             .map_err(|error| self.noted(py, error, || "Writing".into()))?;
         outh.call_method1(intern!(py, "write"), (output,))?;
         Ok(())

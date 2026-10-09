@@ -128,7 +128,7 @@ pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> P
             let block = block?;
             let block = block.cast::<PySDBlock>()?.try_borrow()?;
             let start = chunk.len();
-            block.block.serialize_into(block.kind.strip(), &mut chunk);
+            chunk.extend_from_slice(block.block.serialized());
             let noted =
                 |error| block.noted(py, error, || format!("Writing block {count} (from 0),"));
             let alone = sink

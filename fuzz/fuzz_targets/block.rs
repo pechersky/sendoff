@@ -99,12 +99,10 @@ fn apply(block: &mut Block, edit: &Edit<'_>, strip: Strip) {
                 assert_eq!(records(block), expected);
             }
         }
-        Edit::Title(title) => {
-            if !title.contains(&b'\n') && !title.contains(&b'\r') {
-                block.set_title(title);
-                assert_eq!(block.title(strip), strip.trim(title));
-            }
-        }
+        Edit::Title(title) => match block.set_title(title) {
+            Ok(()) => assert_eq!(block.title(strip), strip.trim_end(title)),
+            Err(_) => assert_eq!(*block, before),
+        },
         Edit::Molblock(molblock) => {
             if block.set_molblock(molblock).is_err() {
                 assert_eq!(*block, before);

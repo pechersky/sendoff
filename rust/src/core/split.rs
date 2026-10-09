@@ -235,7 +235,7 @@ mod tests {
             .map(|block| {
                 (
                     String::from_utf8(block.title(Strip::Bytes).to_vec()).unwrap(),
-                    String::from_utf8(block.serialized(Strip::Bytes).into_owned()).unwrap(),
+                    String::from_utf8(block.serialized().to_vec()).unwrap(),
                 )
             })
             .collect()
@@ -294,7 +294,7 @@ mod tests {
         let blocks = split_complete(b"a\r$$$$\rb\r\n$$$$\r\nc\n$$$$x\r$$$$", true);
         let serialized: Vec<_> = blocks
             .iter()
-            .map(|block| block.serialized(Strip::Bytes).into_owned())
+            .map(|block| block.serialized().to_vec())
             .collect();
         assert_eq!(
             serialized,
@@ -323,9 +323,8 @@ mod tests {
 
     #[test]
     fn single_block_allows_only_whitespace_after_its_delimiter() {
-        let serialized = |input: &[u8]| {
-            single_block(input.to_vec()).map(|block| block.serialized(Strip::Bytes).into_owned())
-        };
+        let serialized =
+            |input: &[u8]| single_block(input.to_vec()).map(|block| block.serialized().to_vec());
         assert_eq!(
             serialized(b"t\nM  END"),
             Some(b"t\nM  END\n$$$$\n".to_vec())

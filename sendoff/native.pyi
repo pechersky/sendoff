@@ -272,8 +272,8 @@ class SDBlock(Generic[AnyStr]):
 
     def __repr__(self, /) -> str:
         """
-        Show the stripped title; a str block's undecodable title bytes show
-        as U+FFFD instead of raising.
+        Show the title; a str block's undecodable title bytes show as U+FFFD
+        instead of raising.
         """
 
     @classmethod
@@ -476,9 +476,8 @@ class SDBlock(Generic[AnyStr]):
         For example, `block.molblock = Chem.MolToMolBlock(mol)`. Text
         molblocks have CRLF and CR line endings translated to LF, and a
         molblock without a final newline gets its title line's ending. So
-        `block.molblock = block.molblock` strips the title, as the getter
-        does, translates a str block's title line and CTAB to LF, and
-        changes nothing else.
+        `block.molblock = block.molblock` translates a str block's title line
+        and CTAB to LF and changes nothing else.
 
         Raises:
             ValueError: if the molblock has no `M  END` line, has more than
@@ -606,10 +605,12 @@ class SDBlock(Generic[AnyStr]):
     @property
     def title(self, /) -> AnyStr:
         """
-        Return the molecule title in the input type.
+        Return the title line without trailing whitespace, in the input type.
 
-        Titles, record names, and record values are stripped as `str.strip()`
-        does for str blocks and as `bytes.strip()` does for bytes blocks.
+        The title is right-stripped as `str.rstrip()` does for str blocks and
+        as `bytes.rstrip()` does for bytes blocks; `molblock` and writes keep
+        the whole title line. Record values are stripped as `str.strip()` and
+        `bytes.strip()` do.
         """
 
     @title.setter
@@ -618,7 +619,8 @@ class SDBlock(Generic[AnyStr]):
         Replace the title line.
 
         Raises:
-            ValueError: if the title contains a line break
+            ValueError: if the title contains a line break or starts with
+                `$$$$`, which would end the block
             TypeError: if the title is not the block's type
         """
 
@@ -642,8 +644,8 @@ class SDBlock(Generic[AnyStr]):
 
         Lines end as they were read, so blocks from a bytes path keep "\\r\\n";
         str paths read universal newlines, so their lines end in "\\n". Lines
-        the block adds or ends (a stripped title, new records, a missing $$$$,
-        a last line without "\\n") end like the title line. The block is
+        the block adds or ends (new records, a missing $$$$, a last line
+        without "\\n") end like the title line. The block is
         written in one `write` call, whose return value is not checked, so an
         unbuffered (`buffering=0`) or nonblocking handle may write part of it.
 

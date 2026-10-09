@@ -1,4 +1,4 @@
-//! Python's `strip()` rules, for titles, record names, and values.
+//! Python's `strip()` and `rstrip()` rules, for titles and SD data lines.
 
 /// Which Python `strip()` a block's lines follow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,6 +17,15 @@ impl Strip {
             Strip::Str => trim_str(bytes),
         }
     }
+
+    /// Strip only the end, like Python's `rstrip()`.
+    #[inline]
+    pub fn trim_end(self, bytes: &[u8]) -> &[u8] {
+        match self {
+            Strip::Bytes => trim_ascii_end_by(bytes, is_space),
+            Strip::Str => trim_str_end(bytes),
+        }
+    }
 }
 
 /// Whether a byte is whitespace for Python's `bytes.strip()`.
@@ -33,14 +42,20 @@ pub fn trim(bytes: &[u8]) -> &[u8] {
 
 #[inline]
 fn trim_ascii_by(bytes: &[u8], is_space: impl Fn(u8) -> bool) -> &[u8] {
-    let Some(start) = bytes.iter().position(|&byte| !is_space(byte)) else {
-        return &[];
-    };
+    let start = bytes
+        .iter()
+        .position(|&byte| !is_space(byte))
+        .unwrap_or(bytes.len());
+    trim_ascii_end_by(&bytes[start..], is_space)
+}
+
+#[inline]
+fn trim_ascii_end_by(bytes: &[u8], is_space: impl Fn(u8) -> bool) -> &[u8] {
     let end = bytes
         .iter()
         .rposition(|&byte| !is_space(byte))
-        .map_or(start, |index| index + 1);
-    &bytes[start..end]
+        .map_or(0, |index| index + 1);
+    &bytes[..end]
 }
 
 /// Whether an ASCII byte is whitespace for Python's `str.strip()`.
@@ -90,6 +105,16 @@ pub fn trim_str(bytes: &[u8]) -> &[u8] {
     }
 }
 
+/// Strip whitespace from the end of UTF-8 like Python's `str.rstrip()`.
+#[inline]
+fn trim_str_end(bytes: &[u8]) -> &[u8] {
+    let trimmed = trim_ascii_end_by(bytes, is_str_space);
+    match trimmed.last() {
+        Some(&last) if last >= 0x80 => trim_wide_end(trimmed),
+        _ => trimmed,
+    }
+}
+
 #[cold]
 #[inline(never)]
 fn trim_wide(bytes: &[u8]) -> &[u8] {
@@ -103,17 +128,23 @@ fn trim_wide(bytes: &[u8]) -> &[u8] {
             start += 1;
         }
     }
+    trim_wide_end(&bytes[start..])
+}
+
+#[cold]
+#[inline(never)]
+fn trim_wide_end(bytes: &[u8]) -> &[u8] {
     let mut end = bytes.len();
     loop {
-        match wide_space_suffix(&bytes[start..end]) {
+        match wide_space_suffix(&bytes[..end]) {
             0 => break,
             len => end -= len,
         }
-        while end > start && is_str_space(bytes[end - 1]) {
+        while end > 0 && is_str_space(bytes[end - 1]) {
             end -= 1;
         }
     }
-    &bytes[start..end]
+    &bytes[..end]
 }
 
 #[cfg(test)]
@@ -123,6 +154,8 @@ mod tests {
     #[test]
     fn strips_python_bytes_whitespace_only() {
         assert_eq!(trim(b"\x0b\x0c \t\r\nx\x1c\n"), b"x\x1c");
+        assert_eq!(Strip::Bytes.trim_end(b" \tx\x1c\x0b\r\n"), b" \tx\x1c");
+        assert_eq!(Strip::Bytes.trim_end(b" \t\r\n"), b"");
     }
 
     /// Every character for which Python's `str.isspace()` is true.
@@ -141,8 +174,15 @@ mod tests {
                 "{space:?}"
             );
             assert_eq!(trim_str(space.to_string().as_bytes()), b"");
+            let kept = format!("{space}{space}x{space}y");
+            assert_eq!(
+                Strip::Str.trim_end(padded.as_bytes()),
+                kept.as_bytes(),
+                "{space:?}"
+            );
         }
         assert_eq!(trim_str(STR_SPACES.as_bytes()), b"");
+        assert_eq!(Strip::Str.trim_end(STR_SPACES.as_bytes()), b"");
         // Neighbours of the whitespace code points are kept.
         for kept in [
             "\u{84}", "\u{a1}", "\u{200b}", "\u{2027}", "\u{3001}", "\u{feff}",
@@ -151,5 +191,6 @@ mod tests {
         }
         // Incomplete sequences are not whitespace.
         assert_eq!(trim_str(b"\xe3\x80x\xe3\x80"), b"\xe3\x80x\xe3\x80");
+        assert_eq!(Strip::Str.trim_end(b"x\xe3\x80"), b"x\xe3\x80");
     }
 }
