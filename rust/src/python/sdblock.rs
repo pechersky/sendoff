@@ -72,6 +72,12 @@ impl PySDRecordIterator {
 ///
 /// `SDBlock[str]` blocks come from text input and `SDBlock[bytes]` blocks
 /// from binary input; names, values, and lines have the block's type.
+///
+/// Record names are read and written as given, unchecked. The CTfile
+/// format reserves `>`, and its field names start with a letter followed by
+/// letters, digits, and underscores: no `-`, `.`, `<`, `>`, `=`, `%`, or
+/// spaces. Keeping names valid is up to you; other toolkits may read
+/// invalid ones differently.
 #[pyclass(name = "SDBlock", module = "sendoff.native", eq, skip_from_py_object)]
 #[derive(Clone, PartialEq)]
 pub(crate) struct PySDBlock {

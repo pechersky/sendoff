@@ -65,6 +65,9 @@ Edit blocks and write them back:
    block.to_sdf()  # the block as SDF text ending in $$$$
    blocks = list(SDBlock.from_sdf(sdf_text))  # parse SDF held in memory
 
+Names are written unchecked; the CTfile format wants a letter, then letters,
+digits, or underscores.
+
 ``write_sdf`` to a path writes in large chunks with the GIL released, so prefer
 it to a ``block.write`` loop. ``parse_sdf`` memory-maps regular files on local
 Linux filesystems, so write results to a new path: truncating a file while it
