@@ -3,6 +3,8 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
+use memchr::memmem;
+
 use crate::core::lines::{Lines, line_end};
 use crate::core::strip::{Strip, trim, trim_str};
 
@@ -33,9 +35,7 @@ impl Header<'_> {
         if metadata.get(name_end) != Some(&b'>') {
             return None;
         }
-        let line = &metadata[..line_end(metadata, self.start)];
-        let line = line.strip_suffix(b"\n").unwrap_or(line);
-        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let line = without_ending(&metadata[..line_end(metadata, self.start)]);
         Some((self.start..name_start, name_end..line.len()))
     }
 }
@@ -45,7 +45,7 @@ impl Header<'_> {
 pub struct Record<'a> {
     /// The field name between the header's first `<` and last `>`.
     pub name: &'a [u8],
-    /// Stripped value lines joined with `\n`.
+    /// The value lines without their endings, joined with `\n`.
     pub value: Cow<'a, [u8]>,
     /// Offset of the header line in the SD data.
     pub start: usize,
@@ -161,9 +161,9 @@ impl<'a> HeaderPool<'a> {
     }
 }
 
-/// The records of SD data from an offset on, parsed as Python's groupby
-/// over stripped lines does: a run of non-blank lines whose first line
-/// starts with `> ` is a record; other runs are skipped.
+/// The records of SD data from an offset on: a run of lines that do not
+/// strip to nothing, whose first line strips to one starting with `> `, is
+/// a record; other runs are skipped.
 ///
 /// A header without a name yields an error; iterating further resumes
 /// after its run.
@@ -269,28 +269,55 @@ fn record_in<'a, const VALUE: bool>(
             continue;
         };
         let name = record_name(rest)?;
-        let mut value: Cow<'a, [u8]> = Cow::Borrowed(&[]);
         if !VALUE {
             skip_run(lines, trim);
+            let value = Cow::Borrowed(&[][..]);
             return Ok(Some(Record { name, value, start }));
         }
-        let mut first = true;
+        let value_start = lines.pos();
+        let (mut pos, mut value_end) = (value_start, value_start);
+        // Whether a line before the last ends in `\r\n`, whose `\r` the
+        // value drops.
+        let (mut crlf, mut ended_crlf) = (false, false);
         for line in lines.by_ref() {
-            let line = trim(line);
-            if line.is_empty() {
+            if is_blank(line, trim) {
                 break;
             }
-            if first {
-                value = Cow::Borrowed(line);
-                first = false;
-            } else {
-                let owned = value.to_mut();
-                owned.push(b'\n');
-                owned.extend_from_slice(line);
-            }
+            let ending = line.len() - without_ending(line).len();
+            pos += line.len();
+            value_end = pos - ending;
+            crlf |= ended_crlf;
+            ended_crlf = ending == 2;
         }
+        let value = &lines.data()[value_start..value_end];
+        let value = if crlf {
+            Cow::Owned(crlf_to_lf(value))
+        } else {
+            Cow::Borrowed(value)
+        };
         return Ok(Some(Record { name, value, start }));
     }
+}
+
+/// `line` without its `\n` and then one `\r`.
+#[inline(always)]
+fn without_ending(line: &[u8]) -> &[u8] {
+    let line = line.strip_suffix(b"\n").unwrap_or(line);
+    line.strip_suffix(b"\r").unwrap_or(line)
+}
+
+/// `value` with each `\r\n` as `\n`.
+#[cold]
+#[inline(never)]
+fn crlf_to_lf(value: &[u8]) -> Vec<u8> {
+    let mut lf = Vec::with_capacity(value.len());
+    let mut start = 0;
+    for cr in memmem::find_iter(value, b"\r\n") {
+        lf.extend_from_slice(&value[start..cr]);
+        start = cr + 1;
+    }
+    lf.extend_from_slice(&value[start..]);
+    lf
 }
 
 /// Consume lines through the next blank one.
@@ -349,6 +376,39 @@ mod tests {
         assert_eq!(names("> <a\nv\n").unwrap(), ["a"]);
         assert_eq!(names("x\n> <skipped>\nv\n").unwrap(), Vec::<String>::new());
         assert_eq!(names("> missing\nv\n"), Err(MissingFieldName));
+    }
+
+    fn values(metadata: &str, strip: Strip) -> Vec<(String, bool)> {
+        Records::new(metadata.as_bytes(), 0, strip)
+            .map(|record| {
+                let value = record.unwrap().value;
+                let borrowed = matches!(value, Cow::Borrowed(_));
+                (String::from_utf8(value.into_owned()).unwrap(), borrowed)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn values_keep_their_lines_but_not_line_endings() {
+        let metadata = "> <A>\n a \n\tb\x0c\n\n> <B>\n1\r\n 2\r\r\n\n> <C>\nc\r\n \n> <D>\n";
+        let expected = [
+            (" a \n\tb\x0c", true),
+            ("1\n 2\r", false),
+            ("c", true),
+            ("", true),
+        ];
+        assert_eq!(
+            values(metadata, Strip::Bytes),
+            expected.map(|(v, b)| (v.into(), b))
+        );
+        // Lines that strip to nothing still end values, by the block's rules.
+        let wide = "> <A>\nx\u{3000}\n\u{3000}\ny\n";
+        assert_eq!(values(wide, Strip::Str), [("x\u{3000}".into(), true)]);
+        assert_eq!(
+            values(wide, Strip::Bytes),
+            [("x\u{3000}\n\u{3000}\ny".into(), true)]
+        );
+        assert_eq!(values("> <A>\na\r", Strip::Bytes), [("a".into(), true)]);
     }
 
     #[test]

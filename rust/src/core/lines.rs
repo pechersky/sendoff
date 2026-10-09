@@ -151,6 +151,12 @@ impl<'a> Lines<'a> {
     pub fn pos(&self) -> usize {
         self.pos
     }
+
+    /// The data the lines are read from.
+    #[inline]
+    pub fn data(&self) -> &'a [u8] {
+        self.data
+    }
 }
 
 /// The lines of `data` without their `\n`.

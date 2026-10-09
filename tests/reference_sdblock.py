@@ -14,7 +14,9 @@ first line starts with ``$$$$`` is an empty record, as the CTfile spec reads
 any such line as a terminator, rather than a ``$$$$`` title that each write
 doubled. The title line is kept and written as read, and ``title`` only
 right-strips it, since a stripped title such as `` $$$$`` written back reads
-as a delimiter. Divergences that are accepted but not modeled here are kept
+as a delimiter. Record values keep their lines as read, without the line
+endings, as RDKit reads them; blank lines and headers are still found by
+stripping. Divergences that are accepted but not modeled here are kept
 out of the generated inputs instead.
 """
 
@@ -106,14 +108,15 @@ class RefBlock(Generic[AnyStr]):
         return self.title_line.rstrip()
 
     def records(self) -> list[tuple[AnyStr, AnyStr]]:
-        """Return (name, value) records exactly as main's generator yields them.
+        """Return (name, value) records as main's generator groups them.
 
         Returns:
-            Records in order, multiline values joined with newlines.
+            Records in order, value lines without their endings joined with
+            newlines.
         """
         records: list[tuple[AnyStr, AnyStr]] = []
-        for _, chunk in groupby((line.strip() for line in self.metadata), bool):
-            record_line = next(chunk)
+        for _, chunk in groupby(self.metadata, lambda line: bool(line.strip())):
+            record_line = next(chunk).strip()
             if not record_line.startswith(_lit(record_line, "> ")):
                 continue
             name = (
@@ -122,7 +125,9 @@ class RefBlock(Generic[AnyStr]):
                 .rsplit(_lit(record_line, ">"), 1)[0]
                 .split(_lit(record_line, "<"), 1)[1]
             )
-            records.append((name, _lit(record_line, "\n").join(chunk)))
+            lf, cr = _lit(record_line, "\n"), _lit(record_line, "\r")
+            value = lf.join(line.removesuffix(lf).removesuffix(cr) for line in chunk)
+            records.append((name, value))
         return records
 
     def append_record(self, name: AnyStr, value: AnyStr, header: str = "plain") -> None:

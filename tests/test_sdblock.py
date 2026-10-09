@@ -520,8 +520,8 @@ def test_title_setter_replaces_only_the_title() -> None:
 def test_text_strips_like_str_and_bytes_like_bytes() -> None:
     """Text blocks strip str whitespace; bytes blocks only ASCII whitespace.
 
-    Titles are right-stripped and values stripped. A value line holding only
-    Unicode whitespace is blank in text blocks, as with str.strip() in
+    Titles are right-stripped and values kept as read. A value line holding
+    only Unicode whitespace is blank in text blocks, as with str.strip() in
     pure-Python sendoff 0.1.x, so it ends the record.
     """
     text_block = next(
@@ -556,6 +556,6 @@ def test_text_strips_like_str_and_bytes_like_bytes() -> None:
     )
 
     assert text_block.title == " \u2003Title"
-    assert text_block.records() == [("Record", "Text"), ("Blank", "")]
+    assert text_block.records() == [("Record", "\u2003Text\x1f"), ("Blank", "")]
     assert byte_block.title == b"\xc2\xa0Title\xc2\xa0"
     assert byte_block.records() == [(b"Record", b"\xc2\xa0Bytes\x1f")]

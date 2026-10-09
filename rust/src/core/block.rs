@@ -497,7 +497,7 @@ mod tests {
         assert_eq!(block.metadata(), b"> <A>\n a \nb\n\n> <B>\n\n");
         assert_eq!(
             records(&block).unwrap(),
-            [("A".into(), "a\nb".into()), ("B".into(), String::new())]
+            [("A".into(), " a \nb".into()), ("B".into(), String::new())]
         );
         assert_eq!(
             written(&block),

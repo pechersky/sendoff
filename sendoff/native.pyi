@@ -202,6 +202,10 @@ class SDBlock(Generic[AnyStr]):
     letters, digits, and underscores: no `-`, `.`, `<`, `>`, `=`, `%`, or
     spaces. Keeping names valid is up to you; other toolkits may read
     invalid ones differently.
+
+    A record's value is its lines up to a blank one, as read but without
+    their line endings, joined with "\\n". Lines that `str.strip()`, or
+    `bytes.strip()` for bytes blocks, empties are blank.
     """
 
     def __bool__(self, /) -> bool:
@@ -609,8 +613,7 @@ class SDBlock(Generic[AnyStr]):
 
         The title is right-stripped as `str.rstrip()` does for str blocks and
         as `bytes.rstrip()` does for bytes blocks; `molblock` and writes keep
-        the whole title line. Record values are stripped as `str.strip()` and
-        `bytes.strip()` do.
+        the whole title line.
         """
 
     @title.setter

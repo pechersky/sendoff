@@ -49,10 +49,7 @@ fn clean_name(name: &[u8]) -> bool {
 
 /// A single-line value that its record reads back unchanged.
 fn clean_value(value: &[u8], strip: Strip) -> bool {
-    !value.contains(&b'\n') && !value.contains(&b'\r') && {
-        let trimmed = strip.trim(value);
-        !trimmed.is_empty() && trimmed.len() == value.len()
-    }
+    !value.contains(&b'\n') && !value.ends_with(b"\r") && !strip.trim(value).is_empty()
 }
 
 fn clean((name, value): (&[u8], &[u8]), strip: Strip) -> bool {

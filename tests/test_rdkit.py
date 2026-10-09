@@ -246,3 +246,24 @@ def test_molblock_setter_swaps_structures_from_rdkit(
     assert [Chem.MolToSmiles(mol) for mol in swapped] == ["CCO", "CCO"]
     assert all(mol.GetProp("_Name").endswith("-swapped") for mol in swapped)
     assert all(mol.GetProp("Original") == mol.GetProp("_Name") for mol in swapped)
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_padded_values_read_like_rdkit(newline: str, tmp_path: Path) -> None:
+    """Values keep each line's whitespace and drop line endings, as in RDKit.
+
+    Args:
+        newline: line ending used throughout the file
+        tmp_path: pytest fixture for writing files to a temp directory
+    """
+    lines = ["Title", "", "", "  0  0  0  0  0  0  0  0  0  0999 V2000", "M  END"]
+    lines += [">  <Padded>  ", "  a  ", "", "> <Multi>", " x ", "\ty\t", "", "$$$$"]
+    path = tmp_path / "padded.sdf"
+    path.write_bytes(newline.join([*lines, ""]).encode())
+    (mol,) = Chem.SDMolSupplier(str(path), sanitize=False)
+    expected = [(name, mol.GetProp(name)) for name in mol.GetPropNames()]
+    assert expected == [("Padded", "  a  "), ("Multi", " x \n\ty\t")]
+    (text_block,) = parse_sdf(str(path))
+    (byte_block,) = parse_sdf(os.fsencode(path))
+    assert text_block.records() == expected
+    assert byte_block.records() == [(n.encode(), v.encode()) for n, v in expected]
