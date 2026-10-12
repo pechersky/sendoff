@@ -38,7 +38,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--no-rust-coverage",
         action="store_true",
         help="test the sendoff.native that imports normally, such as an "
-        "installed release wheel, instead of a coverage build",
+        "installed release wheel, instead of a coverage build. To test a "
+        "wheel without installing it, extract it with python -m zipfile -e "
+        "WHEEL DIR and run PYTHONPATH=DIR pytest --import-mode=append "
+        "--no-rust-coverage",
     )
 
 

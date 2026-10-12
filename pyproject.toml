@@ -110,7 +110,7 @@ cmd = "cargo check && git add -- Cargo.lock"
 # - At release time after bumping version number, run:
 #   VIRTUAL_ENV="$PWD/.venv" .venv/bin/maturin develop --locked
 #   .venv/bin/towncrier --draft, then .venv/bin/towncrier
-#   and build the wheel with scripts/pgo-build --out dist (see README.rst)
+#   and build the wheel with scripts/pgo-build --out dist
 package = "sendoff"
 filename = "doc/changelog.rst"
 directory = "newsfragments"

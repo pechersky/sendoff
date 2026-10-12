@@ -11,7 +11,8 @@ release profile's fat LTO.
 
 Needs maturin on PATH or next to this interpreter, and llvm-profdata from
 `rustup component add llvm-tools`. The training data is synthetic so that
-real datasets stay held out for measuring the gain.
+real datasets stay held out for measuring the gain. `maturin build
+--release` still makes a correct, LTO-only wheel.
 """
 from __future__ import annotations
 
