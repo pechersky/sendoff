@@ -22,7 +22,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument(
         "files", nargs="*", default=[STDIN], metavar="FILE", help="default: stdin"
     )
-    args = p.parse_args(argv)
+    args = p.parse_intermixed_args(argv)
     out = sys.stdout.buffer
     total = 0
     for path in args.files:

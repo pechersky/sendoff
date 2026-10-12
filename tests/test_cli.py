@@ -151,6 +151,11 @@ def test_get(
     assert cli(capsysbinary, monkeypatch, "get", "-t", stdin=SDF)[1] == (
         b"first\nsecond\nthird\n"
     )
+    assert cli(capsysbinary, monkeypatch, "get", "ID", "-z", sdf) == (
+        0,
+        b"A-1\0\0A-3\0",
+        b"",
+    )
 
 
 @pytest.mark.parametrize("argv", [(), ("-t", "ID", "in.sdf")])

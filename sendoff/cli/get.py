@@ -34,7 +34,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="STR",
         help="print for blocks without the record (default: empty)",
     )
-    args = p.parse_args(argv)
+    args = p.parse_intermixed_args(argv)
     if args.title:
         if args.file is not None:
             p.error("-t takes no NAME")
