@@ -116,3 +116,75 @@ def test_module_dies_quietly_on_closed_pipe(sdf: Path) -> None:
         p.stdout.close()
         assert p.stderr.read() == b""
     assert p.returncode != 0
+
+
+def test_get(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    sdf: Path,
+) -> None:
+    """Get prints one raw line per block, blank or --missing where absent.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        sdf: pytest fixture of a Path to the sdf
+    """
+    assert cli(capsysbinary, monkeypatch, "get", "ID", sdf) == (0, b"A-1\n\nA-3\n", b"")
+    assert cli(
+        capsysbinary, monkeypatch, "get", "Name", "--missing", "NA", stdin=SDF
+    ) == (
+        0,
+        b"%s\nNA\nNA\n" % GBK,
+        b"",
+    )
+    assert cli(capsysbinary, monkeypatch, "get", "-z", "Note", sdf) == (
+        0,
+        b"\0line one\nline two\0\0",
+        b"",
+    )
+    assert cli(capsysbinary, monkeypatch, "get", "-t", sdf) == (
+        0,
+        b"first\nsecond\nthird\n",
+        b"",
+    )
+    assert cli(capsysbinary, monkeypatch, "get", "-t", stdin=SDF)[1] == (
+        b"first\nsecond\nthird\n"
+    )
+
+
+@pytest.mark.parametrize("argv", [(), ("-t", "ID", "in.sdf")])
+def test_get_usage(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    argv: tuple[str, ...],
+) -> None:
+    """Get takes NAME or -t, not both.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        argv: bad arguments
+    """
+    status, out, err = cli(capsysbinary, monkeypatch, "get", *argv)
+    assert (status, out) == (2, b"")
+    assert b"usage: python -m sendoff.cli.get" in err
+
+
+def test_malformed_block(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed block fails with its number after the earlier output.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+    """
+    bad = SDF.replace(b"> <Note>", b"> Note")
+    assert cli(capsysbinary, monkeypatch, "get", "ID", stdin=bad) == (
+        1,
+        b"A-1\n",
+        b"python -m sendoff.cli.get: block 2: "
+        b"SD data field header is missing a name\n",
+    )
