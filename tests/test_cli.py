@@ -2,6 +2,7 @@
 """Test the python -m sendoff.cli.<command> shell helpers."""
 import importlib
 import io
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -374,3 +375,44 @@ def test_title_line_break(
     status, _, err = cli(capsysbinary, monkeypatch, "title", "--field", "Note", sdf)
     assert status == 1
     assert err.startswith(b"python -m sendoff.cli.title: block 2: ")
+
+
+def test_filter(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    sdf: Path,
+) -> None:
+    """Filter writes the matching blocks byte for byte.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        sdf: pytest fixture of a Path to the sdf
+    """
+    first, second, third = (block + b"$$$$\n" for block in SDF.split(b"$$$$\n")[:3])
+    assert cli(capsysbinary, monkeypatch, "filter", "--has", "ID", sdf) == (
+        0,
+        first + third,
+        b"",
+    )
+    assert cli(capsysbinary, monkeypatch, "filter", "-v", "--has", "ID", sdf) == (
+        0,
+        second,
+        b"",
+    )
+    assert cli(capsysbinary, monkeypatch, "filter", "--eq", "ID", "A-3", stdin=SDF) == (
+        0,
+        third,
+        b"",
+    )
+    name = os.fsdecode(GBK)
+    assert cli(capsysbinary, monkeypatch, "filter", "--eq", "Name", name, sdf) == (
+        0,
+        first,
+        b"",
+    )
+    crlf = SDF.replace(b"\n", b"\r\n")
+    _, out, _ = cli(
+        capsysbinary, monkeypatch, "filter", "-v", "--eq", "ID", "A-1", stdin=crlf
+    )
+    assert out == (second + third).replace(b"\n", b"\r\n")
