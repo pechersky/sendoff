@@ -326,7 +326,7 @@ impl PySDBlock {
 
 /// How to read SDF that is not UTF-8, for notes on decode errors.
 const DECODE_HINT: &str = "parse_sdf(os.fsencode(path)) reads such files as bytes, and \
-    SDBlock.from_lines(open(path, encoding=...)) decodes another encoding.";
+    parse_sdf(open(path, encoding=...)) decodes another encoding.";
 
 fn reading_record(name: &[u8]) -> String {
     format!("Reading record '{}' of", String::from_utf8_lossy(name))

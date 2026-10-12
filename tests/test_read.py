@@ -493,7 +493,7 @@ LATIN1_TITLE = b"\xa6\n\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\nM  END\n$$$$
 
 DECODE_HINT = (
     "parse_sdf(os.fsencode(path)) reads such files as bytes, and "
-    "SDBlock.from_lines(open(path, encoding=...)) decodes another encoding."
+    "parse_sdf(open(path, encoding=...)) decodes another encoding."
 )
 
 

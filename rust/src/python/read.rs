@@ -321,9 +321,10 @@ impl PySDBlockIterator {
 /// iterating can kill the process with SIGBUS, so write results to a new
 /// path. str paths give str values decoded as UTF-8 on access, with
 /// universal newlines translated to "\n", as `open(path)` reads; bytes
-/// paths give bytes split on b"\n" only. Use a bytes path for feeds that
-/// are not valid UTF-8: from a str path, their text raises
-/// UnicodeDecodeError with a note naming the block and record.
+/// paths give bytes split on b"\n" only. From a str path, text that is not
+/// UTF-8 raises UnicodeDecodeError with a note naming the block and record;
+/// read such feeds from a bytes path, or from a file opened with their
+/// encoding.
 ///
 /// A file object, such as `sys.stdin.buffer`, is read as
 /// `SDBlock.from_lines` reads one, from its position and through Python;
