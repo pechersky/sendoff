@@ -63,6 +63,90 @@ class Blocks:
             yield block
 
 
+def add_sources(
+    p: argparse.ArgumentParser, what: str
+) -> argparse._MutuallyExclusiveGroup:
+    """Add --value and --from, with -z and --skip-empty.
+
+    Args:
+        p: the command's parser
+        what: what each value becomes, for help
+
+    Returns:
+        The required group of sources, for more of them
+    """
+    sources = p.add_mutually_exclusive_group(required=True)
+    sources.add_argument("--value", metavar="VALUE", help=f"the {what} of every block")
+    sources.add_argument(
+        "--from",
+        dest="source",
+        metavar="VALUES",
+        help=f"file of one {what} per line, in block order; - for stdin",
+    )
+    p.add_argument("-z", "--null", action="store_true", help="VALUES end with NUL")
+    p.add_argument(
+        "--skip-empty",
+        action="store_true",
+        help=f"leave a block unchanged where its {what} is empty",
+    )
+    return sources
+
+
+def pairs(
+    p: argparse.ArgumentParser, args: argparse.Namespace, blocks: Blocks
+) -> Iterator[tuple[SDBlock[bytes], bytes]]:
+    """Pair each block with its value from --value or --from.
+
+    Args:
+        p: the command's parser
+        args: parsed arguments from add_sources
+        blocks: the input
+
+    Returns:
+        The pairs, raising ValueError if --from and the input differ in length
+    """
+    if args.source is None:
+        value = os.fsencode(args.value)
+        return ((block, value) for block in blocks)
+    if args.source == STDIN == blocks.path:
+        p.error("--from - needs a FILE")
+    if args.source == STDIN:
+        data = sys.stdin.buffer.read()
+    else:
+        with open(args.source, "rb") as f:
+            data = f.read()
+    values = data.split(b"\0" if args.null else b"\n")
+    if values[-1] == b"":
+        values.pop()
+    return aligned(blocks, values, "stdin" if args.source == STDIN else args.source)
+
+
+def aligned(
+    blocks: Blocks, values: list[bytes], source: str
+) -> Iterator[tuple[SDBlock[bytes], bytes]]:
+    """Pair blocks with values in order.
+
+    Args:
+        blocks: the input
+        values: one per block
+        source: where the values came from, for errors
+
+    Yields:
+        Each block and its value
+
+    Raises:
+        ValueError: if there are fewer or more values than blocks
+    """
+    rest = iter(values)
+    for block in blocks:
+        value = next(rest, None)
+        if value is None:
+            raise ValueError(f"{source} has only {len(values)} values")
+        yield block, value
+    if blocks.number < len(values):
+        raise ValueError(f"no more blocks, but {source} has {len(values)} values")
+
+
 @contextmanager
 def failures(p: argparse.ArgumentParser, blocks: Blocks) -> Iterator[None]:
     """Exit with status 1 and the block number on bad input.

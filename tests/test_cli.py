@@ -193,3 +193,127 @@ def test_malformed_block(
         b"python -m sendoff.cli.get: block 2: "
         b"SD data field header is missing a name\n",
     )
+
+
+def test_set(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    sdf: Path,
+) -> None:
+    """Set replaces the first record in place or appends one.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        sdf: pytest fixture of a Path to the sdf
+    """
+    replaced = (
+        SDF.replace(b"A-1", b"X")
+        .replace(b"A-3", b"X")
+        .replace(b"two\n\n$$$$", b"two\n\n> <ID>\nX\n\n$$$$")
+    )
+    assert cli(capsysbinary, monkeypatch, "set", "ID", "--value", "X", sdf) == (
+        0,
+        replaced,
+        b"",
+    )
+    appended = SDF.replace(b"\n\n$$$$", b"\n\n>  <ID>\nX\n\n$$$$")
+    assert cli(
+        capsysbinary,
+        monkeypatch,
+        "set",
+        "ID",
+        "--value",
+        "X",
+        "--append",
+        "--header",
+        "padded",
+        stdin=SDF,
+    ) == (0, appended, b"")
+
+
+@pytest.mark.parametrize("null", [False, True])
+def test_set_from(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    sdf: Path,
+    tmp_path: Path,
+    null: bool,
+) -> None:
+    """Set --from takes a value per block; empty ones are set or skipped.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        sdf: pytest fixture of a Path to the sdf
+        tmp_path: pytest fixture of a temporary directory
+        null: whether values end with NUL
+    """
+    end = b"\0" if null else b"\n"
+    values = tmp_path / "values"
+    values.write_bytes(b"x1%s%sx3%s" % (end, end, end))
+    z = ["-z"] if null else []
+    expected = SDF.replace(b"A-1", b"x1").replace(b"A-3", b"x3")
+    assert cli(capsysbinary, monkeypatch, "set", "ID", *z, "--from", values, sdf) == (
+        0,
+        expected.replace(b"two\n\n$$$$", b"two\n\n> <ID>\n\n\n$$$$"),
+        b"",
+    )
+    assert cli(
+        capsysbinary,
+        monkeypatch,
+        "set",
+        "ID",
+        *z,
+        "--skip-empty",
+        "--from",
+        "-",
+        sdf,
+        stdin=values.read_bytes(),
+    ) == (0, expected, b"")
+
+
+@pytest.mark.parametrize(
+    "values, error",
+    [
+        (b"a\nb\n", b"block 3: stdin has only 2 values"),
+        (b"a\nb\nc\nd", b"block 3: no more blocks, but stdin has 4 values"),
+    ],
+)
+def test_set_from_mismatch(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    sdf: Path,
+    values: bytes,
+    error: bytes,
+) -> None:
+    """Set --from fails unless there is one value per block.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        sdf: pytest fixture of a Path to the sdf
+        values: --from input
+        error: expected message after the program name
+    """
+    status, _, err = cli(
+        capsysbinary, monkeypatch, "set", "ID", "--from", "-", sdf, stdin=values
+    )
+    assert (status, err) == (1, b"python -m sendoff.cli.set: %s\n" % error)
+
+
+def test_set_from_stdin_needs_file(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Set cannot read both values and blocks from stdin.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+    """
+    status, out, err = cli(
+        capsysbinary, monkeypatch, "set", "ID", "--from", "-", stdin=SDF
+    )
+    assert (status, out) == (2, b"")
+    assert err.endswith(b"error: --from - needs a FILE\n")
