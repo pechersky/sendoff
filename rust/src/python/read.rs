@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::path::PathBuf;
 
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::PyTypeError;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyIterator, PyString};
@@ -15,7 +15,7 @@ use crate::core::block::Block;
 use crate::core::mapped::MappedBlocks;
 use crate::core::newline::{TRANSLATE_SLACK, missing_ending, title_newline, translate_newlines};
 use crate::core::split::{Scanner, Tail};
-use crate::python::kind::{Errors, Kind, bytes_of, same_kind};
+use crate::python::kind::{Kind, bytes_of, same_kind};
 use crate::python::os::{fs_path, os_error};
 use crate::python::sdblock::PySDBlock;
 
@@ -59,12 +59,11 @@ pub(super) enum Source {
         text: bool,
         pending_cr: bool,
     },
-    /// A path to open on the first read for blocks of `kind`; text
-    /// translates newlines.
+    /// A path to open on the first read; `text` translates newlines.
     Path {
         path: PathBuf,
         filename: Py<PyAny>,
-        kind: Kind,
+        text: bool,
     },
     /// A file mapped from `Path`, split a batch of blocks at a time without
     /// holding the GIL.
@@ -89,21 +88,21 @@ impl Source {
         let Source::Path {
             path,
             filename,
-            kind: path_kind,
+            text,
         } = self
         else {
             return Ok(());
         };
-        let text = path_kind.is_text();
+        let text_mode = *text;
         // Opening a FIFO waits for a writer, which may be a Python thread.
         let (file, mapped) = py
             .detach(|| {
                 let file = File::open(&*path)?;
-                let mapped = MappedBlocks::open(&file, text);
+                let mapped = MappedBlocks::open(&file, text_mode);
                 Ok((file, mapped))
             })
             .map_err(|error| os_error(py, error, filename))?;
-        *kind = Some(*path_kind);
+        *kind = Some(Kind::of(*text));
         *self = match mapped {
             Some(blocks) => Source::Mapped {
                 blocks,
@@ -112,7 +111,7 @@ impl Source {
             None => Source::File {
                 file,
                 filename: filename.clone_ref(py),
-                text,
+                text: *text,
                 pending_cr: false,
             },
         };
@@ -273,7 +272,7 @@ impl PySDBlockIterator {
         match self.next_block(py) {
             Ok(Some(block)) => Ok(Some(PySDBlock::wrap(
                 block,
-                self.kind.unwrap_or(Kind::TEXT),
+                self.kind.unwrap_or(Kind::Text),
             ))),
             Ok(None) => {
                 self.close();
@@ -322,7 +321,9 @@ impl PySDBlockIterator {
 /// iterating can kill the process with SIGBUS, so write results to a new
 /// path. str paths give str values decoded as UTF-8 on access, with
 /// universal newlines translated to "\n", as `open(path)` reads; bytes
-/// paths give bytes split on b"\n" only.
+/// paths give bytes split on b"\n" only. Use a bytes path for feeds that
+/// are not valid UTF-8: from a str path, their text raises
+/// UnicodeDecodeError with a note naming the block and record.
 ///
 /// A file object, such as `sys.stdin.buffer`, is read as
 /// `SDBlock.from_lines` reads one, from its position and through Python;
@@ -332,51 +333,20 @@ impl PySDBlockIterator {
 /// Args:
 ///     source: a str, bytes, or os.PathLike path, or a file object with a
 ///         `read1` or `read` method
-///     errors: keyword-only; how blocks from a str path decode bytes that
-///         are not UTF-8, as `bytes.decode` does. Decoding happens on
-///         access, so a bad byte surfaces from the title, name, or value
-///         holding it:
-///
-///         - "strict" (default) raises UnicodeDecodeError with a note
-///           naming the block and record.
-///         - "replace" decodes each bad byte as U+FFFD.
-///         - "backslashreplace" decodes each bad byte as an escape such as
-///           `\xff`.
-///         - "surrogateescape" decodes each bad byte as a lone surrogate,
-///           so names and values passed back encode to the original bytes.
-///           With the other handlers a name holding a bad byte cannot be
-///           looked up.
-///
-///         Writing such blocks to a path writes their bytes as read; to a
-///         text file, their decoded text. "ignore" is not offered, since
-///         dropping bytes can blank a line or make one "$$$$". Other
-///         sources take only "strict": read a binary file object as
-///         bytes, or wrap it in `io.TextIOWrapper(f, errors="replace")`.
 ///
 /// Returns:
 ///     An iterator of SDBlocks; `close()` releases the file early
 ///
 /// Raises:
 ///     TypeError: if `source` is neither a path nor a file object
-///     ValueError: for another `errors`, or a handler with a source other
-///         than a str path
 #[pyfunction]
-#[pyo3(signature = (
-    source: "str | bytes | os.PathLike[str] | os.PathLike[bytes]",
-    *,
-    errors: "Literal['strict', 'replace', 'backslashreplace', 'surrogateescape']" = "strict",
-) -> "_SDBlockIterator[Any]")]
-pub(crate) fn parse_sdf(source: &Bound<'_, PyAny>, errors: &str) -> PyResult<PySDBlockIterator> {
+#[pyo3(signature = (source: "str | bytes | os.PathLike[str] | os.PathLike[bytes]") -> "_SDBlockIterator[Any]")]
+pub(crate) fn parse_sdf(source: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
     let py = source.py();
-    let errors = Errors::named(errors)?;
     let path = source.is_instance_of::<PyString>()
         || source.is_instance_of::<PyBytes>()
         || source.hasattr(intern!(py, "__fspath__"))?;
-    let lenient = || PyValueError::new_err("parse_sdf errors applies only to str paths");
     if !path {
-        if errors != Errors::Strict {
-            return Err(lenient());
-        }
         return match reader(source) {
             Some(read) => Ok(PySDBlockIterator::new(Source::Reader(read))),
             None => Err(PyTypeError::new_err(format!(
@@ -386,16 +356,10 @@ pub(crate) fn parse_sdf(source: &Bound<'_, PyAny>, errors: &str) -> PyResult<PyS
         };
     }
     let (filename, path) = fs_path(source)?;
-    let kind = if filename.is_instance_of::<PyString>() {
-        Kind::Text(errors)
-    } else if errors == Errors::Strict {
-        Kind::Bytes
-    } else {
-        return Err(lenient());
-    };
+    let text = filename.is_instance_of::<PyString>();
     Ok(PySDBlockIterator::new(Source::Path {
         path,
         filename: filename.unbind(),
-        kind,
+        text,
     }))
 }

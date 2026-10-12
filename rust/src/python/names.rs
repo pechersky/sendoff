@@ -70,23 +70,11 @@ impl Default for Names {
 }
 
 impl Names {
-    /// Return the index of the name `bytes`, caching a new object for it,
-    /// or `None` for a name not to cache. A full cache is emptied first,
-    /// which resets `prev`.
-    fn find(
-        &mut self,
-        py: Python<'_>,
-        kind: Kind,
-        bytes: &[u8],
-        prev: &mut u32,
-    ) -> PyResult<Option<u32>> {
+    /// Return the index of the name `bytes`, caching a new object for it.
+    /// A full cache is emptied first, which resets `prev`.
+    fn find(&mut self, py: Python<'_>, kind: Kind, bytes: &[u8], prev: &mut u32) -> PyResult<u32> {
         if let Some(&found) = self.index.get(bytes) {
-            return Ok(Some(found));
-        }
-        // Handlers decode names that are not UTF-8 differently, so they are
-        // not shared with blocks decoding with another.
-        if kind.is_lenient() && std::str::from_utf8(bytes).is_err() {
-            return Ok(None);
+            return Ok(found);
         }
         let object = kind.value(py, bytes)?.unbind();
         if self.names.len() >= MAX_NAMES {
@@ -104,18 +92,13 @@ impl Names {
             object,
             next: NO_NAME,
         });
-        Ok(Some(found))
+        Ok(found)
     }
 }
 
 thread_local! {
     /// Record-name objects by their bytes, for text and then bytes names.
     static NAMES: RefCell<[Names; 2]> = RefCell::default();
-}
-
-/// The cache of text or of bytes names.
-fn slot(kind: Kind) -> usize {
-    usize::from(!kind.is_text())
 }
 
 /// Record-name objects of one kind, from the cache when it is available.
@@ -152,7 +135,7 @@ impl Namer<'_> {
         if bytes.len() > MAX_CACHED_NAME {
             return self.kind.value(py, bytes);
         }
-        let names = &mut cache[slot(self.kind)];
+        let names = &mut cache[self.kind as usize];
         let predicted = match self.prev {
             NO_NAME => names.first,
             prev => names.names[prev as usize].next,
@@ -163,9 +146,7 @@ impl Namer<'_> {
             self.prev = predicted;
             return Ok(name.object.bind(py).clone());
         }
-        let Some(found) = names.find(py, self.kind, bytes, &mut self.prev)? else {
-            return self.kind.value(py, bytes);
-        };
+        let found = names.find(py, self.kind, bytes, &mut self.prev)?;
         match self.prev {
             NO_NAME => names.first = found,
             prev => names.names[prev as usize].next = found,
@@ -186,11 +167,9 @@ impl Namer<'_> {
         if bytes.len() > MAX_CACHED_NAME {
             return self.kind.value(py, bytes);
         }
-        let names = &mut cache[slot(self.kind)];
+        let names = &mut cache[self.kind as usize];
         let mut unlinked = NO_NAME;
-        match names.find(py, self.kind, bytes, &mut unlinked)? {
-            Some(found) => Ok(names.names[found as usize].object.bind(py).clone()),
-            None => self.kind.value(py, bytes),
-        }
+        let found = names.find(py, self.kind, bytes, &mut unlinked)?;
+        Ok(names.names[found as usize].object.bind(py).clone())
     }
 }

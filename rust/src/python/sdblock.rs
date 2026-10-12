@@ -18,7 +18,7 @@ use crate::core::record::{HeaderStyle, Record};
 use crate::core::split::single_block;
 use crate::core::strip::Strip;
 use crate::python::ctable::PyCTable;
-use crate::python::kind::{Errors, Kind, bytes_of, decode_with};
+use crate::python::kind::{Kind, bytes_of, decode};
 use crate::python::names::Namer;
 use crate::python::read::{PySDBlockIterator, Source, reader};
 
@@ -175,8 +175,7 @@ pub(crate) struct PySDBlock {
 
 impl PartialEq for PySDBlock {
     fn eq(&self, other: &Self) -> bool {
-        // Blocks decoding with different handlers still hold the same SDF.
-        self.kind.is_text() == other.kind.is_text() && self.block == other.block
+        self.kind == other.kind && self.block == other.block
     }
 }
 
@@ -196,7 +195,7 @@ impl PySDBlock {
     /// The value of the last record named `name`, if any.
     fn last_value<'py>(&self, name: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
         let py = name.py();
-        let name = &*self.arg_bytes(name, "record names")?;
+        let name = self.arg_bytes(name, "record names")?;
         let strip = self.kind.strip();
         let mut found = None;
         for header in self.block.headers(strip) {
@@ -223,8 +222,8 @@ impl PySDBlock {
         value: &Bound<'_, PyAny>,
         style: HeaderStyle,
     ) -> PyResult<()> {
-        let name = &*self.arg_bytes(name, "record names")?;
-        let value = &*self.arg_bytes(value, "values")?;
+        let name = self.arg_bytes(name, "record names")?;
+        let value = self.arg_bytes(value, "values")?;
         self.block
             .set_record(name, value, self.kind.strip(), style)?;
         self.edited();
@@ -249,33 +248,23 @@ impl PySDBlock {
         ))
     }
 
-    /// Parse the title and MDL lines as a CTable. A bytes block's lines,
-    /// and for an `edit` a lenient block's lines that are not UTF-8, decode
-    /// as Latin-1, so every byte round-trips; otherwise those decode with
-    /// the block's handler, or "replace" for "surrogateescape".
-    fn parse_ctable(&self, py: Python<'_>, edit: bool) -> PyResult<CTable> {
-        let lines =
-            std::iter::once(self.block.title(self.kind.strip())).chain(lines(self.block.mdl()));
+    /// Parse the title and MDL lines as a CTable, decoding a bytes block's
+    /// as Latin-1, so every byte round-trips.
+    fn parse_ctable(&self, py: Python<'_>) -> PyResult<CTable> {
+        let title = self.block.title(self.kind.strip());
         let decoded = match self.kind {
-            Kind::Text(errors) => lines
-                .map(|line| match std::str::from_utf8(line) {
-                    Ok(text) => Ok(text.to_owned()),
-                    Err(error) if errors == Errors::Strict => {
-                        let error = PyUnicodeDecodeError::new_err_from_utf8(py, line, error);
-                        Err(self.noted(py, error, || "Reading the CTAB of".into()))
-                    }
-                    Err(_) if edit => Ok(latin_1(line)),
-                    Err(_) => {
-                        // Strings cannot hold surrogates.
-                        let errors = match errors {
-                            Errors::SurrogateEscape => Errors::Replace,
-                            errors => errors,
-                        };
-                        Ok(decode_with(py, line, errors)?.to_str()?.to_owned())
-                    }
-                })
-                .collect::<PyResult<_>>()?,
-            Kind::Bytes => lines.map(latin_1).collect(),
+            Kind::Text => {
+                let noted = |error| self.noted(py, error, || "Reading the CTAB of".into());
+                let mut decoded = vec![decode(py, title).map_err(noted)?.to_owned()];
+                for line in lines(self.block.mdl()) {
+                    decoded.push(decode(py, line).map_err(noted)?.to_owned());
+                }
+                decoded
+            }
+            Kind::Bytes => std::iter::once(title)
+                .chain(lines(self.block.mdl()))
+                .map(|line| line.iter().map(|&byte| char::from(byte)).collect())
+                .collect(),
         };
         Ok(CTable::parse(decoded)?)
     }
@@ -287,27 +276,20 @@ impl PySDBlock {
         py: Python<'_>,
         edit: impl FnOnce(&mut CTable) -> Result<(), CTableError>,
     ) -> PyResult<()> {
-        let mut ctable = self.parse_ctable(py, true)?;
+        let mut ctable = self.parse_ctable(py)?;
         edit(&mut ctable)?;
-        let edited = &ctable.lines[1..];
-        if self.kind == Kind::TEXT {
-            self.block.replace_mdl(edited.iter().map(String::as_bytes));
-            return Ok(());
+        let lines = &ctable.lines[1..];
+        match self.kind {
+            Kind::Text => self.block.replace_mdl(lines.iter().map(String::as_bytes)),
+            Kind::Bytes => {
+                // Edits write ASCII, so every char is a Latin-1 byte.
+                let encoded: Vec<Vec<u8>> = lines
+                    .iter()
+                    .map(|line| line.chars().map(|c| c as u8).collect())
+                    .collect();
+                self.block.replace_mdl(encoded.iter().map(Vec::as_slice));
+            }
         }
-        // Edits keep the number of lines, so each edited line is the read
-        // line's, which was Latin-1 if it was bytes or not UTF-8.
-        let encoded: Vec<Cow<'_, [u8]>> = lines(self.block.mdl())
-            .zip(edited)
-            .map(|(read, line)| {
-                if self.kind == Kind::Bytes || std::str::from_utf8(read).is_err() {
-                    // Edits write ASCII, so every char is a Latin-1 byte.
-                    Cow::Owned(line.chars().map(|c| c as u8).collect())
-                } else {
-                    Cow::Borrowed(line.as_bytes())
-                }
-            })
-            .collect();
-        self.block.replace_mdl(encoded.iter().map(|line| &**line));
         Ok(())
     }
 
@@ -331,25 +313,20 @@ impl PySDBlock {
 
     /// The bytes of a str or bytes argument, which must match the block's
     /// type; `what` names the argument in the error.
-    fn arg_bytes<'a>(&self, value: &'a Bound<'_, PyAny>, what: &str) -> PyResult<Cow<'a, [u8]>> {
-        self.kind.arg_bytes(value)?.ok_or_else(|| {
-            PyTypeError::new_err(match self.kind {
-                Kind::Text(_) => format!("text SDBlock {what} must be str"),
+    fn arg_bytes<'a>(&self, value: &'a Bound<'_, PyAny>, what: &str) -> PyResult<&'a [u8]> {
+        match bytes_of(value)? {
+            Some((kind, bytes)) if kind == self.kind => Ok(bytes),
+            _ => Err(PyTypeError::new_err(match self.kind {
+                Kind::Text => format!("text SDBlock {what} must be str"),
                 Kind::Bytes => format!("byte-backed SDBlock {what} must be bytes"),
-            })
-        })
+            })),
+        }
     }
 }
 
 /// How to read SDF that is not UTF-8, for notes on decode errors.
-const DECODE_HINT: &str = "parse_sdf(path, errors=\"replace\") decodes such files leniently, \
-    parse_sdf(os.fsencode(path)) reads them as bytes, and \
+const DECODE_HINT: &str = "parse_sdf(os.fsencode(path)) reads such files as bytes, and \
     SDBlock.from_lines(open(path, encoding=...)) decodes another encoding.";
-
-/// `bytes` as Latin-1: a char per byte.
-fn latin_1(bytes: &[u8]) -> String {
-    bytes.iter().map(|&byte| char::from(byte)).collect()
-}
 
 fn reading_record(name: &[u8]) -> String {
     format!("Reading record '{}' of", String::from_utf8_lossy(name))
@@ -451,7 +428,7 @@ impl PySDBlock {
             ));
         };
         let data = match kind {
-            Kind::Text(_) => translated(bytes),
+            Kind::Text => translated(bytes),
             Kind::Bytes => bytes.to_vec(),
         };
         let block = single_block(data).ok_or_else(|| {
@@ -462,8 +439,8 @@ impl PySDBlock {
         let mut slf = Self::wrap(block, kind);
         if let Some(records) = records {
             for (name, value) in record_pairs(records)? {
-                let name = &*slf.arg_bytes(&name, "record names")?;
-                let value = &*slf.arg_bytes(&value, "values")?;
+                let name = slf.arg_bytes(&name, "record names")?;
+                let value = slf.arg_bytes(&value, "values")?;
                 slf.block
                     .append_record(name, value, slf.kind.strip(), style);
             }
@@ -498,7 +475,7 @@ impl PySDBlock {
             Source::Buffer {
                 data: sdf.clone().unbind(),
                 pos: 0,
-                text: kind.is_text(),
+                text: kind == Kind::Text,
                 pending_cr: false,
             },
             kind,
@@ -525,7 +502,7 @@ impl PySDBlock {
     ///     TypeError: if the title is not the block's type
     #[setter(title)]
     fn set_title(&mut self, title: &Bound<'_, PyAny>) -> PyResult<()> {
-        let title = &*self.arg_bytes(title, "titles")?;
+        let title = self.arg_bytes(title, "titles")?;
         self.block.set_title(title).map_err(PyErr::from)
     }
 
@@ -554,10 +531,10 @@ impl PySDBlock {
     ///     TypeError: if the molblock is not the block's type
     #[setter(molblock)]
     fn set_molblock(&mut self, molblock: &Bound<'_, PyAny>) -> PyResult<()> {
-        let given = self.arg_bytes(molblock, "molblocks")?;
+        let molblock = self.arg_bytes(molblock, "molblocks")?;
         let molblock = match self.kind {
-            Kind::Text(_) => universal_newlines(&given),
-            Kind::Bytes => Cow::Borrowed(&*given),
+            Kind::Text => universal_newlines(molblock),
+            Kind::Bytes => Cow::Borrowed(molblock),
         };
         self.block.set_molblock(&molblock).map_err(PyErr::from)
     }
@@ -715,7 +692,7 @@ impl PySDBlock {
     fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
         let title = self.block.title(self.kind.strip());
         let title = match self.kind {
-            Kind::Text(_) => PyString::new(py, &String::from_utf8_lossy(title)).into_any(),
+            Kind::Text => PyString::new(py, &String::from_utf8_lossy(title)).into_any(),
             Kind::Bytes => PyBytes::new(py, title).into_any(),
         };
         Ok(format!("<SDBlock title={}>", title.repr()?))
@@ -745,15 +722,12 @@ impl PySDBlock {
             title_end,
             mdl_end,
         } = this.block.parts();
-        let data = PyBytes::new(py, data);
-        let text = this.kind.is_text();
-        let state = match this.kind {
-            // Only lenient blocks pickle their handler.
-            Kind::Text(errors) if errors != Errors::Strict => {
-                (data, title_end, mdl_end, text, errors.name()).into_pyobject(py)?
-            }
-            _ => (data, title_end, mdl_end, text).into_pyobject(py)?,
-        };
+        let state = (
+            PyBytes::new(py, data),
+            title_end,
+            mdl_end,
+            this.kind == Kind::Text,
+        );
         (slf.get_type().getattr(intern!(py, "_from_state"))?, state).into_pyobject(py)
     }
 
@@ -763,7 +737,7 @@ impl PySDBlock {
     ///     ValueError: if the state cannot come from a block
     #[classmethod]
     #[pyo3(signature = (
-        data: "bytes", title_end: "int", mdl_end: "int", text: "bool", errors: "str" = "strict",
+        data: "bytes", title_end: "int", mdl_end: "int", text: "bool",
     ) -> "SDBlock[Any]")]
     fn _from_state(
         _cls: &Bound<'_, PyType>,
@@ -771,14 +745,8 @@ impl PySDBlock {
         title_end: usize,
         mdl_end: usize,
         text: bool,
-        errors: &str,
     ) -> PyResult<Self> {
-        let errors = Errors::named(errors)?;
-        let kind = if text {
-            Kind::Text(errors)
-        } else {
-            Kind::Bytes
-        };
+        let kind = Kind::of(text);
         // Text blocks from str paths decode on access, so their state need
         // not be UTF-8.
         Block::from_parts(data.to_vec(), title_end, mdl_end)
@@ -795,7 +763,7 @@ impl PySDBlock {
     ///     TypeError: if `name` is not the block's type
     ///     MalformedRecordError: if a record header has no `<name>`
     fn __contains__(&self, name: &Bound<'_, PyAny>) -> PyResult<bool> {
-        let name = &*self.arg_bytes(name, "record names")?;
+        let name = self.arg_bytes(name, "record names")?;
         let mut seen = false;
         for header in self.block.headers(self.kind.strip()) {
             seen |= header?.name == name;
@@ -872,8 +840,8 @@ impl PySDBlock {
         header: &str,
     ) -> PyResult<()> {
         let style = header_style(header)?;
-        let name = &*self.arg_bytes(name, "record names")?;
-        let value = &*self.arg_bytes(value, "values")?;
+        let name = self.arg_bytes(name, "record names")?;
+        let value = self.arg_bytes(value, "values")?;
         self.block
             .append_record(name, value, self.kind.strip(), style);
         self.edited();
@@ -918,7 +886,7 @@ impl PySDBlock {
     ///     TypeError: if `name` is not the block's type
     #[pyo3(signature = (name: "AnyStr"))]
     fn remove_record(&mut self, name: &Bound<'_, PyAny>) -> PyResult<usize> {
-        let name = &*self.arg_bytes(name, "record names")?;
+        let name = self.arg_bytes(name, "record names")?;
         let removed = self.block.remove_records(name, self.kind.strip())?;
         if removed > 0 {
             self.edited();
@@ -965,7 +933,6 @@ impl PySDBlock {
             })
             .collect::<PyResult<Vec<_>>>()?;
         let strip = this.kind.strip();
-        let records = records.iter().map(|(name, value)| (&**name, &**value));
         this.block.replace_records(records, strip, style);
         this.edited();
         Ok(())
@@ -974,10 +941,7 @@ impl PySDBlock {
     /// Parse out the underlying CTable object.
     ///
     /// A bytes block's lines are decoded as Latin-1, so
-    /// `line.encode("latin-1")` gives the bytes back. A block from
-    /// `parse_sdf(path, errors=...)` decodes lines that are not UTF-8 with
-    /// its handler, "replace" for "surrogateescape"; `renumber_indices` and
-    /// `fix_counts` keep their bytes.
+    /// `line.encode("latin-1")` gives the bytes back.
     ///
     /// Returns:
     ///     The CTable titled with this block's title, parsed from its MDL
@@ -987,7 +951,7 @@ impl PySDBlock {
     ///     MalformedCTableError: if the table is shorter than its header,
     ///         or its format or counts cannot be read
     fn ctable(&self, py: Python<'_>) -> PyResult<PyCTable> {
-        Ok(self.parse_ctable(py, false)?.into())
+        Ok(self.parse_ctable(py)?.into())
     }
 
     /// The number of atoms declared by the counts line.

@@ -14,7 +14,7 @@ from sendoff.ctable import (
     IndicesOutOfOrderError,
     MalformedCTableError,
 )
-from sendoff.sdblock import SDBlock, parse_sdf, write_sdf
+from sendoff.sdblock import SDBlock, parse_sdf
 from tests.fixtures import INDEX_DEFECTS, CountedMol
 
 
@@ -694,38 +694,6 @@ def test_bytes_blocks_edit_their_ctable_as_latin_1() -> None:
     assert b"M  V30 2 O 0 0 0 0 X=\xe9\n" in raw.to_sdf()
     assert (raw.num_atoms, raw.num_bonds) == (2, 1)
     assert raw.title == b"\xfft"
-
-
-@pytest.mark.parametrize("errors", ["replace", "backslashreplace", "surrogateescape"])
-def test_lenient_blocks_edit_their_ctable_byte_for_byte(
-    tmp_path: Path,
-    errors: typing.Literal["replace", "backslashreplace", "surrogateescape"],
-) -> None:
-    """Lenient str blocks show bad CTAB bytes decoded, and edit them as read.
-
-    Args:
-        tmp_path: Temporary directory for the SDF fixture.
-        errors: the handler the block decodes with
-    """
-    sdf = b"\xff" + v3000_block(
-        "M  V30 3 C 0 0 0 0 X=?", "M  V30 1 1 3 2", counts="M  V30 COUNTS 5 3 0 0 0"
-    ).to_sdf().encode().replace(b"X=?", b"X=\xe9").replace(
-        b" 2 O 0 0 0 0", " 2 O 0 0 0 0 X=\xe9".encode()
-    )
-    path = tmp_path / "bad.sdf"
-    path.write_bytes(sdf)
-    (block,) = parse_sdf(path, errors=errors)
-    lines = block.ctable().lines
-    shown = "\ufffd" if errors == "surrogateescape" else b"\xff".decode(errors=errors)
-    assert lines[0] == shown + "t"
-    assert "M  V30 2 O 0 0 0 0 X=\xe9" in lines
-    raw = next(SDBlock.from_sdf(sdf))
-    for edited in (block, raw):
-        edited.renumber_indices()
-        edited.fix_counts()
-    assert b"M  V30 1 C 0 0 0 0 X=\xe9\n" in raw.to_sdf()
-    write_sdf(path, [block])
-    assert path.read_bytes() == raw.to_sdf()
 
 
 @pytest.mark.parametrize("ending", ["\n", "\r\n", ""])

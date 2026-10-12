@@ -315,13 +315,7 @@ class SDBlock(Generic[AnyStr]):
 
     @classmethod
     def _from_state(
-        cls,
-        /,
-        data: bytes,
-        title_end: int,
-        mdl_end: int,
-        text: bool,
-        errors: str = "strict",
+        cls, /, data: bytes, title_end: int, mdl_end: int, text: bool
     ) -> SDBlock[Any]:
         """
         Rebuild a block pickled by `__reduce__`.
@@ -360,10 +354,7 @@ class SDBlock(Generic[AnyStr]):
         Parse out the underlying CTable object.
 
         A bytes block's lines are decoded as Latin-1, so
-        `line.encode("latin-1")` gives the bytes back. A block from
-        `parse_sdf(path, errors=...)` decodes lines that are not UTF-8 with
-        its handler, "replace" for "surrogateescape"; `renumber_indices` and
-        `fix_counts` keep their bytes.
+        `line.encode("latin-1")` gives the bytes back.
 
         Returns:
             The CTable titled with this block's title, parsed from its MDL
@@ -733,16 +724,10 @@ class _SDRecordIterator(Iterator[tuple[AnyStr, AnyStr]]):
 @overload
 def parse_sdf(
     source: str | os.PathLike[str] | _SupportsRead[str] | _SupportsRead1[str],
-    *,
-    errors: Literal[
-        "strict", "replace", "backslashreplace", "surrogateescape"
-    ] = "strict",
 ) -> _SDBlockIterator[str]: ...
 @overload
 def parse_sdf(
     source: bytes | os.PathLike[bytes] | _SupportsRead[bytes] | _SupportsRead1[bytes],
-    *,
-    errors: Literal["strict"] = "strict",
 ) -> _SDBlockIterator[bytes]: ...
 @overload
 def parse_sdf(
@@ -756,10 +741,6 @@ def parse_sdf(
         | _SupportsRead1[str]
         | _SupportsRead1[bytes]
     ),
-    *,
-    errors: Literal[
-        "strict", "replace", "backslashreplace", "surrogateescape"
-    ] = "strict",
 ) -> _SDBlockIterator[Any]:
     """
     Lazily parse SDBlocks from an SDF path or file object.
@@ -771,7 +752,9 @@ def parse_sdf(
     iterating can kill the process with SIGBUS, so write results to a new
     path. str paths give str values decoded as UTF-8 on access, with
     universal newlines translated to "\\n", as `open(path)` reads; bytes
-    paths give bytes split on b"\\n" only.
+    paths give bytes split on b"\\n" only. Use a bytes path for feeds that
+    are not valid UTF-8: from a str path, their text raises
+    UnicodeDecodeError with a note naming the block and record.
 
     A file object, such as `sys.stdin.buffer`, is read as
     `SDBlock.from_lines` reads one, from its position and through Python;
@@ -781,34 +764,12 @@ def parse_sdf(
     Args:
         source: a str, bytes, or os.PathLike path, or a file object with a
             `read1` or `read` method
-        errors: keyword-only; how blocks from a str path decode bytes that
-            are not UTF-8, as `bytes.decode` does. Decoding happens on
-            access, so a bad byte surfaces from the title, name, or value
-            holding it:
-
-            - "strict" (default) raises UnicodeDecodeError with a note
-              naming the block and record.
-            - "replace" decodes each bad byte as U+FFFD.
-            - "backslashreplace" decodes each bad byte as an escape such as
-              `\\xff`.
-            - "surrogateescape" decodes each bad byte as a lone surrogate,
-              so names and values passed back encode to the original bytes.
-              With the other handlers a name holding a bad byte cannot be
-              looked up.
-
-            Writing such blocks to a path writes their bytes as read; to a
-            text file, their decoded text. "ignore" is not offered, since
-            dropping bytes can blank a line or make one "$$$$". Other
-            sources take only "strict": read a binary file object as
-            bytes, or wrap it in `io.TextIOWrapper(f, errors="replace")`.
 
     Returns:
         An iterator of SDBlocks; `close()` releases the file early
 
     Raises:
         TypeError: if `source` is neither a path nor a file object
-        ValueError: for another `errors`, or a handler with a source other
-            than a str path
     """
 
 @overload
@@ -824,9 +785,7 @@ def write_sdf(dest: _SupportsWrite[AnyStr], blocks: Iterable[SDBlock[AnyStr]]) -
     Blocks are written as `SDBlock.write` would, but 64-256 KiB at a time:
     to a path without holding the GIL, or to a file object with one
     `write` call per chunk, as str for text blocks or bytes for byte-backed
-    ones. Text blocks must be valid UTF-8, except those `parse_sdf` read
-    with an `errors` handler: a path gets their bytes as read, and a file
-    object their text decoded with the handler.
+    ones. Text blocks must be valid UTF-8.
 
     An error stops writing as it would a loop of `SDBlock.write` calls:
     the blocks before the failing one are written, a path keeps them, and
@@ -850,6 +809,6 @@ def write_sdf(dest: _SupportsWrite[AnyStr], blocks: Iterable[SDBlock[AnyStr]]) -
     Raises:
         TypeError: if `blocks` is not iterable, produces something other
             than an SDBlock, or mixes str and bytes blocks for a file object
-        UnicodeDecodeError: for a str block without a handler that is not UTF-8
+        UnicodeDecodeError: for a str block that is not UTF-8
         OSError: if `dest` cannot be created or written
     """
