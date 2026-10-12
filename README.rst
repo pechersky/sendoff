@@ -57,15 +57,19 @@ not validated.
 Non-UTF-8 files
 ---------------
 
-str paths decode UTF-8. For other encodings, decode yourself:
+str paths decode UTF-8. Open other encodings yourself, or stay in bytes:
 
 .. code-block:: python
 
    with open("vendor.sdf", encoding="gbk") as f:
-       write_sdf("vendor-utf8.sdf", parse_sdf(f))
+       names = {block["CAS"]: block["Product name"] for block in parse_sdf(f)}
 
-   for block in parse_sdf(os.fsencode("vendor.sdf")):
-       block[b"Product name"].decode("gbk", "replace")
+   in_stock = (
+       block
+       for block in parse_sdf(os.fsencode("vendor.sdf"))
+       if block.get(b"Availability") == b"In-stock"
+   )
+   write_sdf("in-stock.sdf", in_stock)
 
 Shell pipelines
 ---------------
