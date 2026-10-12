@@ -76,11 +76,18 @@ Shell pipelines
 
 .. code-block:: bash
 
-   cat my.sdf | python -c '
-   from sendoff import parse_sdf
-   for block in parse_sdf("/dev/stdin"):
-       print(block.get("Supplier"))
-   ' | sort | uniq -c
+   python -m sendoff.cli.count my.sdf
+   python -m sendoff.cli.get Supplier my.sdf | sort | uniq -c
+   paste <(python -m sendoff.cli.get -t my.sdf) <(python -m sendoff.cli.get CAS my.sdf)
+   python -m sendoff.cli.get ID my.sdf | sed 's/^/TL-/' |
+       python -m sendoff.cli.title --from - my.sdf > titled.sdf
+   python -m sendoff.cli.filter --eq Availability In-stock vendor.sdf |
+       python -m sendoff.cli.set Batch --value B7 > batch.sdf
 
-Write SDF to a pipe with ``write_sdf(sys.stdout, blocks)``; for bytes, read
-``b"/dev/stdin"`` and write ``sys.stdout.buffer``.
+The ``count``, ``get``, ``set``, ``title``, and ``filter`` commands read a file
+or stdin as bytes and write stdout. ``get`` prints one line per block, empty
+where a record is missing, and ``--from`` reads one line per block; ``-z`` uses
+NUL instead. Run any with ``-h``.
+
+In Python, write a pipe with ``write_sdf(sys.stdout, blocks)``, or
+``sys.stdout.buffer`` for bytes blocks.
