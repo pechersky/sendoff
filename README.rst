@@ -79,6 +79,27 @@ it to a ``block.write`` loop. ``parse_sdf`` memory-maps regular files on local
 Linux filesystems, so write results to a new path: truncating a file while it
 is parsed crashes the process.
 
+Non-UTF-8 files
+---------------
+
+A str path decodes text as UTF-8 when it is read, so a stray byte raises
+``UnicodeDecodeError`` from the title, name, or value holding it. Only the
+caller knows a feed's encoding:
+
+.. code-block:: python
+
+   # One known encoding: a text file, read through Python, not memory-mapped.
+   # write_sdf writes str blocks as UTF-8, so this also transcodes the feed.
+   with open("vendor.sdf", encoding="gbk") as f:
+       write_sdf("vendor-utf8.sdf", parse_sdf(f))
+
+   # Mixed or unknown: bytes, decoded per value as the feed needs.
+   for block in parse_sdf(os.fsencode("vendor.sdf")):
+       name = block[b"Product name"].decode("gbk", "replace")
+
+Bytes blocks write back byte for byte. ``open(path, errors="replace")`` reads
+on past bad bytes, at the cost of the text they held.
+
 Shell pipelines
 ---------------
 
