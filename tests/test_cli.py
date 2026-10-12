@@ -317,3 +317,60 @@ def test_set_from_stdin_needs_file(
     )
     assert (status, out) == (2, b"")
     assert err.endswith(b"error: --from - needs a FILE\n")
+
+
+def test_title(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    sdf: Path,
+) -> None:
+    """Title sets titles from --value, --field, or get -t output.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        sdf: pytest fixture of a Path to the sdf
+    """
+    first, second, third = (b"first", b"second", b"third")
+
+    def titled(*titles: bytes) -> bytes:
+        return (
+            SDF.replace(first, titles[0], 1)
+            .replace(second, titles[1], 1)
+            .replace(third, titles[2], 1)
+        )
+
+    assert cli(capsysbinary, monkeypatch, "title", "--value", "T", sdf) == (
+        0,
+        titled(b"T", b"T", b"T"),
+        b"",
+    )
+    assert cli(capsysbinary, monkeypatch, "title", "--field", "ID", stdin=SDF) == (
+        0,
+        titled(b"A-1", b"", b"A-3"),
+        b"",
+    )
+    assert cli(
+        capsysbinary, monkeypatch, "title", "--field", "ID", "--skip-empty", sdf
+    ) == (0, titled(b"A-1", second, b"A-3"), b"")
+    _, titles, _ = cli(capsysbinary, monkeypatch, "get", "-t", sdf)
+    assert cli(
+        capsysbinary, monkeypatch, "title", "--from", "-", sdf, stdin=titles
+    ) == (0, SDF, b"")
+
+
+def test_title_line_break(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    sdf: Path,
+) -> None:
+    """A title with a line break fails with the block number.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        sdf: pytest fixture of a Path to the sdf
+    """
+    status, _, err = cli(capsysbinary, monkeypatch, "title", "--field", "Note", sdf)
+    assert status == 1
+    assert err.startswith(b"python -m sendoff.cli.title: block 2: ")
