@@ -52,8 +52,7 @@ file while it is parsed crashes the process.
 
 New headers are ``> <name>``; ``header="padded"`` writes ``>  <name>``, as
 RDKit does, and ``header="copy"`` follows the block's first header. Names are
-not checked: the CTfile format wants a letter, then letters, digits, or
-underscores.
+not validated.
 
 Non-UTF-8 files
 ---------------
