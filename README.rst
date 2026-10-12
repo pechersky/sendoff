@@ -25,29 +25,30 @@ Usage
 
    for block in parse_sdf("compounds.sdf"):
        block.title
-       block["ID"]  # the last value named "ID"; KeyError if none
-       block.get("ID")  # or None: blocks need not share record names
-       block.to_dict()  # every record, later duplicates winning
-       block.records()  # [(name, value), ...] in file order
-       block.iter_records()  # the same, lazily
-       "ID" in block, len(block), list(block)  # names only
-       "V3000" in block.mdl  # the CTAB after the title, through M  END
+       block["ID"]
+       block.get("ID")
+       block.to_dict()
+       block.records()
+       block.iter_records()
+       "ID" in block, len(block), list(block)
+       "V3000" in block.mdl
        mol = Chem.MolFromMolBlock(block.molblock)
 
    Counter(name for block in parse_sdf("compounds.sdf") for name in block)
 
    def tag(block):
-       block["Source"] = "vendor"  # replace in place, or append
+       block["Source"] = "vendor"
        block.remove_record("Internal note")
        return block
 
-   # Faster than a block.write loop. Write to a new path: parse_sdf
-   # memory-maps local files, and truncating one mid-parse crashes.
    write_sdf("out.sdf", (tag(block) for block in parse_sdf("in.sdf")))
 
    block = SDBlock(Chem.MolToMolBlock(mol), {"ID": "X-1"})
-   block.to_sdf()  # SDF text ending in $$$$
-   SDBlock.from_sdf(sdf_text)  # blocks from SDF in memory
+   block.to_sdf()
+   SDBlock.from_sdf(sdf_text)
+
+``parse_sdf`` memory-maps local files, so write to a new path: truncating a
+file while it is parsed crashes the process.
 
 New headers are ``> <name>``; ``header="padded"`` writes ``>  <name>``, as
 RDKit does, and ``header="copy"`` follows the block's first header. Names are
@@ -61,10 +62,10 @@ str paths decode UTF-8. For other encodings, decode yourself:
 
 .. code-block:: python
 
-   with open("vendor.sdf", encoding="gbk") as f:  # read through Python
-       write_sdf("vendor-utf8.sdf", parse_sdf(f))  # str blocks write UTF-8
+   with open("vendor.sdf", encoding="gbk") as f:
+       write_sdf("vendor-utf8.sdf", parse_sdf(f))
 
-   for block in parse_sdf(os.fsencode("vendor.sdf")):  # bytes, as written
+   for block in parse_sdf(os.fsencode("vendor.sdf")):
        block[b"Product name"].decode("gbk", "replace")
 
 Shell pipelines
