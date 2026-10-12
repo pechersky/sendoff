@@ -13,6 +13,13 @@ Needs maturin on PATH or next to this interpreter, and llvm-profdata from
 `rustup component add llvm-tools`. The training data is synthetic so that
 real datasets stay held out for measuring the gain. `maturin build
 --release` still makes a correct, LTO-only wheel.
+
+RUSTFLAGS is appended to, so `RUSTFLAGS=-Cforce-frame-pointers=yes
+scripts/pgo-build` (or the same with `maturin build --release`) makes a wheel
+that perf and other frame-pointer unwinders can walk through. Use it for
+profiling only, under a Python that has frame pointers too (3.15+, or a recent
+python-build-standalone): they cost a few percent, so do not compare its
+timings against release wheels.
 """
 from __future__ import annotations
 
