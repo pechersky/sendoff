@@ -15,7 +15,7 @@ from sendoff.ctable import (
     MalformedCTableError,
 )
 from sendoff.sdblock import SDBlock, parse_sdf
-from tests.fixtures import INDEX_DEFECTS, CountedMol
+from tests.fixtures import INDEX_DEFECTS, CountedMol, sdf_of
 
 
 def test_counts_mol_read(counted_mol_sdf: CountedMol) -> None:
@@ -372,7 +372,7 @@ def test_malformed_headers_fail_every_operation(
     with pytest.raises(MalformedCTableError) as raised:
         run_ctable_operation(block, operation)
     assert str(raised.value) == message
-    assert block.to_sdf() == (text.encode() if binary else text)
+    assert sdf_of(block) == (text.encode() if binary else text)
 
 
 RENUMBERING = {"renumber_indices"}
@@ -510,7 +510,7 @@ def test_malformed_lines_fail_the_operations_that_read_them(
         operation: one of CTABLE_OPERATIONS
     """
     block = v3000_block(**lines)
-    text = block.to_sdf()
+    text = sdf_of(block)
     if operation not in errors:
         run_ctable_operation(block, operation)
         return
@@ -519,7 +519,7 @@ def test_malformed_lines_fail_the_operations_that_read_them(
         run_ctable_operation(block, operation)
     assert type(raised.value) is error
     assert str(raised.value) == message
-    assert block.to_sdf() == text
+    assert sdf_of(block) == text
 
 
 @pytest.mark.parametrize(
@@ -598,7 +598,7 @@ def test_fix_counts_sets_counts_to_table_lines(ending: str) -> None:
     """
     counts = "M  V30 COUNTS  5 3  1 0 1 REGNO=7"
     block = v3000_block(counts=counts)
-    lines = [line + ending for line in block.to_sdf().splitlines()[:-1]]
+    lines = [line + ending for line in sdf_of(block).splitlines()[:-1]]
     ctable = CTable(lines)
     assert (ctable.num_atoms, ctable.num_bonds) == (5, 3)
     ctable.fix_counts()
@@ -611,7 +611,7 @@ def test_fix_counts_sets_counts_to_table_lines(ending: str) -> None:
     assert (reparsed.num_atoms, reparsed.num_bonds) == (2, 1)
     block.fix_counts()
     assert (block.num_atoms, block.num_bonds) == (2, 1)
-    assert block.to_sdf() == v3000_block(counts=fixed.rstrip()).to_sdf()
+    assert sdf_of(block) == sdf_of(v3000_block(counts=fixed.rstrip()))
 
 
 def test_fix_counts_reads_section_markers() -> None:
@@ -633,7 +633,7 @@ def test_sections_need_one_begin_and_one_end_line(operation: str, section: str) 
         operation: the method to call; valid_indices validates the section
         section: the section to break
     """
-    text = v3000_block().to_sdf()
+    text = sdf_of(v3000_block())
     begin, end = f"M  V30 BEGIN {section}", f"M  V30 END {section}"
     # The repeated begin line follows the section's end line.
     begin_line, repeat_line = (7, 11) if section == "ATOM" else (11, 14)
@@ -655,7 +655,7 @@ def test_sections_need_one_begin_and_one_end_line(operation: str, section: str) 
         with pytest.raises(MalformedCTableError) as raised:
             call()
         assert str(raised.value) == message
-        assert block.to_sdf() == broken
+        assert sdf_of(block) == broken
 
 
 def test_sections_are_the_root_ctabs() -> None:
@@ -678,9 +678,11 @@ def test_sections_are_the_root_ctabs() -> None:
 
 def test_bytes_blocks_edit_their_ctable_as_latin_1() -> None:
     """Bytes blocks read and edit their CTable as Latin-1 text, byte for byte."""
-    sdf = b"\xff" + v3000_block(
-        "M  V30 3 C 0 0 0 0", "M  V30 1 1 3 2", counts="M  V30 COUNTS 5 3 0 0 0"
-    ).to_sdf().encode().replace(b" 2 O 0 0 0 0", b" 2 O 0 0 0 0 X=\xe9")
+    sdf = b"\xff" + sdf_of(
+        v3000_block(
+            "M  V30 3 C 0 0 0 0", "M  V30 1 1 3 2", counts="M  V30 COUNTS 5 3 0 0 0"
+        )
+    ).encode().replace(b" 2 O 0 0 0 0", b" 2 O 0 0 0 0 X=\xe9")
     raw = next(SDBlock.from_sdf(sdf))
     text = next(SDBlock.from_sdf(sdf.decode("latin-1")))
     lines = raw.ctable().lines
@@ -689,9 +691,9 @@ def test_bytes_blocks_edit_their_ctable_as_latin_1() -> None:
     for block in (raw, text):
         block.renumber_indices()
         block.fix_counts()
-    assert raw.to_sdf() == text.to_sdf().encode("latin-1")
-    assert b"M  V30 1 C 0 0 0 0\n" in raw.to_sdf()
-    assert b"M  V30 2 O 0 0 0 0 X=\xe9\n" in raw.to_sdf()
+    assert sdf_of(raw) == sdf_of(text).encode("latin-1")
+    assert b"M  V30 1 C 0 0 0 0\n" in sdf_of(raw)
+    assert b"M  V30 2 O 0 0 0 0 X=\xe9\n" in sdf_of(raw)
     assert (raw.num_atoms, raw.num_bonds) == (2, 1)
     assert raw.title == b"\xfft"
 
@@ -703,7 +705,7 @@ def test_renumber_keeps_line_endings(ending: str) -> None:
     Args:
         ending: what ends each line given to the CTable
     """
-    lines = [line + ending for line in v3000_block().to_sdf().splitlines()[:-1]]
+    lines = [line + ending for line in sdf_of(v3000_block()).splitlines()[:-1]]
     ctable = CTable(lines)
     ctable.renumber_indices()
     assert ctable.lines == lines
@@ -769,14 +771,14 @@ def test_renumber_refuses_to_change_referenced_indices(
         construct: what the error names
     """
     block = v3000_block(atom.format(3), bond.format(3), extra=extra.format(3))
-    before = block.to_sdf()
+    before = sdf_of(block)
     with pytest.raises(NotImplementedError, match=construct):
         block.renumber_indices()
-    assert block.to_sdf() == before
+    assert sdf_of(block) == before
     numbered = v3000_block(atom.format(1), bond.format(1), extra=extra.format(1))
-    before = numbered.to_sdf()
+    before = sdf_of(numbered)
     numbered.renumber_indices()
-    assert numbered.to_sdf() == before
+    assert sdf_of(numbered) == before
 
 
 @pytest.mark.parametrize(
@@ -795,13 +797,13 @@ def test_refuses_nested_ctabs(operation: str, name: str) -> None:
         + "M  V30 BEGIN ATOM\nM  V30 1 C 0 0 0 0\nM  V30 END ATOM\n"
         + "M  V30 END CTAB\nM  V30 END RGROUP\n"
     )
-    before = block.to_sdf()
+    before = sdf_of(block)
     with pytest.raises(NotImplementedError) as raised:
         getattr(block, operation)()
     assert str(raised.value) == (
         f"{name} does not support CTABs nested in RGROUP or TEMPLATE blocks yet"
     )
-    assert block.to_sdf() == before
+    assert sdf_of(block) == before
 
 
 @pytest.mark.parametrize("ending", ["\n", "\r\n", ""])
@@ -818,7 +820,7 @@ def test_continued_lines_are_one_logical_line(ending: str) -> None:
         bond="M  V30 1 1 -\n1 2",
         counts="M  V30 COUNTS 9 9 0 0 0",
     )
-    lines = [line + ending for line in block.to_sdf().splitlines()[:-1]]
+    lines = [line + ending for line in sdf_of(block).splitlines()[:-1]]
     ctable = CTable(lines)
     ctable.fix_counts()
     assert (ctable.num_atoms, ctable.num_bonds) == (2, 1)

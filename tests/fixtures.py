@@ -3,14 +3,33 @@
 import os
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, overload
 
 import pytest
 from rdkit import Chem
 
-from sendoff.sdblock import parse_sdf
+from sendoff.sdblock import SDBlock, parse_sdf
 
 Pathy = str | bytes | os.PathLike[str] | os.PathLike[bytes]
+
+
+@overload
+def sdf_of(block: SDBlock[str]) -> str: ...
+@overload
+def sdf_of(block: SDBlock[bytes]) -> bytes: ...
+
+
+def sdf_of(block: SDBlock[str] | SDBlock[bytes]) -> str | bytes:
+    """Return a block's SDF in its type, as str(block) or bytes(block).
+
+    Args:
+        block: a str or bytes block
+
+    Returns:
+        str(block) for a str block, else bytes(block)
+    """
+    return str(block) if isinstance(block.title, str) else bytes(block)
+
 
 if TYPE_CHECKING:
     from _pytest.fixtures import FixtureRequest as __FixtureRequest

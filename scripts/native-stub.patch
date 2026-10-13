@@ -73,7 +73,7 @@
 -    def __contains__(self, name: Any, /) -> bool:
 +    def __buffer__(self: SDBlock[bytes], flags: int, /) -> memoryview:
 +        """
-+        Export a bytes block's SDF, as `to_sdf` returns it, without copying.
++        Export a bytes block's SDF without copying.
 +
 +        Edits raise BufferError until every export is released.
 +
@@ -129,7 +129,7 @@
          """
          Set a record as `set_record(name, value)` does.
 
-@@ -350,10 +391,26 @@
+@@ -364,10 +405,26 @@
              NotImplementedError: as CTable.fix_counts raises
          """
 
@@ -157,7 +157,7 @@
          ),
      ) -> _SDBlockIterator[Any]:
          """
-@@ -390,6 +447,13 @@
+@@ -404,6 +461,13 @@
                  reads that are not str or bytes or that mix the two
          """
 
@@ -171,7 +171,7 @@
      @staticmethod
      def from_sdf(sdf: str | bytes) -> _SDBlockIterator[Any]:
          """
-@@ -410,7 +474,10 @@
+@@ -424,7 +488,10 @@
              TypeError: if `sdf` is not str or bytes
          """
 
@@ -183,7 +183,7 @@
          """
          Return the value of the last record named `name`, or `default`.
 
-@@ -438,7 +505,7 @@
+@@ -452,7 +519,7 @@
          """
 
      @property
@@ -192,7 +192,7 @@
          """
          Return the CTAB after the title, through `M  END`, as one value.
 
-@@ -448,7 +515,7 @@
+@@ -462,7 +529,7 @@
          """
 
      @property
@@ -201,7 +201,7 @@
          """
          Return the title line and CTAB through `M  END` as one value.
 
-@@ -457,7 +524,7 @@
+@@ -471,7 +538,7 @@
          """
 
      @molblock.setter
@@ -210,7 +210,7 @@
          """
          Replace the title line and CTAB, keeping the SD data.
 
-@@ -588,7 +655,7 @@
+@@ -602,7 +669,7 @@
          """
 
      @property
@@ -219,7 +219,7 @@
          """
          Return the title line without trailing whitespace, in the input type.
 
-@@ -598,7 +665,7 @@
+@@ -612,7 +679,7 @@
          """
 
      @title.setter
@@ -228,7 +228,7 @@
          """
          Replace the title line.
 
-@@ -632,20 +699,19 @@
+@@ -639,20 +706,19 @@
          without "\\n") end like the title line. The block is
          written in one `write` call, whose return value is not checked, so an
          unbuffered (`buffering=0`) or nonblocking handle may write part of it.
@@ -252,7 +252,7 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -653,25 +719,43 @@
+@@ -660,25 +726,43 @@
          """
 
  @final
@@ -304,7 +304,7 @@
  ) -> _SDBlockIterator[Any]:
      """
      Lazily parse SDBlocks from an SDF path or file object.
-@@ -704,10 +788,13 @@
+@@ -711,10 +795,13 @@
          TypeError: if `source` is neither a path nor a file object
      """
 
@@ -320,7 +320,7 @@
      """
      Write SDBlocks to a path or a file object, and return how many.
 
-@@ -741,5 +828,3 @@
+@@ -748,5 +835,3 @@
          UnicodeDecodeError: for a str block that is not UTF-8
          OSError: if `dest` cannot be created or written
      """

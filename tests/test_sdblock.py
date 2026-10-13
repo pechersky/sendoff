@@ -8,6 +8,7 @@ import typing
 import pytest
 
 from sendoff.sdblock import MalformedRecordError, SDBlock
+from tests.fixtures import sdf_of
 
 
 def test_bytes_block_requires_binary_append_values() -> None:
@@ -184,7 +185,7 @@ def test_dict_style_access_matches_the_record_methods() -> None:
     del block["B"]
     with pytest.raises(KeyError):
         del block["B"]
-    assert block.to_sdf() == "t\nM  END\n> <A>  (1)\nnew\n\n> <C>\nc\n\n$$$$\n"
+    assert sdf_of(block) == "t\nM  END\n> <A>  (1)\nnew\n\n> <C>\nc\n\n$$$$\n"
 
     names = iter(block)
     assert next(names) == "A"
@@ -384,7 +385,7 @@ def test_nameless_headers_raise_malformed_record_error(
     with pytest.raises(MalformedRecordError, match="^SD data field header is"):
         read(block)
     assert issubclass(MalformedRecordError, ValueError)
-    assert block.to_sdf() == "t\n\nM  END\n> <A>\n1\n\n> no name\n1\n\n$$$$\n"
+    assert sdf_of(block) == "t\n\nM  END\n> <A>\n1\n\n> no name\n1\n\n$$$$\n"
 
 
 def test_appended_records_follow_a_blank_line() -> None:
@@ -393,7 +394,7 @@ def test_appended_records_follow_a_blank_line() -> None:
         block = SDBlock("t\nM  END\n> <A>\n1")
         getattr(block, method)("B", "2")
         assert block.records() == [("A", "1"), ("B", "2")]
-        assert block.to_sdf() == "t\nM  END\n> <A>\n1\n\n> <B>\n2\n\n$$$$\n"
+        assert sdf_of(block) == "t\nM  END\n> <A>\n1\n\n> <B>\n2\n\n$$$$\n"
     constructed = SDBlock("t\nM  END\n> <A>\n1\n$$$$\n", {"B": "2"})
     assert constructed.records() == [("A", "1"), ("B", "2")]
 
@@ -432,7 +433,7 @@ def test_constructor_parses_one_block() -> None:
     molblock = "title\n  prog\n\nM  END\n"
     block = SDBlock(molblock)
     assert (block.title, block.molblock, block.records()) == ("title", molblock, [])
-    assert block.to_sdf() == molblock + "$$$$\n"
+    assert sdf_of(block) == molblock + "$$$$\n"
 
     with_data = SDBlock(molblock + "> <A>\n1\n\n$$$$\n\n", {"B": "2"})
     assert with_data.molblock == molblock
@@ -474,8 +475,8 @@ def test_blocks_compare_by_content_and_are_unhashable() -> None:
     # without M  END, so equal text alone does not make equal blocks.
     appended = SDBlock("t\n  prog\n")
     appended.append_record("A", "1")
-    reparsed = SDBlock(appended.to_sdf())
-    assert reparsed.to_sdf() == appended.to_sdf()
+    reparsed = SDBlock(sdf_of(appended))
+    assert sdf_of(reparsed) == sdf_of(appended)
     assert (reparsed.records(), appended.records()) == ([], [("A", "1")])
     assert reparsed != appended
 
@@ -484,7 +485,7 @@ def test_blocks_compare_by_content_and_are_unhashable() -> None:
 
 
 def _state_edge_blocks() -> list[SDBlock[str]]:
-    """Build blocks that SDBlock(block.to_sdf()) does not rebuild exactly.
+    """Build blocks that SDBlock(str(block)) does not rebuild exactly.
 
     Returns:
         Edited and unusual blocks
@@ -513,7 +514,7 @@ def test_blocks_pickle_their_exact_state(protocol: int) -> None:
         restored = pickle.loads(pickle.dumps(block, protocol))
         assert restored == block and restored is not block
         assert type(restored.title) is type(block.title)
-        assert restored.to_sdf() == block.to_sdf()
+        assert sdf_of(restored) == sdf_of(block)
         assert restored.records() == block.records()
     assert pickle.loads(pickle.dumps(blocks, protocol)) == blocks
 
@@ -606,7 +607,7 @@ def test_exported_blocks_refuse_edits(
     """
     block = SDBlock(V3000)
     view = memoryview(block)
-    assert view.readonly and view == block.to_sdf() == bytes(block) == V3000
+    assert view.readonly and view == sdf_of(block) == bytes(block) == V3000
     duplicate = copy.copy(block)
     edit(duplicate)
     part = view[1:]
@@ -618,7 +619,7 @@ def test_exported_blocks_refuse_edits(
     edit(block)
     assert block == duplicate
     out = io.BytesIO()
-    assert out.write(block) == len(block.to_sdf())
+    assert out.write(block) == len(sdf_of(block))
 
 
 def test_str_blocks_are_not_bytes_like() -> None:
@@ -634,6 +635,17 @@ def test_block_repr_shows_the_title() -> None:
     """The repr shows the title in the block's type."""
     assert repr(SDBlock(" aspirin \nM  END\n")) == "<SDBlock title=' aspirin'>"
     assert repr(SDBlock(b"aspirin\nM  END\n")) == "<SDBlock title=b'aspirin'>"
+
+
+def test_str_and_bytes_are_the_sdf_of_their_kind() -> None:
+    """str() is a str block's SDF; a bytes block's is bytes(), as for bytes."""
+    text = SDBlock("t\nM  END\n")
+    raw = SDBlock(b"t\nM  END\n")
+    assert str(text) == f"{text}" == "t\nM  END\n$$$$\n"
+    assert bytes(raw) == b"t\nM  END\n$$$$\n"
+    assert str(raw) == repr(raw)
+    with pytest.raises(TypeError, match="str"):
+        bytes(text)
 
 
 def test_molblock_setter_replaces_the_structure_only() -> None:
@@ -686,8 +698,8 @@ def test_title_setter_replaces_only_the_title() -> None:
     assert block.records() == [("A", "1")]
     block.title = " $$$$ "
     assert block.title == " $$$$"
-    assert block.to_sdf() == " $$$$ \nsrc\nM  END\n> <A>\n1\n$$$$\n"
-    assert [b.title for b in SDBlock.from_sdf(block.to_sdf())] == [" $$$$"]
+    assert sdf_of(block) == " $$$$ \nsrc\nM  END\n> <A>\n1\n$$$$\n"
+    assert [b.title for b in SDBlock.from_sdf(sdf_of(block))] == [" $$$$"]
     for bad, message in [
         ("two\nlines", "single line"),
         ("cr\r", "single line"),

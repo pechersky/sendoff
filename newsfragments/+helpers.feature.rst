@@ -9,8 +9,8 @@ New ``SDBlock`` helpers for common tasks:
 - ``title`` is assignable, and ``set_record``, ``remove_record``, and
   ``replace_records`` edit the SD data.
 - ``SDBlock(sdf, records=None)`` parses one block, such as an RDKit molblock,
-  and ``SDBlock.from_sdf(text)`` parses SDF held in memory. ``to_sdf()``
-  returns a block as SDF text.
+  and ``SDBlock.from_sdf(text)`` parses SDF held in memory. ``str(block)`` is
+  a ``str`` block's SDF.
 - ``sendoff.sdblock.write_sdf(dest, blocks)`` writes blocks to a path or a
   file object and returns how many it wrote. Like a loop of ``block.write``,
   an error leaves the blocks before it written.

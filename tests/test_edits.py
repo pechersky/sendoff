@@ -19,6 +19,7 @@ from typing import Any, Callable
 import pytest
 
 from sendoff.sdblock import SDBlock
+from tests.fixtures import sdf_of
 
 # A header as RDKit writes it, with a record number and a trailing space
 # (written \x20 so editors keep it), a header with a registry number, a
@@ -86,7 +87,7 @@ FORMS: dict[str, Callable[[str], Any]] = {
 # Each case is a source block, an edit and its arguments, and the SDF the
 # block writes after the edit, dedented.
 CASES = [
-    pytest.param(SOURCE, "to_sdf", (), SOURCE, id="untouched"),
+    pytest.param(SOURCE, "__str__", (), SOURCE, id="untouched"),
     pytest.param(
         SOURCE,
         "set_record",
@@ -422,11 +423,11 @@ def assert_writes(block: SDBlock[Any], expected: Any) -> None:
         block: the edited block
         expected: its SDF, in the block's type
     """
-    written = block.to_sdf()
+    written = sdf_of(block)
     assert written == expected
     reread = next(SDBlock.from_sdf(written))
     assert reread.records() == block.records()
-    assert reread.to_sdf() == written
+    assert sdf_of(reread) == written
 
 
 @pytest.mark.parametrize("form", FORMS.values(), ids=FORMS.keys())
@@ -599,4 +600,4 @@ def test_other_styles_raise_before_editing(
     edit = partial(SDBlock, SOURCE) if method == "SDBlock" else getattr(block, method)
     with pytest.raises(ValueError, match="'plain', 'padded', or 'copy', not 'Plain'"):
         edit(*args, header="Plain")  # type: ignore[arg-type]
-    assert block.to_sdf() == SOURCE
+    assert sdf_of(block) == SOURCE

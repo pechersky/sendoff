@@ -27,6 +27,7 @@ from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from sendoff.sdblock import SDBlock, parse_sdf
+from tests.fixtures import sdf_of
 from tests.reference_sdblock import RefBlock, ref_from_lines
 
 ALPHABET = list("abXZ09 \t<>$-_.()é中\x1f\xa0\u2003\u3000")
@@ -148,7 +149,7 @@ def assert_blocks_match(
         ), context
         written = serialized(block, text)
         assert written == expected.serialize(), context
-        assert block.to_sdf() == written, context
+        assert sdf_of(block) == written, context
         if cast_like(written, "\r") not in written:  # SDBlock() translates str \r
             assert serialized(SDBlock(written), text) == written, context
         assert block.molblock == expected.molblock(), context

@@ -17,7 +17,7 @@ from typing import Generator, Iterator
 import pytest
 
 from sendoff.sdblock import SDBlock, parse_sdf, write_sdf
-from tests.fixtures import Pathy
+from tests.fixtures import Pathy, sdf_of
 
 
 def test_single_mol_read(single_mol_sdf: Pathy) -> None:
@@ -212,9 +212,9 @@ def test_from_lines_items_end_lines() -> None:
         ],
     }
     for lines, expected in cases.items():
-        assert [block.to_sdf() for block in SDBlock.from_lines(lines)] == expected
+        assert [sdf_of(block) for block in SDBlock.from_lines(lines)] == expected
         encoded = [line.encode() for line in lines]
-        assert [block.to_sdf() for block in SDBlock.from_lines(encoded)] == [
+        assert [sdf_of(block) for block in SDBlock.from_lines(encoded)] == [
             text.encode() for text in expected
         ]
 
@@ -467,7 +467,7 @@ def test_parse_sdf_reads_file_objects_from_their_position(tmp_path: Path) -> Non
         handle.read(len("\nM  END\n$$$$\n"))
         blocks = list(parse_sdf(handle))
         assert not handle.closed
-    assert [block.to_sdf() for block in blocks] == [sdf.split("$$$$\n", 1)[1].encode()]
+    assert [sdf_of(block) for block in blocks] == [sdf.split("$$$$\n", 1)[1].encode()]
     assert blocks == list(SDBlock.from_lines(io.BytesIO(sdf.encode())))[1:]
 
     with path.open() as handle:
@@ -542,7 +542,7 @@ DECODING: dict[str, tuple[bytes, typing.Callable[[SDBlock[str]], object], str]] 
     "iter": (LATIN1_BODY, lambda block: list(block), "Reading record '\ufffd' of"),
     "to_dict": (LATIN1_BODY, lambda block: block.to_dict(), "Reading record 'F' of"),
     "names": (LATIN1_BODY, lambda block: block.names(), "Reading record '\ufffd' of"),
-    "to_sdf": (LATIN1_BODY, lambda block: block.to_sdf(), "Writing"),
+    "str": (LATIN1_BODY, str, "Writing"),
     "write": (LATIN1_BODY, lambda block: block.write(io.StringIO()), "Writing"),
 }
 
@@ -564,7 +564,7 @@ NOT_DECODING = {
 def test_decoding_accessors_are_listed() -> None:
     """Every public SDBlock name is listed as decoding block text or not."""
     public = {name for name in dir(SDBlock) if not name.startswith("_")}
-    assert public == DECODING.keys() - {"getitem", "iter"} | NOT_DECODING
+    assert public == DECODING.keys() - {"getitem", "iter", "str"} | NOT_DECODING
 
 
 @pytest.mark.parametrize(
@@ -690,10 +690,10 @@ def test_bytes_blocks_keep_crlf(tmp_path: Path) -> None:
 
     blocks[1].title = b"new"
     blocks[1].append_record(b"C", b"3")
-    assert blocks[1].to_sdf() == (
+    assert sdf_of(blocks[1]) == (
         b"new\r\nM  END\r\n> <B>\r\n\xe9\r\n\r\n> <C>\r\n3\r\n\r\n$$$$\r\n"
     )
-    assert SDBlock(b"t\r\nM  END\r\n").to_sdf() == b"t\r\nM  END\r\n$$$$\r\n"
+    assert sdf_of(SDBlock(b"t\r\nM  END\r\n")) == b"t\r\nM  END\r\n$$$$\r\n"
 
     # A file without a final newline still writes CRLF throughout.
     source.write_bytes(data.removesuffix(b"\r\n"))
@@ -702,7 +702,7 @@ def test_bytes_blocks_keep_crlf(tmp_path: Path) -> None:
     assert out.getvalue() == data
     with open(source, "rb") as handle:
         lines = handle.readlines()
-    assert bytes.join(b"", (b.to_sdf() for b in SDBlock.from_lines(lines))) == data
+    assert bytes.join(b"", (sdf_of(b) for b in SDBlock.from_lines(lines))) == data
 
 
 def test_titled_mol_read(single_titled_mol_sdf: Pathy) -> None:
@@ -730,7 +730,7 @@ def test_first_delimiter_title_ends_a_record(
     blocks = list(parse_sdf(double_first_delimiter_titled_mol_sdf))
     assert [block.title for block in blocks][::2] == ["", "Title"]
     assert len(blocks) == 3
-    assert blocks[0].to_sdf() == "$$$$\n"
+    assert sdf_of(blocks[0]) == "$$$$\n"
     assert_rereads_alike(blocks)
 
 
@@ -745,7 +745,7 @@ def test_second_delimiter_title_ends_a_record(
     blocks = list(parse_sdf(double_second_delimiter_titled_mol_sdf))
     assert [block.title for block in blocks][:2] == ["Title", ""]
     assert len(blocks) == 3
-    assert blocks[1].to_sdf() == "$$$$\n"
+    assert sdf_of(blocks[1]) == "$$$$\n"
     assert_rereads_alike(blocks)
 
 
@@ -755,9 +755,9 @@ def assert_rereads_alike(blocks: list[SDBlock[str]]) -> None:
     Args:
         blocks: parsed blocks
     """
-    written = [block.to_sdf() for block in blocks]
+    written = [sdf_of(block) for block in blocks]
     reread = SDBlock.from_sdf(str.join("", written))
-    assert [block.to_sdf() for block in reread] == written
+    assert [sdf_of(block) for block in reread] == written
 
 
 def test_single_record_mol_read(single_record_mol_sdf: Pathy) -> None:
@@ -785,15 +785,13 @@ def test_from_sdf_parses_like_a_file(tmp_path: Path) -> None:
     path = tmp_path / "input.sdf"
     path.write_text(text, newline="")
     data = text.encode()
-    expected = [b.to_sdf() for b in SDBlock.from_sdf(text)]
-    assert [b.to_sdf() for b in parse_sdf(path)] == expected
+    expected = [sdf_of(b) for b in SDBlock.from_sdf(text)]
+    assert [sdf_of(b) for b in parse_sdf(path)] == expected
     with path.open() as handle:
-        assert [b.to_sdf() for b in SDBlock.from_lines(handle)] == expected
-    expected_bytes = [b.to_sdf() for b in SDBlock.from_sdf(data)]
-    assert [b.to_sdf() for b in parse_sdf(os.fsencode(path))] == expected_bytes
-    assert [b.to_sdf() for b in SDBlock.from_lines(io.BytesIO(data))] == (
-        expected_bytes
-    )
+        assert [sdf_of(b) for b in SDBlock.from_lines(handle)] == expected
+    expected_bytes = [sdf_of(b) for b in SDBlock.from_sdf(data)]
+    assert [sdf_of(b) for b in parse_sdf(os.fsencode(path))] == expected_bytes
+    assert [sdf_of(b) for b in SDBlock.from_lines(io.BytesIO(data))] == (expected_bytes)
     assert [b.records() for b in SDBlock.from_sdf(text)] == [
         [("A", "1")],
         [("B", value)],
@@ -807,8 +805,8 @@ def test_from_sdf_translates_many_crlf_lines() -> None:
     """A str with many CRLF lines, shorter and longer than 16 bytes, reads as LF."""
     lf = str.join("", [f"t{i}\nM  END\n> <A>\n{'v' * i}\n\n$$$$\n" for i in range(40)])
     crlf = lf.replace("\n", "\r\n")
-    expected = [block.to_sdf() for block in SDBlock.from_sdf(lf)]
-    assert [block.to_sdf() for block in SDBlock.from_sdf(crlf)] == expected
+    expected = [sdf_of(block) for block in SDBlock.from_sdf(lf)]
+    assert [sdf_of(block) for block in SDBlock.from_sdf(crlf)] == expected
     assert str.join("", expected) == lf
 
 
@@ -822,7 +820,7 @@ def test_delimiter_value_ends_a_record(
     """
     blocks = list(parse_sdf(single_delimiter_record_mol_sdf))
     assert blocks[0].records() == [("Record", "")]
-    assert str.join("", (block.to_sdf() for block in blocks)) == (
+    assert str.join("", (sdf_of(block) for block in blocks)) == (
         single_delimiter_record_mol_sdf.read_text()
     )
 

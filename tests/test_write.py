@@ -10,7 +10,7 @@ from typing import Iterator
 import pytest
 
 from sendoff.sdblock import SDBlock, parse_sdf, write_sdf
-from tests.fixtures import Pathy
+from tests.fixtures import Pathy, sdf_of
 
 
 def test_single_mol_newline_write(single_mol_sdf: Pathy) -> None:
@@ -67,10 +67,7 @@ def test_write_sdf_writes_what_block_write_would(tmp_path: Path) -> None:
         handle = io.StringIO() if isinstance(path, Path) else io.BytesIO()
         expected = bytes.join(
             b"",
-            [
-                b.to_sdf().encode() if isinstance(b.title, str) else b.to_sdf()
-                for b in blocks
-            ],
+            [str(b).encode() if isinstance(b.title, str) else bytes(b) for b in blocks],
         )
         assert write_sdf(out, blocks) == 3000
         assert out.read_bytes() == expected
@@ -160,9 +157,9 @@ def test_writes_check_utf8_until_it_is_known(tmp_path: Path) -> None:
         with pytest.raises(UnicodeDecodeError):
             write_sdf(out, [bad, bad.__copy__()])
     good["A"] = "\u00e9"
-    assert good.to_sdf() == "u\nM  END\n> <A>\n\u00e9\n\n$$$$\n"
+    assert sdf_of(good) == "u\nM  END\n> <A>\n\u00e9\n\n$$$$\n"
     assert write_sdf(out, [good, good]) == 2
-    assert out.read_text() == good.to_sdf() * 2
+    assert out.read_text() == sdf_of(good) * 2
 
 
 def test_write_sdf_raises_os_errors(tmp_path: Path) -> None:

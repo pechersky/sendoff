@@ -10,17 +10,17 @@ sendoff
    :alt: Tox status
 
 The minimal SDF metadata parser.
- 
+
 Often, SDFs have lots of useful metadata on them in the title and record fields/values.
 However, reading a molecule (via rdkit, OpenEye toolkits, etc) can be slow because those
 libraries also construct the molecules. Modifying the metadata, or filtering/sorting based
 on the metadata also can induce non-idempotent differences in the file based on
 opinionated approaches in chemical libraries.
- 
+
 This library strives to be able to handle SDF files even with malformed chemistry or
 metadata. Since much debugging of our files and data deals with such files, having access
 to simple fast tools to interrogate the files while not modifying the file is crucial.
- 
+
 This package also tries to document the "canonical" ways metadata is handled by the larger
 packages. To wit, there are tests to monitor how, for example, rdkit deals with molecules
 that have multiline record values, or a "$$$$" molecule title.
@@ -56,7 +56,7 @@ Usage
    write_sdf("out.sdf", (tag(block) for block in parse_sdf("in.sdf")))
 
    block = SDBlock(Chem.MolToMolBlock(mol), {"ID": "X-1"})
-   block.to_sdf()
+   str(block)
    SDBlock.from_sdf(sdf_text)
 
 ``parse_sdf`` memory-maps local files, so write to a new path: truncating a

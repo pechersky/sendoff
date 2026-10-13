@@ -218,7 +218,7 @@ class SDBlock(Generic[AnyStr]):
 
     def __buffer__(self: SDBlock[bytes], flags: int, /) -> memoryview:
         """
-        Export a bytes block's SDF, as `to_sdf` returns it, without copying.
+        Export a bytes block's SDF without copying.
 
         Edits raise BufferError until every export is released.
 
@@ -326,6 +326,20 @@ class SDBlock(Generic[AnyStr]):
 
         Raises:
             TypeError: if `name` or `value` is not the block's type
+        """
+
+    def __str__(self, /) -> str:
+        """
+        A str block's SDF, ending with $$$$: the inverse of `SDBlock(sdf)`.
+
+        `bytes(block)` is a bytes block's SDF; `str` gives its repr, as
+        `str(b"")` does. Lines end as they were read, so blocks from a bytes
+        path keep "\\r\\n"; str paths read universal newlines, so their lines
+        end in "\\n". Lines the block adds or ends (new records, a missing
+        $$$$, a last line without "\\n") end like the title line.
+
+        Raises:
+            UnicodeDecodeError: for a block from a str path that is not UTF-8
         """
 
     @classmethod
@@ -680,13 +694,6 @@ class SDBlock(Generic[AnyStr]):
         Return the records as a dict, later duplicates winning.
 
         Equivalent to `dict(block.records())`.
-        """
-
-    def to_sdf(self, /) -> AnyStr:
-        """
-        Return the block as SDF text ending with $$$$, in the input type.
-
-        The inverse of `SDBlock(sdf)`, and what `write` writes.
         """
 
     def write(self, /, file: _SupportsWrite[AnyStr]) -> None:

@@ -225,7 +225,7 @@ def train_kind(path: str, binary: bool, whole: bool = True) -> None:
             b.remove_record(field)
         if i % 11 == 0:
             b.title = extra
-        b.to_sdf()
+        bytes(b) if binary else str(b)
         b.write(out)
         if i % 4 == 0:
             _ = (b.num_atoms, b.num_bonds)

@@ -825,17 +825,24 @@ impl PySDBlock {
         })
     }
 
-    /// Return the block as SDF text ending with $$$$, in the input type.
+    /// A str block's SDF, ending with $$$$: the inverse of `SDBlock(sdf)`.
     ///
-    /// The inverse of `SDBlock(sdf)`, and what `write` writes.
-    #[pyo3(signature = () -> "AnyStr")]
-    fn to_sdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let output = self
-            .kind
-            .value(py, self.block.serialized())
+    /// `bytes(block)` is a bytes block's SDF; `str` gives its repr, as
+    /// `str(b"")` does. Lines end as they were read, so blocks from a bytes
+    /// path keep "\r\n"; str paths read universal newlines, so their lines
+    /// end in "\n". Lines the block adds or ends (new records, a missing
+    /// $$$$, a last line without "\n") end like the title line.
+    ///
+    /// Raises:
+    ///     UnicodeDecodeError: for a block from a str path that is not UTF-8
+    fn __str__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyString>> {
+        if self.kind == Kind::Bytes {
+            return Ok(PyString::new(py, &self.__repr__(py)?));
+        }
+        let text = PyString::from_bytes(py, self.block.serialized())
             .map_err(|error| self.noted(py, error, || "Writing".into()))?;
         self.utf8.0.store(true, Ordering::Relaxed);
-        Ok(output)
+        Ok(text)
     }
 
     /// Write the block, ending with $$$$, to a file-like handle.
@@ -859,12 +866,12 @@ impl PySDBlock {
             drop(this);
             file.call_method1(write, (slf,))?;
         } else {
-            file.call_method1(write, (this.to_sdf(py)?,))?;
+            file.call_method1(write, (this.__str__(py)?,))?;
         }
         Ok(())
     }
 
-    /// Export a bytes block's SDF, as `to_sdf` returns it, without copying.
+    /// Export a bytes block's SDF without copying.
     ///
     /// Edits raise BufferError until every export is released.
     ///
@@ -880,7 +887,7 @@ impl PySDBlock {
         let this = slf.try_borrow()?;
         if this.kind == Kind::Text {
             return Err(PyTypeError::new_err(
-                "a str SDBlock is not bytes-like; use to_sdf()",
+                "a str SDBlock is not bytes-like; use str(block)",
             ));
         }
         let data = this.block.serialized();
