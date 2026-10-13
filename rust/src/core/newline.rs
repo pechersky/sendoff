@@ -116,10 +116,16 @@ pub fn translate_newlines(space: &mut [u8], len: usize, pending_cr: &mut bool) -
 /// `bytes` with `\r\n` and lone `\r` translated to `\n`, as Python reads
 /// text.
 pub fn translated(bytes: &[u8]) -> Vec<u8> {
+    translated_from(bytes, 0)
+}
+
+/// `translated`, for `bytes` known to have no `\r` before `from`, which it
+/// copies without scanning.
+pub fn translated_from(bytes: &[u8], from: usize) -> Vec<u8> {
     let mut buffer = Vec::with_capacity(bytes.len() + TRANSLATE_SLACK);
     buffer.extend_from_slice(bytes);
     buffer.resize(bytes.len() + TRANSLATE_SLACK, 0);
-    let len = translate_newlines(&mut buffer, bytes.len(), &mut false);
+    let len = from + translate_newlines(&mut buffer[from..], bytes.len() - from, &mut false);
     buffer.truncate(len);
     buffer
 }
@@ -188,6 +194,9 @@ mod tests {
                 let output = chunked(&input, chunk, slack);
                 assert_eq!(output, expected.as_bytes(), "{input:?}");
             }
+            let clean = memchr(b'\r', &input).unwrap_or(len);
+            let from = (next() as usize) % (clean + 1);
+            assert_eq!(translated_from(&input, from), expected.as_bytes());
         }
     }
 }

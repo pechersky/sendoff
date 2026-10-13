@@ -15,7 +15,7 @@ use memmap2::Mmap;
 
 use crate::core::block::Block;
 use crate::core::lines::{find_newline, line_end};
-use crate::core::newline::translated;
+use crate::core::newline::translated_from;
 
 static DELIMITER: LazyLock<memmem::Finder<'static>> =
     LazyLock::new(|| memmem::Finder::new(b"\n$$$$"));
@@ -162,7 +162,7 @@ fn extent(data: &[u8], text: bool) -> (usize, Option<usize>) {
 /// so blocks match a `Scanner` over translated input.
 pub fn split_block(data: &[u8], text: bool) -> (Block, usize) {
     let (end, delimiter) = extent(data, text);
-    (copied(&data[..end], delimiter, text), end)
+    (copied(&data[..end], delimiter, text, 0), end)
 }
 
 /// Split the first block from `map[pos..]`, which is nonempty, as
@@ -173,22 +173,29 @@ pub fn split_block(data: &[u8], text: bool) -> (Block, usize) {
 pub fn borrow_block(map: &Arc<Mmap>, pos: usize, text: bool) -> (Block, usize) {
     let data = &map[pos..];
     let (end, delimiter) = extent(data, text);
+    // Translation of a block that cannot borrow resumes at its first `\r`.
+    let clean = if text {
+        memchr(b'\r', &data[..end]).unwrap_or(end)
+    } else {
+        end
+    };
     if let Some(start) = delimiter
-        && !(text && memchr(b'\r', &data[..end]).is_some())
+        && clean == end
         && let Some(block) = Block::borrowed(map, pos, pos + end, start)
     {
         return (block, end);
     }
-    (copied(&data[..end], delimiter, text), end)
+    (copied(&data[..end], delimiter, text, clean), end)
 }
 
 /// Copy one block's input, whose `$$$$` line, if any, starts at
-/// `delimiter`, translating universal newlines for `text`.
-fn copied(data: &[u8], delimiter: Option<usize>, text: bool) -> Block {
+/// `delimiter`, translating universal newlines for `text` from `clean`, as
+/// no `\r` comes before it.
+fn copied(data: &[u8], delimiter: Option<usize>, text: bool, clean: usize) -> Block {
     if !text {
         return Block::new(data.to_vec(), delimiter);
     }
-    let block = translated(data);
+    let block = translated_from(data, clean);
     // The delimiter line is the last line, found in the copy so that a file
     // changing under a map cannot set it past the block.
     let delimiter = delimiter.map(|_| {
@@ -242,6 +249,7 @@ impl Tail<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::newline::translated;
     use crate::core::strip::Strip;
     use crate::core::testing::xorshift;
 
