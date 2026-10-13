@@ -1,5 +1,6 @@
 # mypy: allow-untyped-decorators
 """Provide fixtures of SDFs with well- or misbehaved metadata."""
+import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -8,6 +9,8 @@ import pytest
 from rdkit import Chem
 
 from sendoff.sdblock import parse_sdf
+
+Pathy = str | bytes | os.PathLike[str] | os.PathLike[bytes]
 
 if TYPE_CHECKING:
     from _pytest.fixtures import FixtureRequest as __FixtureRequest

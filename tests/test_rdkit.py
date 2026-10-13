@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from rdkit import Chem
 
-from sendoff.sdblock import Pathy, parse_sdf
-from tests.fixtures import INDEX_DEFECTS, CountedMol
+from sendoff.sdblock import parse_sdf
+from tests.fixtures import INDEX_DEFECTS, CountedMol, Pathy
 
 
 def test_single_mol_read(single_mol_sdf: Pathy) -> None:

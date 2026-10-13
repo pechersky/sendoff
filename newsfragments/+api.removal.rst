@@ -44,3 +44,5 @@ The ``SDBlock`` API changed. Migrate 0.1.x code as follows:
 - ``renumber_indices`` no longer rewrites the V3000 ``COUNTS`` line, so it no
   longer repairs counts after atom or bond lines are added or removed. Call
   ``fix_counts()`` for that.
+- ``sendoff.sdblock.Pathy`` is gone; annotate paths as
+  ``str | bytes | os.PathLike[str] | os.PathLike[bytes]``.

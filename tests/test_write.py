@@ -9,7 +9,8 @@ from typing import Iterator
 
 import pytest
 
-from sendoff.sdblock import Pathy, SDBlock, parse_sdf, write_sdf
+from sendoff.sdblock import SDBlock, parse_sdf, write_sdf
+from tests.fixtures import Pathy
 
 
 def test_single_mol_newline_write(single_mol_sdf: Pathy) -> None:
