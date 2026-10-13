@@ -9,3 +9,6 @@ memory-maps files on local Linux filesystems, which parses them about 6%
 faster again; pipes and network filesystems are still read in chunks.
 A block indexes its records on its second lookup, so further ``get``,
 ``block[name]``, ``in``, and ``len`` calls skip parsing until it is edited.
+Blocks find where their MDL ends only when MDL lines, the molblock, or
+records are first read, so counting blocks, reading titles, and writing skip
+that search.
