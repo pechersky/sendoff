@@ -64,7 +64,9 @@ Usage
    SDBlock.from_sdf(sdf_text)
 
 ``parse_sdf`` memory-maps local files, so write to a new path: truncating a
-file while it is parsed crashes the process.
+file while it is parsed crashes the process. ``parse_sdf(path, borrow=True)``
+also skips copying each block: blocks read the file in place until edited,
+so the same holds for as long as they live.
 
 New headers are ``> <name>``; ``header="padded"`` writes ``>  <name>``, as
 RDKit does, and ``header="copy"`` follows the block's first header. Names are

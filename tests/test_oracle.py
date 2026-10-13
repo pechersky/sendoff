@@ -6,7 +6,8 @@ Hypothesis generates SDF-shaped inputs (titles, MDL bodies with and without
 unterminated input) and every entry point must agree with
 ``tests/reference_sdblock.py`` block by block. The readers must also agree
 with each other: mapped and streamed paths, file objects and their lines,
-including input past the read chunk and the map's resident window.
+including input past the read chunk and the map's resident window, and
+blocks borrowed from a mapped file.
 
 The alphabet includes whitespace that only ``str.strip`` removes, such as
 ``\x1f`` and the ideographic space, but not ``str.splitlines`` breaks.
@@ -382,12 +383,16 @@ def test_from_sdf_matches_reference(lines: list[str]) -> None:
     assert_blocks_match(SDBlock.from_sdf(data), bytes_reference, text=False)
 
 
+@pytest.mark.parametrize("borrow", [False, True])
 @examples
 @given(sdf_lines())
-def test_parse_sdf_matches_reference(lines: list[str]) -> None:
+def test_parse_sdf_matches_reference(borrow: bool, lines: list[str]) -> None:
     """Text paths use universal newlines; bytes paths split on LF only.
 
+    Blocks borrowed from the mapped file read and edit as copied ones do.
+
     Args:
+        borrow: whether blocks borrow the mapped file
         lines: generated lines with endings
     """
     data = str.join("", lines).encode()
@@ -397,9 +402,10 @@ def test_parse_sdf_matches_reference(lines: list[str]) -> None:
             handle.write(data)
         with open(path, encoding="utf-8") as handle:
             text_reference = list(ref_from_lines(handle))
-        assert_blocks_match(parse_sdf(path), text_reference, text=True)
+        assert_blocks_match(parse_sdf(path, borrow=borrow), text_reference, text=True)
         bytes_reference = list(ref_from_lines(io.BytesIO(data)))
-        assert_blocks_match(parse_sdf(os.fsencode(path)), bytes_reference, text=False)
+        raw = parse_sdf(os.fsencode(path), borrow=borrow)
+        assert_blocks_match(raw, bytes_reference, text=False)
 
 
 # Sizes that change how readers buffer input: the chunk that file objects
@@ -474,6 +480,7 @@ def assert_readers_agree(text: str) -> None:
         with opened() as handle, opened() as lines:
             translated = [
                 snapshot(parse_sdf(path), True),
+                snapshot(parse_sdf(path, borrow=True), True),
                 snapshot(SDBlock.from_sdf(text), True),
                 snapshot(SDBlock.from_lines(io.StringIO(text, newline=None)), True),
                 snapshot(SDBlock.from_lines(handle), True),
@@ -499,6 +506,7 @@ def assert_readers_agree(text: str) -> None:
         with open(path, "rb") as handle, open(path, "rb") as lines:
             raw = [
                 snapshot(parse_sdf(os.fsencode(path)), False),
+                snapshot(parse_sdf(os.fsencode(path), borrow=True), False),
                 snapshot(SDBlock.from_sdf(data), False),
                 snapshot(SDBlock.from_lines(io.BytesIO(data)), False),
                 snapshot(SDBlock.from_lines(handle), False),

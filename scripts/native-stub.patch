@@ -266,7 +266,7 @@
      def close(self, /) -> None:
          """
          Write the buffered blocks and close a path. Closing twice does nothing.
-@@ -677,25 +745,43 @@
+@@ -677,25 +745,49 @@
          """
 
  @final
@@ -296,12 +296,16 @@
 +
 +@overload
  def parse_sdf(
--    source: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+-    source: str | bytes | os.PathLike[str] | os.PathLike[bytes], *, borrow: bool = False
 +    source: str | os.PathLike[str] | _SupportsRead[str] | _SupportsRead1[str],
++    *,
++    borrow: bool = False,
 +) -> _SDBlockIterator[str]: ...
 +@overload
 +def parse_sdf(
 +    source: bytes | os.PathLike[bytes] | _SupportsRead[bytes] | _SupportsRead1[bytes],
++    *,
++    borrow: bool = False,
 +) -> _SDBlockIterator[bytes]: ...
 +@overload
 +def parse_sdf(
@@ -315,10 +319,12 @@
 +        | _SupportsRead1[str]
 +        | _SupportsRead1[bytes]
 +    ),
++    *,
++    borrow: bool = False,
  ) -> _SDBlockIterator[Any]:
      """
      Lazily parse SDBlocks from an SDF path or file object.
-@@ -728,9 +814,12 @@
+@@ -737,9 +829,12 @@
          TypeError: if `source` is neither a path nor a file object
      """
 
@@ -333,7 +339,7 @@
      """
      Write SDBlocks one at a time to a path or a file object, buffered.
 
-@@ -750,10 +839,13 @@
+@@ -759,10 +854,13 @@
          OSError: if `dest` cannot be created
      """
 
@@ -349,7 +355,7 @@
      """
      Write SDBlocks to a path or a file object, and return how many.
 
-@@ -786,5 +878,3 @@
+@@ -795,5 +893,3 @@
          UnicodeDecodeError: for a str block that is not UTF-8
          OSError: if `dest` cannot be created or written
      """

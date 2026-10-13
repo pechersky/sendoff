@@ -59,11 +59,13 @@ pub(super) enum Source {
         text: bool,
         pending_cr: bool,
     },
-    /// A path to open on the first read; `text` translates newlines.
+    /// A path to open on the first read; `text` translates newlines, and
+    /// `borrow` lets blocks borrow the file if it maps.
     Path {
         path: PathBuf,
         filename: Py<PyAny>,
         text: bool,
+        borrow: bool,
     },
     /// A file mapped from `Path`, split a batch of blocks at a time without
     /// holding the GIL.
@@ -89,16 +91,17 @@ impl Source {
             path,
             filename,
             text,
+            borrow,
         } = self
         else {
             return Ok(());
         };
-        let text_mode = *text;
+        let (text_mode, borrow) = (*text, *borrow);
         // Opening a FIFO waits for a writer, which may be a Python thread.
         let (file, mapped) = py
             .detach(|| {
                 let file = File::open(&*path)?;
-                let mapped = MappedBlocks::open(&file, text_mode);
+                let mapped = MappedBlocks::open(&file, text_mode, borrow);
                 Ok((file, mapped))
             })
             .map_err(|error| os_error(py, error, filename))?;
@@ -332,14 +335,23 @@ impl PySDBlockIterator {
 /// read such feeds from a bytes path, or from a file opened with their
 /// encoding.
 ///
+/// `borrow=True` skips copying each block out of a mapped file: blocks read
+/// the file's pages until their first edit copies them, and keep the
+/// mapping open while they live. Writing to or truncating the file then
+/// shows through or kills the process with SIGBUS, even after iterating,
+/// so never write results over the source path, as
+/// `write_sdf(path, kept_blocks)` would. Files that are read rather than
+/// mapped, and str-path blocks with "\r" newlines, are copied as usual.
+///
 /// A file object, such as `sys.stdin.buffer`, is read as
 /// `SDBlock.from_lines` reads one, from its position and through Python;
 /// binary ones give bytes blocks and text ones str blocks. It is not
-/// closed.
+/// closed, and `borrow` is ignored.
 ///
 /// Args:
 ///     source: a str, bytes, or os.PathLike path, or a file object with a
 ///         `read1` or `read` method
+///     borrow: let blocks borrow a mapped file rather than copy it
 ///
 /// Returns:
 ///     An iterator of SDBlocks; `close()` releases the file early
@@ -347,8 +359,8 @@ impl PySDBlockIterator {
 /// Raises:
 ///     TypeError: if `source` is neither a path nor a file object
 #[pyfunction]
-#[pyo3(signature = (source: "str | bytes | os.PathLike[str] | os.PathLike[bytes]") -> "_SDBlockIterator[Any]")]
-pub(crate) fn parse_sdf(source: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
+#[pyo3(signature = (source: "str | bytes | os.PathLike[str] | os.PathLike[bytes]", *, borrow: "bool" = false) -> "_SDBlockIterator[Any]")]
+pub(crate) fn parse_sdf(source: &Bound<'_, PyAny>, borrow: bool) -> PyResult<PySDBlockIterator> {
     let py = source.py();
     let path = source.is_instance_of::<PyString>()
         || source.is_instance_of::<PyBytes>()
@@ -368,5 +380,6 @@ pub(crate) fn parse_sdf(source: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator
         path,
         filename: filename.unbind(),
         text,
+        borrow,
     }))
 }

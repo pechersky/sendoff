@@ -1,9 +1,12 @@
 # mypy: allow-untyped-decorators
 """Test reading SDFs into blocks: parse_sdf, from_lines, from_sdf, decoding."""
+import copy
 import errno
 import gc
 import io
 import os
+import pickle
+import signal
 import subprocess
 import sys
 import threading
@@ -336,18 +339,24 @@ def open_paths() -> set[str]:
     Returns:
         Resolved targets of the open file descriptors, and mapped files.
     """
-    paths = set()
+    paths = mapped_paths()
     for fd in os.listdir("/proc/self/fd"):
         try:
             paths.add(os.readlink(os.path.join("/proc/self/fd", fd)))
         except OSError:
             continue
-    with open("/proc/self/maps") as maps:
-        for line in maps:
-            fields = line.split(maxsplit=5)
-            if len(fields) == 6:
-                paths.add(fields[5].rstrip("\n"))
     return paths
+
+
+def mapped_paths() -> set[str]:
+    """Return the files this process has mapped, from /proc/self/maps.
+
+    Returns:
+        Resolved paths of the mapped files.
+    """
+    with open("/proc/self/maps") as maps:
+        fields = (line.split(maxsplit=5) for line in maps)
+        return {line[5].rstrip("\n") for line in fields if len(line) == 6}
 
 
 @pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc")
@@ -390,6 +399,145 @@ def test_parse_sdf_reads_files_that_do_not_map(tmp_path: Path) -> None:
     empty = tmp_path / "empty.sdf"
     empty.write_bytes(b"")
     assert list(parse_sdf(empty)) == []
+
+
+TWO = b"First\n\nM  END\n> <A>\n1\n\n$$$$\nSecond\n\nM  END\n> <A>\n2\n\n$$$$\n"
+
+
+def borrowed_blocks(path: Path, binary: bool = False) -> list[SDBlock[typing.Any]]:
+    """Parse ``path`` with ``borrow=True``, skipping unless the file maps.
+
+    Args:
+        path: an SDF on the temporary directory's filesystem
+        binary: parse bytes blocks from a bytes path
+
+    Returns:
+        The blocks, which borrow the mapped file.
+    """
+    blocks = list(parse_sdf(os.fsencode(path) if binary else path, borrow=True))
+    if not os.path.exists("/proc/self/maps") or str(path) not in mapped_paths():
+        pytest.skip(f"{path.parent} is not mapped")
+    return blocks
+
+
+def test_borrowed_blocks_keep_the_file_mapped(tmp_path: Path) -> None:
+    """Borrowed blocks hold the mapping until the last of them is freed.
+
+    Args:
+        tmp_path: Temporary directory for the SDF.
+    """
+    path = tmp_path / "two.sdf"
+    path.write_bytes(TWO)
+    copied = list(parse_sdf(path))
+    assert str(path) not in mapped_paths()
+    borrowed = borrowed_blocks(path)
+    assert borrowed == copied
+    del borrowed[0]
+    gc.collect()
+    assert str(path) in mapped_paths()
+    del borrowed
+    gc.collect()
+    assert str(path) not in mapped_paths()
+
+
+def test_editing_borrowed_blocks_copies_them(tmp_path: Path) -> None:
+    """Edits and copies of borrowed blocks leave the file and others alone.
+
+    Args:
+        tmp_path: Temporary directory for the SDF.
+    """
+    path = tmp_path / "two.sdf"
+    path.write_bytes(TWO)
+    first, second = borrowed_blocks(path, binary=True)
+    split = TWO.index(b"Second")
+    view = memoryview(first)
+    assert view.tobytes() == TWO[:split]
+    with pytest.raises(BufferError, match="exports"):
+        first.title = b"Edited"
+    view.release()
+    duplicate = copy.copy(second)
+    first.title = b"Edited"
+    first[b"B"] = b"x"
+    duplicate[b"A"] = b"3"
+    assert bytes(first).startswith(b"Edited\n\nM  END\n> <A>\n1\n\n> <B>\nx\n")
+    assert second[b"A"] == b"2" and duplicate[b"A"] == b"3"
+    assert pickle.loads(pickle.dumps(second)) == second
+    assert bytes(second) == TWO[split:]
+    assert path.read_bytes() == TWO
+
+
+def test_borrowed_blocks_outlive_replacing_the_file(tmp_path: Path) -> None:
+    """Blocks keep reading the file they mapped after a new one replaces it.
+
+    Args:
+        tmp_path: Temporary directory for the SDF.
+    """
+    path = tmp_path / "two.sdf"
+    path.write_bytes(TWO)
+    blocks = borrowed_blocks(path)
+    write_sdf(tmp_path / "new.sdf", blocks[1:])
+    os.replace(tmp_path / "new.sdf", path)
+    assert [block.title for block in blocks] == ["First", "Second"]
+    assert [block.title for block in parse_sdf(path, borrow=True)] == ["Second"]
+
+
+def test_borrow_is_ignored_where_nothing_maps(tmp_path: Path) -> None:
+    """File objects and lone-CR text are copied, and parse as without it.
+
+    Args:
+        tmp_path: Temporary directory for the SDF.
+    """
+    path = tmp_path / "mixed.sdf"
+    path.write_bytes(TWO.replace(b"\n", b"\r", 3))
+    with open(path, "rb") as file:
+        assert list(parse_sdf(file, borrow=True)) == list(parse_sdf(os.fsencode(path)))
+    assert list(parse_sdf(path, borrow=True)) == list(parse_sdf(path))
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="only Linux maps files")
+@pytest.mark.parametrize("borrow", [False, True])
+def test_truncating_a_borrowed_file_raises_sigbus(tmp_path: Path, borrow: bool) -> None:
+    """Truncating a file kills a process reading blocks that borrow it.
+
+    A subprocess reads the blocks, truncates the file, and serializes them.
+    It loads the extension these tests use.
+
+    Args:
+        tmp_path: Temporary directory for the SDF.
+        borrow: whether the blocks borrow the mapped file
+    """
+    native = import_module("sendoff.native").__file__
+    assert native is not None
+    path = tmp_path / "big.sdf"
+    path.write_bytes(TWO.replace(b"1", b"1" * 100_000))
+    script = """if True:
+        import importlib.util, sys
+
+        spec = importlib.util.spec_from_file_location("sendoff.native", sys.argv[2])
+        native = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(native)
+
+        blocks = list(native.parse_sdf(sys.argv[1], borrow=sys.argv[3] == "1"))
+        with open("/proc/self/maps") as maps:
+            print(sys.argv[1] in maps.read(), flush=True)
+        open(sys.argv[1], "wb").close()
+        print(sum(len(str(block)) for block in blocks))
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(path), native, str(int(borrow))],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if not borrow:
+        assert (result.returncode, result.stdout) == (
+            0,
+            f"False\n{len(TWO) + 99_999}\n",
+        )
+    elif result.stdout != "True\n":
+        pytest.skip(f"{tmp_path} is not mapped")
+    else:
+        assert result.returncode == -signal.SIGBUS
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")

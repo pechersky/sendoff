@@ -5,11 +5,13 @@
 //! iterables. Each block is copied out once into its own `Block`. The buffer
 //! stays initialized up to its high-water mark, so refills write into it
 //! without zero-filling first. `split_block` splits input that is already
-//! complete, such as a mapped file, without a buffer.
+//! complete, such as a mapped file, without a buffer, and `borrow_block`
+//! splits a mapped file into blocks that borrow it.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
-use memchr::{memchr2, memmem, memrchr};
+use memchr::{memchr, memchr2, memmem, memrchr};
+use memmap2::Mmap;
 
 use crate::core::block::Block;
 use crate::core::lines::{find_newline, line_end};
@@ -138,15 +140,11 @@ fn text_delimiter(data: &[u8]) -> Option<usize> {
     None
 }
 
-/// Split the first block from complete, nonempty input, returning it and
-/// the input length it took.
-///
-/// `text` reads universal newlines, translating them as `translated` does,
-/// so blocks match a `Scanner` over translated input.
-pub fn split_block(data: &[u8], text: bool) -> (Block, usize) {
+/// Where the first block in complete input ends, and where its `$$$$` line
+/// starts, if it has one; `text` reads universal newlines.
+fn extent(data: &[u8], text: bool) -> (usize, Option<usize>) {
     if !text {
-        let (end, delimiter) = bounds(data);
-        return (Block::new(data[..end].to_vec(), delimiter), end);
+        return bounds(data);
     }
     let delimiter = text_delimiter(data);
     let end = delimiter
@@ -154,14 +152,50 @@ pub fn split_block(data: &[u8], text: bool) -> (Block, usize) {
         .map_or(data.len(), |at| {
             at + 1 + usize::from(data[at..].starts_with(b"\r\n"))
         });
-    let block = translated(&data[..end]);
+    (end, delimiter)
+}
+
+/// Split the first block from complete, nonempty input, returning it and
+/// the input length it took.
+///
+/// `text` reads universal newlines, translating them as `translated` does,
+/// so blocks match a `Scanner` over translated input.
+pub fn split_block(data: &[u8], text: bool) -> (Block, usize) {
+    let (end, delimiter) = extent(data, text);
+    (copied(&data[..end], delimiter, text), end)
+}
+
+/// Split the first block from `map[pos..]`, which is nonempty, as
+/// `split_block` does, returning it and the input length it took.
+///
+/// The block borrows the map when its bytes are already a block's: ending
+/// in a `$$$$` line, and, for `text`, without `\r` to translate.
+pub fn borrow_block(map: &Arc<Mmap>, pos: usize, text: bool) -> (Block, usize) {
+    let data = &map[pos..];
+    let (end, delimiter) = extent(data, text);
+    if let Some(start) = delimiter
+        && !(text && memchr(b'\r', &data[..end]).is_some())
+        && let Some(block) = Block::borrowed(map, pos, pos + end, start)
+    {
+        return (block, end);
+    }
+    (copied(&data[..end], delimiter, text), end)
+}
+
+/// Copy one block's input, whose `$$$$` line, if any, starts at
+/// `delimiter`, translating universal newlines for `text`.
+fn copied(data: &[u8], delimiter: Option<usize>, text: bool) -> Block {
+    if !text {
+        return Block::new(data.to_vec(), delimiter);
+    }
+    let block = translated(data);
     // The delimiter line is the last line, found in the copy so that a file
     // changing under a map cannot set it past the block.
     let delimiter = delimiter.map(|_| {
         let lines = block.strip_suffix(b"\n").unwrap_or(&block);
         memrchr(b'\n', lines).map_or(0, |index| index + 1)
     });
-    (Block::new(block, delimiter), end)
+    Block::new(block, delimiter)
 }
 
 /// Parse `data` as one block ending at its first `$$$$` line, if any.

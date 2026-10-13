@@ -12,3 +12,5 @@ A block indexes its records on its second lookup, so further ``get``,
 Blocks find where their MDL ends only when MDL lines, the molblock, or
 records are first read, so counting blocks, reading titles, and writing skip
 that search.
+``parse_sdf(path, borrow=True)`` skips copying blocks out of a mapped file:
+they read it in place until their first edit.

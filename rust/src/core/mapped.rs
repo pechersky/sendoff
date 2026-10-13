@@ -1,16 +1,18 @@
 //! Split a memory-mapped file into blocks.
 //!
 //! Mapping skips the read calls and the buffer copies that chunked reads
-//! need. Pages behind the cursor are dropped as it advances, so resident
-//! memory stays bounded however large the file.
+//! need, and borrowing blocks skips copying them out too. Pages behind the
+//! cursor are dropped as it advances, so resident memory stays bounded
+//! however large the file.
 
 use std::collections::VecDeque;
 use std::fs::File;
+use std::sync::Arc;
 
 use memmap2::Mmap;
 
 use crate::core::block::Block;
-use crate::core::split::split_block;
+use crate::core::split::{borrow_block, split_block};
 
 /// Input kept mapped in behind the cursor before older pages are dropped.
 ///
@@ -19,19 +21,20 @@ const RESIDENT: usize = 1 << 20;
 
 /// Blocks split from a mapped file.
 pub struct MappedBlocks {
-    map: Mmap,
+    map: Arc<Mmap>,
     /// Start of the next block.
     pos: usize,
     /// Pages before this offset have been dropped.
     dropped: usize,
     text: bool,
+    borrow: bool,
 }
 
 impl MappedBlocks {
     /// Map `file` if it is on a filesystem where mapping beats reading.
-    pub fn open(file: &File, text: bool) -> Option<Self> {
+    pub fn open(file: &File, text: bool, borrow: bool) -> Option<Self> {
         if is_local(file) {
-            Self::new(file, text)
+            Self::new(file, text, borrow)
         } else {
             None
         }
@@ -40,25 +43,28 @@ impl MappedBlocks {
     /// Map `file`, or return `None` unless it is a nonempty regular file
     /// that maps: pipes, devices, and procfs files are better read.
     ///
-    /// `text` reads universal newlines, as `split_block` does.
-    pub fn new(file: &File, text: bool) -> Option<Self> {
+    /// `text` reads universal newlines, as `split_block` does; `borrow`
+    /// splits blocks that borrow the map where they can, as `borrow_block`
+    /// does.
+    pub fn new(file: &File, text: bool, borrow: bool) -> Option<Self> {
         let metadata = file.metadata().ok()?;
         if !metadata.is_file() || metadata.len() == 0 {
             return None;
         }
         #[allow(unsafe_code)]
-        // SAFETY: the map is read-only and private to this struct, which
-        // only copies blocks out of it. As with any mapped file, another
-        // process truncating the file raises SIGBUS on the next read of a
-        // page past its new end.
+        // SAFETY: the map is read-only, and only this struct and the blocks
+        // it borrows into read it. As with any mapped file, truncating the
+        // file raises SIGBUS on the next read of a page past its new end, and
+        // other writes to it show through in borrowed blocks.
         let map = unsafe { Mmap::map(file) }.ok()?;
         #[cfg(unix)]
         let _ = map.advise(memmap2::Advice::Sequential);
         Some(Self {
-            map,
+            map: Arc::new(map),
             pos: 0,
             dropped: 0,
             text,
+            borrow,
         })
     }
 
@@ -72,7 +78,11 @@ impl MappedBlocks {
     pub fn split(&mut self, len: usize, out: &mut VecDeque<Block>) {
         let stop = self.pos.saturating_add(len);
         while !self.is_done() {
-            let (block, taken) = split_block(&self.map[self.pos..], self.text);
+            let (block, taken) = if self.borrow {
+                borrow_block(&self.map, self.pos, self.text)
+            } else {
+                split_block(&self.map[self.pos..], self.text)
+            };
             out.push_back(block);
             self.pos += taken;
             if self.pos >= stop {
@@ -90,8 +100,8 @@ impl MappedBlocks {
             return;
         }
         #[allow(unsafe_code)]
-        // SAFETY: dropped pages of a read-only file mapping read back from
-        // the file, and blocks behind the cursor were already copied out.
+        // SAFETY: dropped pages of a read-only shared file mapping read back
+        // from the page cache, so blocks borrowing them still read the file.
         let dropped = unsafe {
             self.map.unchecked_advise_range(
                 memmap2::UncheckedAdvice::DontNeed,
@@ -147,12 +157,18 @@ fn is_local(_: &File) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::testing::{EDITS, xorshift};
     use std::io::Write;
 
     fn blocks(input: &[u8], text: bool, batch: usize) -> Option<Vec<Block>> {
+        split(input, text, batch, false)
+    }
+
+    /// Blocks split from a mapping of `input`, which outlive it.
+    fn split(input: &[u8], text: bool, batch: usize, borrow: bool) -> Option<Vec<Block>> {
         let mut file = tempfile();
         file.write_all(input).unwrap();
-        let mut mapped = MappedBlocks::new(&file, text)?;
+        let mut mapped = MappedBlocks::new(&file, text, borrow)?;
         let mut out = VecDeque::new();
         while !mapped.is_done() {
             let before = out.len();
@@ -191,6 +207,58 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_blocks_match_copied_ones_on_random_input() {
+        const TOKENS: [&[u8]; 10] = [
+            b"\n",
+            b"\r\n",
+            b"\r",
+            b"M  END",
+            b"> <A>",
+            b"x",
+            b" ",
+            b"$$$$",
+            b"\n$$$$\n",
+            b"\n$$$$\r\n",
+        ];
+        let mut next = xorshift(0xD1B5_4A32_D192_ED03_u64);
+        let mut borrowed = 0;
+        for _ in 0..2000 {
+            let len = 1 + (next() % 40) as usize;
+            let input: Vec<u8> = (0..len)
+                .flat_map(|_| TOKENS[(next() % TOKENS.len() as u64) as usize])
+                .copied()
+                .collect();
+            let text = next().is_multiple_of(2);
+            let batch = (next() % 64) as usize;
+            let copies = split(&input, text, batch, false).unwrap();
+            let views = split(&input, text, batch, true).unwrap();
+            assert_eq!(views, copies, "{input:?} text={text}");
+            borrowed += views.iter().filter(|block| block.is_borrowed()).count();
+            for (mut view, mut copy) in views.into_iter().zip(copies) {
+                assert!(!copy.is_borrowed());
+                assert!(!view.clone().is_borrowed());
+                for _ in 0..(next() % 3) {
+                    let edit = EDITS[(next() % EDITS.len() as u64) as usize];
+                    assert_eq!(edit(&mut view), edit(&mut copy), "{input:?}");
+                    assert_eq!(view, copy, "{input:?} text={text}");
+                }
+            }
+        }
+        assert!(borrowed > 500, "{borrowed}");
+    }
+
+    #[test]
+    fn borrows_only_blocks_kept_as_read() {
+        let input = b"a\n$$$$\nb\r\n$$$$\r\nc\r$$$$\rd\n$$$$ x\ne\n$$$$";
+        let borrowed = |text| -> Vec<bool> {
+            let blocks = split(input, text, usize::MAX, true).unwrap();
+            blocks.iter().map(Block::is_borrowed).collect()
+        };
+        assert_eq!(borrowed(false), [true, true, false, false]);
+        assert_eq!(borrowed(true), [true, false, false, false, false]);
+    }
+
+    #[test]
     fn leaves_empty_files_to_reads() {
         assert!(blocks(b"", false, 1).is_none());
     }
@@ -211,15 +279,18 @@ mod tests {
         let input = block.repeat(4 * RESIDENT / block.len());
         let mut file = tempfile();
         file.write_all(&input).unwrap();
-        let mut mapped = MappedBlocks::new(&file, false).unwrap();
-        let mut out = VecDeque::new();
-        let mut count = 0;
-        while !mapped.is_done() {
-            mapped.split(1 << 17, &mut out);
-            count += out.drain(..).count();
-            assert!(mapped.pos - mapped.dropped < 2 * RESIDENT + (1 << 17) + (1 << 16));
+        for borrow in [false, true] {
+            let mut mapped = MappedBlocks::new(&file, false, borrow).unwrap();
+            let mut out = VecDeque::new();
+            while !mapped.is_done() {
+                mapped.split(1 << 17, &mut out);
+                assert!(mapped.pos - mapped.dropped < 2 * RESIDENT + (1 << 17) + (1 << 16));
+            }
+            assert!(mapped.dropped >= 2 * RESIDENT);
+            assert_eq!(out.len(), input.len() / block.len());
+            // Borrowed blocks read dropped pages back from the file.
+            assert!(out.iter().all(|split| split.serialized() == block));
+            assert_eq!(out.iter().all(Block::is_borrowed), borrow);
         }
-        assert_eq!(count, input.len() / block.len());
-        assert!(mapped.dropped >= 2 * RESIDENT);
     }
 }

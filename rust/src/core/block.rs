@@ -6,11 +6,12 @@
 //! requested.
 
 use std::borrow::Cow;
-use std::ops::Range;
-use std::sync::LazyLock;
+use std::ops::{Deref, Range};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use memchr::{memmem, memrchr};
+use memmap2::Mmap;
 
 use crate::core::ctable::error::CTableError;
 use crate::core::ctable::header::{Counts, HEADER_LINES, parse_header};
@@ -38,6 +39,56 @@ fn mdl_end(data: &[u8], title_end: usize, body_end: usize) -> Option<usize> {
 
 /// `Block::mdl_end` until an access finds it.
 const UNFOUND: usize = usize::MAX;
+
+/// Room a borrowed block's copy leaves for the lines an edit adds.
+const EDIT_SLACK: usize = 256;
+
+/// Where the title line ends, given the offset of a `$$$$` line: at 0 when
+/// that line is the first, as the record then has no title line.
+fn title_end(data: &[u8], delimiter: Option<usize>) -> usize {
+    match delimiter {
+        Some(0) => 0,
+        _ => line_end(data, 0),
+    }
+}
+
+/// A block's bytes: its own, or a range of a mapped file, borrowed until
+/// the first edit copies it.
+#[derive(Debug)]
+enum Data {
+    Owned(Vec<u8>),
+    Mapped {
+        map: Arc<Mmap>,
+        start: usize,
+        end: usize,
+    },
+}
+
+impl Deref for Data {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        match self {
+            Data::Owned(data) => data,
+            Data::Mapped { map, start, end } => &map[*start..*end],
+        }
+    }
+}
+
+impl Data {
+    /// The bytes to edit, copying borrowed ones first.
+    fn to_mut(&mut self) -> &mut Vec<u8> {
+        if let Data::Mapped { .. } = self {
+            let mut owned = Vec::with_capacity(self.len() + EDIT_SLACK);
+            owned.extend_from_slice(self);
+            *self = Data::Owned(owned);
+        }
+        match self {
+            Data::Owned(data) => data,
+            Data::Mapped { .. } => unreachable!("borrowed bytes were copied"),
+        }
+    }
+}
 
 /// A block's data, ending with a `$$$$` line, and where its title and MDL
 /// end.
@@ -82,9 +133,12 @@ pub enum InvalidTitle {
 /// The MDL runs through the first `M  END` line and the SD data runs to the
 /// `$$$$` line; without `M  END`, the MDL runs to the `$$$$` line and there
 /// is no SD data.
+///
+/// A block may borrow its bytes from a mapped file until its first edit;
+/// clones own theirs.
 #[derive(Debug)]
 pub struct Block {
-    data: Vec<u8>,
+    data: Data,
     title_end: usize,
     /// Where the MDL ends, or `UNFOUND` until the first access searches for
     /// `M  END`, so counting blocks, reading titles, and writing never do.
@@ -95,7 +149,7 @@ pub struct Block {
 impl Clone for Block {
     fn clone(&self) -> Self {
         Self {
-            data: self.data.clone(),
+            data: Data::Owned(self.data.to_vec()),
             title_end: self.title_end,
             mdl_end: AtomicUsize::new(self.mdl_end.load(Ordering::Relaxed)),
         }
@@ -104,7 +158,7 @@ impl Clone for Block {
 
 impl PartialEq for Block {
     fn eq(&self, other: &Self) -> bool {
-        self.data == other.data
+        *self.data == *other.data
             && self.title_end == other.title_end
             && self.mdl_end() == other.mdl_end()
     }
@@ -124,10 +178,7 @@ impl Block {
             let ending = missing_ending(&data, title_newline(&data));
             data.extend_from_slice(ending);
         }
-        let title_end = match delimiter {
-            Some(0) => 0,
-            _ => line_end(&data, 0),
-        };
+        let title_end = title_end(&data, delimiter);
         let body_end = delimiter.map_or(data.len(), |offset| offset.max(title_end));
         if !matches!(&data[body_end..], TRAILER | CRLF_TRAILER) {
             let trailer = trailer(title_newline(&data));
@@ -135,10 +186,33 @@ impl Block {
             data.extend_from_slice(trailer);
         }
         Self {
-            data,
+            data: Data::Owned(data),
             title_end,
             mdl_end: AtomicUsize::new(UNFOUND),
         }
+    }
+
+    /// Borrow the block `map[start..end]`, whose `$$$$` line starts at
+    /// offset `delimiter`, or `None` unless `new` would keep those bytes as
+    /// they are: ending in `$$$$\n` or `$$$$\r\n`.
+    pub fn borrowed(map: &Arc<Mmap>, start: usize, end: usize, delimiter: usize) -> Option<Self> {
+        let data = &map[start..end];
+        let title_end = title_end(data, Some(delimiter));
+        matches!(&data[delimiter.max(title_end)..], TRAILER | CRLF_TRAILER).then(|| Self {
+            data: Data::Mapped {
+                map: Arc::clone(map),
+                start,
+                end,
+            },
+            title_end,
+            mdl_end: AtomicUsize::new(UNFOUND),
+        })
+    }
+
+    /// Whether the block still borrows a mapped file.
+    #[cfg(test)]
+    pub fn is_borrowed(&self) -> bool {
+        matches!(self.data, Data::Mapped { .. })
     }
 
     /// Where the MDL ends, searching for `M  END` on the first call.
@@ -181,7 +255,7 @@ impl Block {
                     && data[mdl_end - 1] == b'\n'
             };
         valid.then(|| Self {
-            data,
+            data: Data::Owned(data),
             title_end,
             mdl_end: AtomicUsize::new(mdl_end),
         })
@@ -211,7 +285,7 @@ impl Block {
     fn ensure_title_line(&mut self) {
         if self.title_end == 0 {
             let newline = self.newline();
-            self.data.splice(..0, newline.iter().copied());
+            self.data.to_mut().splice(..0, newline.iter().copied());
             self.title_end = newline.len();
             *self.mdl_end.get_mut() = newline.len();
         }
@@ -254,21 +328,23 @@ impl Block {
         };
         let (newline, trailer) = (self.newline(), self.trailer());
         let needs_separator = self.ends_in_text(strip);
-        self.data.truncate(self.body_end());
+        let body_end = self.body_end();
+        let data = self.data.to_mut();
+        data.truncate(body_end);
         if needs_separator {
-            self.data.extend_from_slice(newline);
+            data.extend_from_slice(newline);
         }
         match template {
             Some((before, after)) => {
-                self.data.extend_from_within(before);
-                self.data.extend_from_slice(name);
-                self.data.extend_from_within(after);
-                self.data.extend_from_slice(newline);
+                data.extend_from_within(before);
+                data.extend_from_slice(name);
+                data.extend_from_within(after);
+                data.extend_from_slice(newline);
             }
-            None => push_header(&mut self.data, style.fixed(), name, newline),
+            None => push_header(data, style.fixed(), name, newline),
         }
-        push_value(&mut self.data, value, newline);
-        self.data.extend_from_slice(trailer);
+        push_value(data, value, newline);
+        data.extend_from_slice(trailer);
     }
 
     /// The ranges of the data before and after the name on the first named
@@ -307,7 +383,7 @@ impl Block {
         let mut line = Vec::with_capacity(title.len() + newline.len());
         line.extend_from_slice(title);
         line.extend_from_slice(newline);
-        self.data.splice(..old_end, line);
+        self.data.to_mut().splice(..old_end, line);
         self.title_end = title.len() + newline.len();
         // A new title moves an unfound MDL end with the lines it searches.
         let mdl_end = self.mdl_end.get_mut();
@@ -339,7 +415,7 @@ impl Block {
         }
         let new_mdl_end = data.len();
         data.extend_from_slice(metadata);
-        self.data = data;
+        self.data = Data::Owned(data);
         self.title_end = title_end;
         *self.mdl_end.get_mut() = new_mdl_end;
         Ok(())
@@ -380,16 +456,18 @@ impl Block {
             self.ensure_title_line();
         }
         let (newline, trailer) = (self.newline(), self.trailer());
-        let old = self.data.split_off(self.mdl_end());
+        let mdl_end = self.mdl_end();
+        let data = self.data.to_mut();
+        let old = data.split_off(mdl_end);
         let mut headers = HeaderPool::new(&old[..old.len() - trailer.len()], strip, style);
         for (name, value) in records {
             match headers.take(name) {
-                Some(line) => self.data.extend_from_slice(line),
-                None => push_header(&mut self.data, headers.template, name, newline),
+                Some(line) => data.extend_from_slice(line),
+                None => push_header(data, headers.template, name, newline),
             }
-            push_value(&mut self.data, value, newline);
+            push_value(data, value, newline);
         }
-        self.data.extend_from_slice(trailer);
+        data.extend_from_slice(trailer);
     }
 
     /// Drop the records named `name`, putting `value` under the first's
@@ -426,7 +504,7 @@ impl Block {
             copied = end;
         }
         data.extend_from_slice(&self.data[mdl_end + copied..]);
-        self.data = data;
+        self.data = Data::Owned(data);
         Ok(spans.len())
     }
 
@@ -447,7 +525,7 @@ impl Block {
         }
         let mdl_end = data.len();
         data.extend_from_slice(&self.data[self.mdl_end()..]);
-        self.data = data;
+        self.data = Data::Owned(data);
         *self.mdl_end.get_mut() = mdl_end;
     }
 
@@ -486,7 +564,7 @@ mod tests {
     use super::*;
     use crate::core::ctable::CTableFormat;
     use crate::core::ctable::error::Malformed;
-    use crate::core::testing::xorshift;
+    use crate::core::testing::{EDITS, xorshift};
 
     fn block(text: &str, delimited: bool) -> Block {
         let delimiter = delimited.then(|| {
@@ -880,35 +958,6 @@ mod tests {
     fn edits_find_the_mdl_end_as_if_found_on_reading() {
         const TOKENS: [&[u8]; 9] = [
             b"\n", b"\r\n", b"M  END", b"> <A>", b"> <B>", b"x", b" ", b"$$$$", b"\n\n",
-        ];
-        type Edit = fn(&mut Block) -> String;
-        const EDITS: [Edit; 8] = [
-            |block| format!("{:?}", block.set_title(b"M  END")),
-            |block| format!("{:?}", block.set_title(b"")),
-            |block| {
-                block.append_record(b"A", b"M  END", Strip::Bytes, HeaderStyle::Copy);
-                String::new()
-            },
-            |block| {
-                format!(
-                    "{:?}",
-                    block.set_record(b"B", b"M  END", Strip::Bytes, HeaderStyle::Plain)
-                )
-            },
-            |block| format!("{:?}", block.remove_records(b"A", Strip::Bytes)),
-            |block| {
-                block.replace_records(
-                    [(&b"A"[..], &b"M  END"[..])],
-                    Strip::Bytes,
-                    HeaderStyle::Copy,
-                );
-                String::new()
-            },
-            |block| {
-                block.replace_mdl([&b"M  END"[..], b"> <B>"]);
-                String::new()
-            },
-            |block| format!("{:?}", block.set_molblock(b"t\nM  END\n")),
         ];
         let mut next = xorshift(0x9E37_79B9_7F4A_7C15_u64);
         for _ in 0..2000 {
