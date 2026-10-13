@@ -226,22 +226,31 @@ impl PySDBlock {
         let py = name.py();
         let name = self.arg_bytes(name, "record names")?;
         let strip = self.kind.strip();
-        let mut found = None;
-        for header in self.block.headers(strip) {
-            let header = header?;
-            if header.name == name {
-                found = Some(header.start);
+        let value = match self.block.index(strip)? {
+            Some(index) => index.last(self.block.metadata(), name),
+            None => {
+                let mut found = None;
+                for header in self.block.headers(strip) {
+                    let header = header?;
+                    if header.name == name {
+                        found = Some(header.start);
+                    }
+                }
+                let Some(start) = found else {
+                    return Ok(None);
+                };
+                let record = self.block.records_at(start, strip).next();
+                let record = record.and_then(Result::ok).expect("a record starts here");
+                Some(record.value)
             }
-        }
-        let Some(start) = found else {
+        };
+        let Some(value) = value else {
             return Ok(None);
         };
-        let record = self.block.records_at(start, strip).next();
-        let record = record.and_then(Result::ok).expect("a record starts here");
         self.kind
-            .value(py, &record.value)
+            .value(py, &value)
             .map(Some)
-            .map_err(|error| self.noted(py, error, || reading_record(record.name)))
+            .map_err(|error| self.noted(py, error, || reading_record(name)))
     }
 
     /// Set the record `name` as `set_record` does.
@@ -713,6 +722,9 @@ impl PySDBlock {
 
     /// The number of records, duplicates included: `len(block.records())`.
     fn __len__(&self) -> PyResult<usize> {
+        if let Some(index) = self.block.index(self.kind.strip())? {
+            return Ok(index.len());
+        }
         let mut count = 0;
         for header in self.block.headers(self.kind.strip()) {
             header?;
@@ -803,6 +815,9 @@ impl PySDBlock {
     ///     MalformedRecordError: if a record header has no `<name>`
     fn __contains__(&self, name: &Bound<'_, PyAny>) -> PyResult<bool> {
         let name = self.arg_bytes(name, "record names")?;
+        if let Some(index) = self.block.index(self.kind.strip())? {
+            return Ok(index.contains(self.block.metadata(), name));
+        }
         let mut seen = false;
         for header in self.block.headers(self.kind.strip()) {
             seen |= header?.name == name;

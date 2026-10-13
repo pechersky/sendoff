@@ -7,3 +7,5 @@ rewriting the file (0.1.x: a ``block.write`` loop; now ``write_sdf``) from
 2.0 s to 95 ms, 3.3 s to 275 ms, and 3.2 s to 281 ms. ``parse_sdf`` now
 memory-maps files on local Linux filesystems, which parses them about 6%
 faster again; pipes and network filesystems are still read in chunks.
+A block indexes its records on its second lookup, so further ``get``,
+``block[name]``, ``in``, and ``len`` calls skip parsing until it is edited.

@@ -1,16 +1,22 @@
-//! Blocks that refuse edits while Python buffers export their bytes.
+//! Blocks that refuse edits while Python buffers export their bytes, and
+//! index their records for repeated lookups.
 
 use std::ffi::c_void;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use pyo3::PyResult;
 use pyo3::exceptions::PyBufferError;
 
 use crate::core::block::Block;
+use crate::core::index::Index;
+use crate::core::record::MissingFieldName;
+use crate::core::strip::Strip;
 
 /// A block whose bytes buffers may export, so edits, which may move or free
-/// them, raise until every export is released.
+/// them, raise until every export is released. Edits also drop the index
+/// of its records.
 ///
 /// Each export holds a reference to `exports`, made on the first, so
 /// releasing one needs no borrow of the block, which a mutable borrow
@@ -18,6 +24,10 @@ use crate::core::block::Block;
 pub(crate) struct Exported {
     block: Block,
     exports: OnceLock<Arc<()>>,
+    /// The records' index, built on the second lookup since the last edit,
+    /// so blocks looked up once allocate none.
+    index: OnceLock<Option<Index>>,
+    looked_up: AtomicBool,
 }
 
 impl Exported {
@@ -25,10 +35,30 @@ impl Exported {
         Self {
             block,
             exports: OnceLock::new(),
+            index: OnceLock::new(),
+            looked_up: AtomicBool::new(false),
         }
     }
 
-    /// The block, to edit, unless a buffer exports it.
+    /// The index of the records, read with `strip`, for a lookup: `None`
+    /// for the first since the last edit, or SD data too large to index.
+    ///
+    /// # Errors
+    ///
+    /// `MissingFieldName` if a record header has no `<name>`.
+    pub(crate) fn index(&self, strip: Strip) -> Result<Option<&Index>, MissingFieldName> {
+        if let Some(index) = self.index.get() {
+            return Ok(index.as_ref());
+        }
+        if !self.looked_up.load(Ordering::Relaxed) {
+            self.looked_up.store(true, Ordering::Relaxed);
+            return Ok(None);
+        }
+        let index = Index::build(self.block.metadata(), strip)?;
+        Ok(self.index.get_or_init(|| index).as_ref())
+    }
+
+    /// The block, to edit, unless a buffer exports it; drops the index.
     pub(crate) fn get_mut(&mut self) -> PyResult<&mut Block> {
         if self
             .exports
@@ -39,6 +69,8 @@ impl Exported {
                 "Existing exports of data: SDBlock cannot be edited",
             ));
         }
+        self.index.take();
+        *self.looked_up.get_mut() = false;
         Ok(&mut self.block)
     }
 

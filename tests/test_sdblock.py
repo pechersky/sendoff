@@ -337,7 +337,8 @@ def test_names_len_and_contains_skip_values() -> None:
     block.remove_record("A")
     assert (block.names(), len(block), "A" in block) == (["B", "C"], 2, False)
     malformed = SDBlock("t\n\nM  END\n> <A>\n1\n\n> no name\n1\n\n$$$$\n")
-    for call in (malformed.names, lambda: len(malformed), lambda: "A" in malformed):
+    calls = (lambda: len(malformed), lambda: "A" in malformed, malformed.names)
+    for call in (*calls, lambda: malformed.get("A")) * 2:
         with pytest.raises(MalformedRecordError):
             call()
 
@@ -576,21 +577,21 @@ $$$$
 """
 
 
-@pytest.mark.parametrize(
-    "edit",
-    [
-        lambda block: block.__setitem__(b"A", b"2"),
-        lambda block: block.__delitem__(b"A"),
-        lambda block: setattr(block, "title", b"u"),
-        lambda block: setattr(block, "molblock", b"u\n\n\nM  END\n"),
-        lambda block: block.append_record(b"B", b"2"),
-        lambda block: block.set_record(b"B", b"2"),
-        lambda block: block.remove_record(b"A"),
-        lambda block: block.replace_records({b"B": b"2"}),
-        SDBlock.fix_counts,
-        SDBlock.renumber_indices,
-    ],
-)
+EDITS: list[typing.Callable[[SDBlock[bytes]], object]] = [
+    lambda block: block.__setitem__(b"A", b"2"),
+    lambda block: block.__delitem__(b"A"),
+    lambda block: setattr(block, "title", b"u"),
+    lambda block: setattr(block, "molblock", b"u\n\n\nM  END\n"),
+    lambda block: block.append_record(b"B", b"2"),
+    lambda block: block.set_record(b"B", b"2"),
+    lambda block: block.remove_record(b"A"),
+    lambda block: block.replace_records({b"B": b"2"}),
+    SDBlock.fix_counts,
+    SDBlock.renumber_indices,
+]
+
+
+@pytest.mark.parametrize("edit", EDITS)
 def test_exported_blocks_refuse_edits(
     edit: typing.Callable[[SDBlock[bytes]], object],
 ) -> None:
@@ -614,6 +615,34 @@ def test_exported_blocks_refuse_edits(
     assert block == duplicate
     out = io.BytesIO()
     assert out.write(block) == len(sdf_of(block))
+
+
+@pytest.mark.parametrize("edit", EDITS)
+def test_repeated_lookups_follow_edits(
+    edit: typing.Callable[[SDBlock[bytes]], object],
+) -> None:
+    """Lookups after the first use an index of the records, which edits drop.
+
+    Args:
+        edit: an edit to the block
+    """
+    records = b"> <A>\n1\n\n> <B>\nx\r\ny\r\n\n> <A>\n3\n"
+    block = SDBlock(V3000.replace(b"> <A>\n1\n", records))
+    names = [b"A", b"B", b"C"]
+
+    def lookups() -> list[object]:
+        found = [block.get(name) for name in names]
+        return [len(block), *found, *(name in block for name in names)]
+
+    def walked() -> list[object]:
+        values = block.to_dict()
+        found = [values.get(name) for name in names]
+        return [len(block.names()), *found, *(name in values for name in names)]
+
+    expected = [3, b"3", b"x\ny", None, True, True, False]
+    assert lookups() == lookups() == walked() == expected
+    edit(block)
+    assert lookups() == lookups() == walked()
 
 
 def test_str_blocks_are_not_bytes_like() -> None:

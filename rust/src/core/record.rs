@@ -40,6 +40,32 @@ impl Header<'_> {
     }
 }
 
+/// Where an SD data record's value lies, and its name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Span<'a> {
+    /// The field name between the header's first `<` and last `>`.
+    pub name: &'a [u8],
+    /// Offset of the header line in the SD data.
+    pub start: usize,
+    /// The value lines in the SD data, the last without its ending.
+    pub value: Range<usize>,
+    /// Whether a value line before the last ends in `\r\n`, whose `\r` the
+    /// value drops.
+    pub crlf: bool,
+}
+
+/// The value at `value` in the SD data `metadata`: its lines without their
+/// endings, joined with `\n`; borrowed unless `crlf`.
+#[inline(always)]
+pub fn record_value(metadata: &[u8], value: Range<usize>, crlf: bool) -> Cow<'_, [u8]> {
+    let value = &metadata[value];
+    if crlf {
+        Cow::Owned(crlf_to_lf(value))
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
 /// One SD data record borrowed from a block where possible.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Record<'a> {
@@ -196,8 +222,14 @@ impl<'a> Records<'a> {
         Headers(self)
     }
 
+    /// Iterate over where the values lie, building none.
+    #[inline]
+    pub fn spans(self) -> Spans<'a> {
+        Spans(self)
+    }
+
     #[inline(always)]
-    fn parse<const VALUE: bool>(&mut self) -> Option<Result<Record<'a>, MissingFieldName>> {
+    fn parse<const VALUE: bool>(&mut self) -> Option<Result<Span<'a>, MissingFieldName>> {
         let mut lines = Lines::new(self.metadata, self.pos);
         let found = match self.strip {
             Strip::Bytes => record_in::<VALUE>(&mut lines, &trim),
@@ -229,7 +261,12 @@ impl<'a> Iterator for Records<'a> {
     type Item = Result<Record<'a>, MissingFieldName>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.parse::<true>()
+        let found = self.parse::<true>()?;
+        Some(found.map(|span| Record {
+            name: span.name,
+            value: record_value(self.metadata, span.value, span.crlf),
+            start: span.start,
+        }))
     }
 }
 
@@ -241,20 +278,32 @@ impl<'a> Iterator for Headers<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let found = self.0.parse::<false>()?;
-        Some(found.map(|record| Header {
-            name: record.name,
-            start: record.start,
+        Some(found.map(|span| Header {
+            name: span.name,
+            start: span.start,
             end: self.0.pos(),
         }))
     }
 }
 
-/// Parse the next record; without `VALUE`, skip the value lines unbuilt.
+/// Where the records of SD data lie, from `Records::spans`.
+pub struct Spans<'a>(Records<'a>);
+
+impl<'a> Iterator for Spans<'a> {
+    type Item = Result<Span<'a>, MissingFieldName>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.parse::<true>()
+    }
+}
+
+/// Parse the next record; without `VALUE`, skip the value lines, leaving
+/// its value empty.
 #[inline(always)]
 fn record_in<'a, const VALUE: bool>(
     lines: &mut Lines<'a>,
     trim: &impl Fn(&[u8]) -> &[u8],
-) -> Result<Option<Record<'a>>, MissingFieldName> {
+) -> Result<Option<Span<'a>>, MissingFieldName> {
     loop {
         let start = lines.pos();
         let Some(line) = lines.next() else {
@@ -271,8 +320,12 @@ fn record_in<'a, const VALUE: bool>(
         let name = record_name(rest)?;
         if !VALUE {
             skip_run(lines, trim);
-            let value = Cow::Borrowed(&[][..]);
-            return Ok(Some(Record { name, value, start }));
+            return Ok(Some(Span {
+                name,
+                start,
+                value: 0..0,
+                crlf: false,
+            }));
         }
         let value_start = lines.pos();
         let (mut pos, mut value_end) = (value_start, value_start);
@@ -289,13 +342,12 @@ fn record_in<'a, const VALUE: bool>(
             crlf |= ended_crlf;
             ended_crlf = ending == 2;
         }
-        let value = &lines.data()[value_start..value_end];
-        let value = if crlf {
-            Cow::Owned(crlf_to_lf(value))
-        } else {
-            Cow::Borrowed(value)
-        };
-        return Ok(Some(Record { name, value, start }));
+        return Ok(Some(Span {
+            name,
+            start,
+            value: value_start..value_end,
+            crlf,
+        }));
     }
 }
 
