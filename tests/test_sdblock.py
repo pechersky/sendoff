@@ -562,6 +562,74 @@ def test_block_copies_are_independent(
     assert first is second and first is not shared
 
 
+V3000 = b"""\
+t
+  x
+
+  0  0  0  0  0  0  0  0  0  0999 V3000
+M  V30 BEGIN CTAB
+M  V30 COUNTS 9 9 0 0 0
+M  V30 BEGIN ATOM
+M  V30 1 C 0 0 0 0
+M  V30 END ATOM
+M  V30 END CTAB
+M  END
+> <A>
+1
+
+$$$$
+"""
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda block: block.__setitem__(b"A", b"2"),
+        lambda block: block.__delitem__(b"A"),
+        lambda block: setattr(block, "title", b"u"),
+        lambda block: setattr(block, "molblock", b"u\n\n\nM  END\n"),
+        lambda block: block.append_record(b"B", b"2"),
+        lambda block: block.set_record(b"B", b"2"),
+        lambda block: block.remove_record(b"A"),
+        lambda block: block.replace_records({b"B": b"2"}),
+        SDBlock.fix_counts,
+        SDBlock.renumber_indices,
+    ],
+)
+def test_exported_blocks_refuse_edits(
+    edit: typing.Callable[[SDBlock[bytes]], object],
+) -> None:
+    """A bytes block exports its SDF until every view of it is released.
+
+    Args:
+        edit: an edit to the block
+    """
+    block = SDBlock(V3000)
+    view = memoryview(block)
+    assert view.readonly and view == block.to_sdf() == bytes(block) == V3000
+    duplicate = copy.copy(block)
+    edit(duplicate)
+    part = view[1:]
+    view.release()
+    with pytest.raises(BufferError, match="exports"):
+        edit(block)
+    assert bytes(part) == V3000[1:]
+    part.release()
+    edit(block)
+    assert block == duplicate
+    out = io.BytesIO()
+    assert out.write(block) == len(block.to_sdf())
+
+
+def test_str_blocks_are_not_bytes_like() -> None:
+    """A str block has no buffer, so binary files and bytes() refuse it."""
+    block = SDBlock("t\nM  END\n")
+    with pytest.raises(TypeError, match="not bytes-like"):
+        memoryview(block)
+    with pytest.raises(TypeError, match="not bytes-like"):
+        io.BytesIO().write(block)
+
+
 def test_block_repr_shows_the_title() -> None:
     """The repr shows the title in the block's type."""
     assert repr(SDBlock(" aspirin \nM  END\n")) == "<SDBlock title=' aspirin'>"

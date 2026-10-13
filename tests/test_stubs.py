@@ -14,6 +14,12 @@ ALLOWLIST = """\
 sendoff.native.SDBlock.__class_getitem__
 sendoff.native.__all__
 """
+# Python 3.11 has the buffer slots but not their PEP 688 methods.
+if sys.version_info < (3, 12):
+    ALLOWLIST += """\
+sendoff.native.SDBlock.__buffer__
+sendoff.native.SDBlock.__release_buffer__
+"""
 
 
 def test_native_stub_matches_extension(tmp_path: Path) -> None:

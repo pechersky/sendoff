@@ -1,11 +1,13 @@
 //! The `SDBlock` Python class and its record iterator.
 
 use std::borrow::Cow;
+use std::ffi::c_int;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pyo3::exceptions::{
     PyKeyError, PyRuntimeError, PyTypeError, PyUnicodeDecodeError, PyValueError,
 };
+use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyList, PyString, PyTuple, PyType};
@@ -19,6 +21,7 @@ use crate::core::record::{HeaderStyle, Record};
 use crate::core::split::single_block;
 use crate::core::strip::Strip;
 use crate::python::ctable::PyCTable;
+use crate::python::exports::Exported;
 use crate::python::kind::{Kind, bytes_of, decode};
 use crate::python::names::Namer;
 use crate::python::read::{PySDBlockIterator, Source, reader};
@@ -167,7 +170,7 @@ fn unchanged<'py>(
 )]
 #[derive(Clone)]
 pub(crate) struct PySDBlock {
-    pub(super) block: Block,
+    pub(super) block: Exported,
     pub(super) kind: Kind,
     /// Counts edits to the SD data, so record iterators can tell they are
     /// stale without copying the records.
@@ -198,21 +201,11 @@ impl PySDBlock {
     /// Wrap `block`; `utf8` says its data is known to be UTF-8.
     pub(super) fn wrap(block: Block, kind: Kind, utf8: bool) -> Self {
         Self {
-            block,
+            block: Exported::new(block),
             kind,
             edits: 0,
             utf8: KnownUtf8(AtomicBool::new(utf8)),
         }
-    }
-
-    /// The serialized block as str or bytes, noting a decode error.
-    fn serialized<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let output = self
-            .kind
-            .value(py, self.block.serialized())
-            .map_err(|error| self.noted(py, error, || "Writing".into()))?;
-        self.utf8.0.store(true, Ordering::Relaxed);
-        Ok(output)
     }
 
     /// Check that a text block is UTF-8 unless that is already known.
@@ -261,6 +254,7 @@ impl PySDBlock {
         let name = self.arg_bytes(name, "record names")?;
         let value = self.arg_bytes(value, "values")?;
         self.block
+            .get_mut()?
             .set_record(name, value, self.kind.strip(), style)?;
         self.edited();
         Ok(())
@@ -316,14 +310,19 @@ impl PySDBlock {
         edit(&mut ctable)?;
         let lines = &ctable.lines[1..];
         match self.kind {
-            Kind::Text => self.block.replace_mdl(lines.iter().map(String::as_bytes)),
+            Kind::Text => self
+                .block
+                .get_mut()?
+                .replace_mdl(lines.iter().map(String::as_bytes)),
             Kind::Bytes => {
                 // Edits write ASCII, so every char is a Latin-1 byte.
                 let encoded: Vec<Vec<u8>> = lines
                     .iter()
                     .map(|line| line.chars().map(|c| c as u8).collect())
                     .collect();
-                self.block.replace_mdl(encoded.iter().map(Vec::as_slice));
+                self.block
+                    .get_mut()?
+                    .replace_mdl(encoded.iter().map(Vec::as_slice));
             }
         }
         Ok(())
@@ -478,6 +477,7 @@ impl PySDBlock {
                 let name = slf.arg_bytes(&name, "record names")?;
                 let value = slf.arg_bytes(&value, "values")?;
                 slf.block
+                    .get_mut()?
                     .append_record(name, value, slf.kind.strip(), style);
             }
         }
@@ -539,7 +539,7 @@ impl PySDBlock {
     #[setter(title)]
     fn set_title(&mut self, title: &Bound<'_, PyAny>) -> PyResult<()> {
         let title = self.arg_bytes(title, "titles")?;
-        self.block.set_title(title).map_err(PyErr::from)
+        self.block.get_mut()?.set_title(title).map_err(PyErr::from)
     }
 
     /// Return the title line and CTAB through `M  END` as one value.
@@ -572,7 +572,10 @@ impl PySDBlock {
             Kind::Text => universal_newlines(molblock),
             Kind::Bytes => Cow::Borrowed(molblock),
         };
-        self.block.set_molblock(&molblock).map_err(PyErr::from)
+        self.block
+            .get_mut()?
+            .set_molblock(&molblock)
+            .map_err(PyErr::from)
     }
 
     /// Return the CTAB after the title, through `M  END`, as one value.
@@ -827,7 +830,12 @@ impl PySDBlock {
     /// The inverse of `SDBlock(sdf)`, and what `write` writes.
     #[pyo3(signature = () -> "AnyStr")]
     fn to_sdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.serialized(py)
+        let output = self
+            .kind
+            .value(py, self.block.serialized())
+            .map_err(|error| self.noted(py, error, || "Writing".into()))?;
+        self.utf8.0.store(true, Ordering::Relaxed);
+        Ok(output)
     }
 
     /// Write the block, ending with $$$$, to a file-like handle.
@@ -838,14 +846,69 @@ impl PySDBlock {
     /// without "\n") end like the title line. The block is
     /// written in one `write` call, whose return value is not checked, so an
     /// unbuffered (`buffering=0`) or nonblocking handle may write part of it.
+    /// A bytes block passes itself, as a buffer, so it is not copied.
     ///
     /// Args:
     ///     file: a text or binary file-like handle matching the input type
     #[pyo3(signature = (file: "_SupportsWrite[AnyStr]"))]
-    fn write(&self, file: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn write(slf: &Bound<'_, Self>, file: &Bound<'_, PyAny>) -> PyResult<()> {
         let py = file.py();
-        file.call_method1(intern!(py, "write"), (self.serialized(py)?,))?;
+        let write = intern!(py, "write");
+        let this = slf.try_borrow()?;
+        if this.kind == Kind::Bytes {
+            drop(this);
+            file.call_method1(write, (slf,))?;
+        } else {
+            file.call_method1(write, (this.to_sdf(py)?,))?;
+        }
         Ok(())
+    }
+
+    /// Export a bytes block's SDF, as `to_sdf` returns it, without copying.
+    ///
+    /// Edits raise BufferError until every export is released.
+    ///
+    /// Raises:
+    ///     TypeError: for a str block
+    ///     BufferError: for a writable buffer
+    #[allow(unsafe_code)]
+    unsafe fn __getbuffer__(
+        slf: &Bound<'_, Self>,
+        view: *mut ffi::Py_buffer,
+        flags: c_int,
+    ) -> PyResult<()> {
+        let this = slf.try_borrow()?;
+        if this.kind == Kind::Text {
+            return Err(PyTypeError::new_err(
+                "a str SDBlock is not bytes-like; use to_sdf()",
+            ));
+        }
+        let data = this.block.serialized();
+        // SAFETY: Python passes a view to fill, which takes a reference to
+        // `slf`, keeping the block alive, and edits, which could move or
+        // free `data`, raise until `__releasebuffer__` releases the export.
+        let filled = unsafe {
+            ffi::PyBuffer_FillInfo(
+                view,
+                slf.as_ptr(),
+                data.as_ptr().cast_mut().cast(),
+                data.len() as ffi::Py_ssize_t,
+                1,
+                flags,
+            )
+        };
+        if filled == -1 {
+            return Err(PyErr::fetch(slf.py()));
+        }
+        // SAFETY: the view was filled, so it is valid to write.
+        unsafe { (*view).internal = this.block.export() };
+        Ok(())
+    }
+
+    #[allow(unsafe_code)]
+    unsafe fn __releasebuffer__(_slf: Bound<'_, Self>, view: *mut ffi::Py_buffer) {
+        // SAFETY: Python releases each view `__getbuffer__` filled once.
+        unsafe { Exported::release((*view).internal) };
     }
 
     /// Append a field and value of the same type as the input block.
@@ -873,6 +936,7 @@ impl PySDBlock {
         let name = self.arg_bytes(name, "record names")?;
         let value = self.arg_bytes(value, "values")?;
         self.block
+            .get_mut()?
             .append_record(name, value, self.kind.strip(), style);
         self.edited();
         Ok(())
@@ -917,7 +981,10 @@ impl PySDBlock {
     #[pyo3(signature = (name: "AnyStr"))]
     fn remove_record(&mut self, name: &Bound<'_, PyAny>) -> PyResult<usize> {
         let name = self.arg_bytes(name, "record names")?;
-        let removed = self.block.remove_records(name, self.kind.strip())?;
+        let removed = self
+            .block
+            .get_mut()?
+            .remove_records(name, self.kind.strip())?;
         if removed > 0 {
             self.edited();
         }
@@ -963,7 +1030,7 @@ impl PySDBlock {
             })
             .collect::<PyResult<Vec<_>>>()?;
         let strip = this.kind.strip();
-        this.block.replace_records(records, strip, style);
+        this.block.get_mut()?.replace_records(records, strip, style);
         this.edited();
         Ok(())
     }

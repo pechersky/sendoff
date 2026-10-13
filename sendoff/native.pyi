@@ -216,6 +216,17 @@ class SDBlock(Generic[AnyStr]):
         A block is true even without records, as before it had a length.
         """
 
+    def __buffer__(self: SDBlock[bytes], flags: int, /) -> memoryview:
+        """
+        Export a bytes block's SDF, as `to_sdf` returns it, without copying.
+
+        Edits raise BufferError until every export is released.
+
+        Raises:
+            TypeError: for a str block
+            BufferError: for a writable buffer
+        """
+
     def __contains__(self, name: AnyStr, /) -> bool:
         """
         Whether any record is named `name`: `name in block.names()`.
@@ -302,6 +313,7 @@ class SDBlock(Generic[AnyStr]):
         does not always parse back to the same block.
         """
 
+    def __release_buffer__(self, buffer: memoryview, /) -> None: ...
     def __repr__(self, /) -> str:
         """
         Show the title; a str block's undecodable title bytes show as U+FFFD
