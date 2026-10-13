@@ -1,5 +1,5 @@
 # mypy: allow-untyped-decorators
-"""Test writing blocks with SDBlock.write and write_sdf."""
+"""Test writing blocks with write_sdf."""
 import errno
 import io
 import os
@@ -21,8 +21,7 @@ def test_single_mol_newline_write(single_mol_sdf: Pathy) -> None:
     """
     mols = list(parse_sdf(single_mol_sdf))
     buffer = io.StringIO()
-    for mol in mols:
-        mol.write(buffer)
+    write_sdf(buffer, mols)
     assert len(buffer.getvalue().splitlines()) == len(
         open(single_mol_sdf).read().splitlines()
     )
@@ -36,15 +35,14 @@ def test_single_mol_newline_write_splitlines(single_mol_sdf: Pathy) -> None:
     """
     mols = list(SDBlock.from_lines(open(single_mol_sdf).read().splitlines()))
     buffer = io.StringIO()
-    for mol in mols:
-        mol.write(buffer)
+    write_sdf(buffer, mols)
     assert len(buffer.getvalue().splitlines()) == len(
         open(single_mol_sdf).read().splitlines()
     )
 
 
-def test_write_sdf_writes_what_block_write_would(tmp_path: Path) -> None:
-    """write_sdf to a path or handle matches SDBlock.write, across chunks.
+def test_write_sdf_writes_each_blocks_sdf(tmp_path: Path) -> None:
+    """write_sdf to a path or handle writes each block's SDF, across chunks.
 
     Args:
         tmp_path: pytest fixture of a temporary directory
@@ -112,7 +110,7 @@ def test_write_sdf_writes_blocks_before_a_failure(
     error: type[Exception],
     match: str | None,
 ) -> None:
-    """Blocks before a failing one are written, like a loop of block.write.
+    """Blocks before a failing one are written, and the error propagates.
 
     Args:
         tmp_path: pytest fixture of a temporary directory

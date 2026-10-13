@@ -12,8 +12,8 @@ New ``SDBlock`` helpers for common tasks:
   and ``SDBlock.from_sdf(text)`` parses SDF held in memory. ``str(block)`` is
   a ``str`` block's SDF.
 - ``sendoff.sdblock.write_sdf(dest, blocks)`` writes blocks to a path or a
-  file object and returns how many it wrote. Like a loop of ``block.write``,
-  an error leaves the blocks before it written.
+  file object and returns how many it wrote. An error leaves the blocks
+  before it written.
 - A ``bytes`` block is bytes-like: ``bytes(block)``, ``memoryview(block)``,
   and ``out.write(block)`` read its SDF without copying it, and edits raise
   ``BufferError`` while a view is held.

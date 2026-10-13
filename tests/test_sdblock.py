@@ -204,11 +204,7 @@ def test_record_mutators_keep_order_and_other_lines() -> None:
     assert block.records() == [("A", "new"), ("B", "b"), ("C", "c")]
     assert block.remove_record("B") == 1
     assert block.remove_record("B") == 0
-    out = io.StringIO()
-    block.write(out)
-    assert out.getvalue() == (
-        "t\nM  END\n> <A>  (1)\nnew\n\nnote\n\n> <C>\nc\n\n$$$$\n"
-    )
+    assert str(block) == "t\nM  END\n> <A>  (1)\nnew\n\nnote\n\n> <C>\nc\n\n$$$$\n"
 
     block.replace_records({"X": "1", "Y": "2"})
     assert block.records() == [("X", "1"), ("Y", "2")]
@@ -399,15 +395,13 @@ def test_appended_records_follow_a_blank_line() -> None:
     assert constructed.records() == [("A", "1"), ("B", "2")]
 
 
-def test_record_edits_and_write_take_keywords() -> None:
-    """Record edits name their arguments `name` and `value`; write, `file`."""
+def test_record_edits_take_keywords() -> None:
+    """Record edits name their arguments `name` and `value`."""
     block = SDBlock("t\nM  END\n$$$$\n")
     block.append_record(name="A", value="1")
     block.set_record(name="B", value="2")
     block.remove_record(name="B")
-    out = io.StringIO()
-    block.write(file=out)
-    assert out.getvalue() == "t\nM  END\n> <A>\n1\n\n$$$$\n"
+    assert str(block) == "t\nM  END\n> <A>\n1\n\n$$$$\n"
 
 
 def test_replace_records_can_read_the_block_itself() -> None:
@@ -656,9 +650,7 @@ def test_molblock_setter_replaces_the_structure_only() -> None:
     block.molblock = "new\r\n  prog\r\n\r\nM  END\r\n\r\n"
     assert block.title == "new"
     assert block.molblock == "new\n  prog\n\nM  END\n"
-    out = io.StringIO()
-    block.write(out)
-    assert out.getvalue() == ("new\n  prog\n\nM  END\n> <A>  (1)\n1\n\nnote\n\n$$$$\n")
+    assert str(block) == "new\n  prog\n\nM  END\n> <A>  (1)\n1\n\nnote\n\n$$$$\n"
     for bad, message in [
         ("t\nx\n", "no M  END"),
         ("t\nM  END\n> <A>\n1\n", "after its M  END"),

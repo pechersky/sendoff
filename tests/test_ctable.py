@@ -1,6 +1,5 @@
 # mypy: allow-untyped-decorators
 """Test CTAB operations: counts, index checks, renumbering, and CTable."""
-import io
 import typing
 from pathlib import Path
 
@@ -249,9 +248,7 @@ def test_single_mol_v3000_sdf_idempotent_renumber(single_mol_v3000_sdf: Path) ->
         next(SDBlock.from_lines(text.splitlines())),
     ):
         mol.renumber_indices()
-        buffer = io.StringIO()
-        mol.write(buffer)
-        assert buffer.getvalue() == text
+        assert str(mol) == text
 
 
 V3000_HEADER = "t\n  sendoff\n\n  0  0  0     0  0            999 V3000\n"

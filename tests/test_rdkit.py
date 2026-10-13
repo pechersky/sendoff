@@ -241,7 +241,7 @@ def test_molblock_setter_swaps_structures_from_rdkit(
             mol.SetProp("_Name", f"{block.title!s}-swapped")
             block.molblock = Chem.MolToMolBlock(mol)
             block.set_record("Original", block.title)
-            block.write(handle)
+            handle.write(str(block))
     swapped = list(Chem.SDMolSupplier(str(outpath)))
     assert [Chem.MolToSmiles(mol) for mol in swapped] == ["CCO", "CCO"]
     assert all(mol.GetProp("_Name").endswith("-swapped") for mol in swapped)

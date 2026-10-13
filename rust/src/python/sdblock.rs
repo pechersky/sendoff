@@ -845,32 +845,6 @@ impl PySDBlock {
         Ok(text)
     }
 
-    /// Write the block, ending with $$$$, to a file-like handle.
-    ///
-    /// Lines end as they were read, so blocks from a bytes path keep "\r\n";
-    /// str paths read universal newlines, so their lines end in "\n". Lines
-    /// the block adds or ends (new records, a missing $$$$, a last line
-    /// without "\n") end like the title line. The block is
-    /// written in one `write` call, whose return value is not checked, so an
-    /// unbuffered (`buffering=0`) or nonblocking handle may write part of it.
-    /// A bytes block passes itself, as a buffer, so it is not copied.
-    ///
-    /// Args:
-    ///     file: a text or binary file-like handle matching the input type
-    #[pyo3(signature = (file: "_SupportsWrite[AnyStr]"))]
-    fn write(slf: &Bound<'_, Self>, file: &Bound<'_, PyAny>) -> PyResult<()> {
-        let py = file.py();
-        let write = intern!(py, "write");
-        let this = slf.try_borrow()?;
-        if this.kind == Kind::Bytes {
-            drop(this);
-            file.call_method1(write, (slf,))?;
-        } else {
-            file.call_method1(write, (this.__str__(py)?,))?;
-        }
-        Ok(())
-    }
-
     /// Export a bytes block's SDF without copying.
     ///
     /// Edits raise BufferError until every export is released.

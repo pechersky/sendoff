@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, NamedTuple, overload
 import pytest
 from rdkit import Chem
 
-from sendoff.sdblock import SDBlock, parse_sdf
+from sendoff.sdblock import SDBlock, parse_sdf, write_sdf
 
 Pathy = str | bytes | os.PathLike[str] | os.PathLike[bytes]
 
@@ -256,10 +256,9 @@ def write_record_mol(path: Path, writer: str, record: str, value: str) -> Path:
         mol.SetProp(record, value)
         return write_mols(path, mol, v3000=writer == "rdkitV3000")
     blocks = list(parse_sdf(write_mols(path, mol)))
-    with open(path, "w") as handle:
-        for block in blocks:
-            block.append_record(record, value)
-            block.write(handle)
+    for block in blocks:
+        block.append_record(record, value)
+    write_sdf(path, blocks)
     return path
 
 

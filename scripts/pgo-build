@@ -24,7 +24,6 @@ timings against release wheels.
 from __future__ import annotations
 
 import argparse
-import io
 import os
 import random
 import shutil
@@ -215,7 +214,6 @@ def train_kind(path: str, binary: bool, whole: bool = True) -> None:
     [len(b) for b in parse_sdf(arg)]
     Counter(n for b in parse_sdf(arg) for n in b.names())
     write_sdf(os.devnull, parse_sdf(arg))
-    out = io.BytesIO() if binary else io.StringIO()
     for i, b in enumerate(parse_sdf(arg)):
         if i % 3 == 0:
             b.set_record(field, extra)
@@ -226,7 +224,6 @@ def train_kind(path: str, binary: bool, whole: bool = True) -> None:
         if i % 11 == 0:
             b.title = extra
         bytes(b) if binary else str(b)
-        b.write(out)
         if i % 4 == 0:
             _ = (b.num_atoms, b.num_bonds)
         if not binary and i % 50 == 0:

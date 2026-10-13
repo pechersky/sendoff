@@ -228,14 +228,7 @@
          """
          Replace the title line.
 
-@@ -639,20 +706,19 @@
-         without "\\n") end like the title line. The block is
-         written in one `write` call, whose return value is not checked, so an
-         unbuffered (`buffering=0`) or nonblocking handle may write part of it.
--        A bytes block passes itself, as a buffer, so it is not copied.
-
-         Args:
-             file: a text or binary file-like handle matching the input type
+@@ -630,13 +697,13 @@
          """
 
  @final
@@ -252,7 +245,7 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -660,25 +726,43 @@
+@@ -644,25 +711,43 @@
          """
 
  @final
@@ -304,7 +297,7 @@
  ) -> _SDBlockIterator[Any]:
      """
      Lazily parse SDBlocks from an SDF path or file object.
-@@ -711,10 +795,13 @@
+@@ -695,10 +780,13 @@
          TypeError: if `source` is neither a path nor a file object
      """
 
@@ -320,7 +313,7 @@
      """
      Write SDBlocks to a path or a file object, and return how many.
 
-@@ -748,5 +835,3 @@
+@@ -731,5 +819,3 @@
          UnicodeDecodeError: for a str block that is not UTF-8
          OSError: if `dest` cannot be created or written
      """

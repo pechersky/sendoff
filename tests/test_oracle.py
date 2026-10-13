@@ -112,18 +112,16 @@ def outcome(call: Callable[[], Any]) -> Any:
 
 
 def serialized(block: Any, text: bool) -> Any:
-    """Return what ``block.write`` writes.
+    """Return a block's SDF.
 
     Args:
         block: a native SDBlock
         text: whether the block holds str values
 
     Returns:
-        The written str or bytes.
+        str(block) for a str block, else bytes(block).
     """
-    handle: io.StringIO | io.BytesIO = io.StringIO() if text else io.BytesIO()
-    block.write(handle)
-    return handle.getvalue()
+    return str(block) if text else bytes(block)
 
 
 def assert_blocks_match(

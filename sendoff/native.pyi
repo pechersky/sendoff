@@ -696,21 +696,6 @@ class SDBlock(Generic[AnyStr]):
         Equivalent to `dict(block.records())`.
         """
 
-    def write(self, /, file: _SupportsWrite[AnyStr]) -> None:
-        """
-        Write the block, ending with $$$$, to a file-like handle.
-
-        Lines end as they were read, so blocks from a bytes path keep "\\r\\n";
-        str paths read universal newlines, so their lines end in "\\n". Lines
-        the block adds or ends (new records, a missing $$$$, a last line
-        without "\\n") end like the title line. The block is
-        written in one `write` call, whose return value is not checked, so an
-        unbuffered (`buffering=0`) or nonblocking handle may write part of it.
-
-        Args:
-            file: a text or binary file-like handle matching the input type
-        """
-
 @final
 class _SDBlockIterator(Iterator[SDBlock[AnyStr]]):
     """
@@ -805,15 +790,14 @@ def write_sdf(dest: _SupportsWrite[AnyStr], blocks: Iterable[SDBlock[AnyStr]]) -
     """
     Write SDBlocks to a path or a file object, and return how many.
 
-    Blocks are written as `SDBlock.write` would, but 64-256 KiB at a time:
-    to a path without holding the GIL, or to a file object with one
+    Blocks are written as `str(block)` or `bytes(block)`, but 64-256 KiB at
+    a time: to a path without holding the GIL, or to a file object with one
     `write` call per chunk, as str for text blocks or bytes for byte-backed
     ones. Text blocks must be valid UTF-8.
 
-    An error stops writing as it would a loop of `SDBlock.write` calls:
-    the blocks before the failing one are written, a path keeps them, and
-    the error propagates. A failed write may leave part of its chunk
-    written.
+    An error stops writing: the blocks before the failing one are written,
+    a path keeps them, and the error propagates. A failed write may leave
+    part of its chunk written.
 
     A file object's `write` is called once per chunk and its return value
     is not checked. Buffered and text file objects, such as `sys.stdout` or

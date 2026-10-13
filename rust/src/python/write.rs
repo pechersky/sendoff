@@ -65,15 +65,14 @@ impl Sink<'_> {
 
 /// Write SDBlocks to a path or a file object, and return how many.
 ///
-/// Blocks are written as `SDBlock.write` would, but 64-256 KiB at a time:
-/// to a path without holding the GIL, or to a file object with one
+/// Blocks are written as `str(block)` or `bytes(block)`, but 64-256 KiB at
+/// a time: to a path without holding the GIL, or to a file object with one
 /// `write` call per chunk, as str for text blocks or bytes for byte-backed
 /// ones. Text blocks must be valid UTF-8.
 ///
-/// An error stops writing as it would a loop of `SDBlock.write` calls:
-/// the blocks before the failing one are written, a path keeps them, and
-/// the error propagates. A failed write may leave part of its chunk
-/// written.
+/// An error stops writing: the blocks before the failing one are written,
+/// a path keeps them, and the error propagates. A failed write may leave
+/// part of its chunk written.
 ///
 /// A file object's `write` is called once per chunk and its return value
 /// is not checked. Buffered and text file objects, such as `sys.stdout` or

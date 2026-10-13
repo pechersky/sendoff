@@ -89,12 +89,10 @@ def test_bytes_lines_preserve_invalid_bytes() -> None:
     assert block.title == b"\xff title"
     assert block.records() == [(b"field\xfe", b"value\xfd")]
     assert tail.title == b"second"
-    output = io.BytesIO()
-    block.write(output)
-    assert b"\xff" in output.getvalue()
-    assert b"field\xfe" in output.getvalue()
-    assert b"value\xfd" in output.getvalue()
-    reparsed = next(SDBlock.from_lines(output.getvalue().splitlines(keepends=True)))
+    assert b"\xff" in bytes(block)
+    assert b"field\xfe" in bytes(block)
+    assert b"value\xfd" in bytes(block)
+    reparsed = next(SDBlock.from_sdf(bytes(block)))
     assert reparsed.title == block.title
     assert reparsed.records() == block.records()
 
@@ -543,7 +541,6 @@ DECODING: dict[str, tuple[bytes, typing.Callable[[SDBlock[str]], object], str]] 
     "to_dict": (LATIN1_BODY, lambda block: block.to_dict(), "Reading record 'F' of"),
     "names": (LATIN1_BODY, lambda block: block.names(), "Reading record '\ufffd' of"),
     "str": (LATIN1_BODY, str, "Writing"),
-    "write": (LATIN1_BODY, lambda block: block.write(io.StringIO()), "Writing"),
 }
 
 
@@ -663,11 +660,9 @@ def test_block_without_mend_round_trips() -> None:
             ("t2", [("A", "1")]),
         ]
         assert blocks[0].molblock == "broken\nx\n"
-        out = io.StringIO()
-        for block in blocks:
-            block.write(out)
-        assert out.getvalue() == text
-        text = out.getvalue()
+        out = str.join("", map(str, blocks))
+        assert out == text
+        text = out
 
 
 def test_bytes_blocks_keep_crlf(tmp_path: Path) -> None:
