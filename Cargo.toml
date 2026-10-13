@@ -51,3 +51,4 @@ cloned_instead_of_copied = "warn"
 [profile.release]
 lto = "fat"
 codegen-units = 1
+strip = true
