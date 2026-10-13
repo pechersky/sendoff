@@ -1,5 +1,5 @@
 pub(crate) mod ctable;
-mod errors;
+pub(crate) mod errors;
 mod kind;
 mod names;
 mod os;

@@ -24,6 +24,9 @@ mod native {
     use crate::python::sdblock::PySDNameIterator as _SDNameIterator;
 
     #[pymodule_export]
+    use crate::python::errors::MalformedRecordError;
+
+    #[pymodule_export]
     use crate::python::read::parse_sdf;
 
     #[pymodule_export]

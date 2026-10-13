@@ -187,6 +187,9 @@ class CTable:
             If all the checks pass, return True.
         """
 
+class MalformedRecordError(ValueError):
+    """An SD data header line has no `<name>`."""
+
 @final
 class SDBlock(Generic[AnyStr]):
     """

@@ -11,7 +11,12 @@ pyo3::import_exception!(sendoff.ctable, IndicesDuplicateError);
 pyo3::import_exception!(sendoff.ctable, IndicesMismatchError);
 pyo3::import_exception!(sendoff.ctable, IndicesOutOfOrderError);
 pyo3::import_exception!(sendoff.ctable, MalformedCTableError);
-pyo3::import_exception!(sendoff.sdblock, MalformedRecordError);
+pyo3::create_exception!(
+    sendoff,
+    MalformedRecordError,
+    PyValueError,
+    "An SD data header line has no `<name>`."
+);
 
 impl From<CTableError> for PyErr {
     fn from(error: CTableError) -> Self {
