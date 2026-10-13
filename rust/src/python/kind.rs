@@ -21,6 +21,9 @@ impl Kind {
     }
 
     /// A str or bytes object of this kind holding `bytes`.
+    // TODO: explore caching short values ("0", "N/A", vendor names) as the
+    // names cache does; it pays only if values repeat across blocks, so
+    // measure repeat rates over many vendors' SDFs first.
     pub(super) fn value<'py>(self, py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
         match self {
             Kind::Text => PyString::from_bytes(py, bytes).map(Bound::into_any),
