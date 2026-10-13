@@ -1,5 +1,5 @@
 # mypy: allow-untyped-decorators
-"""Test writing blocks with write_sdf."""
+"""Test writing blocks with write_sdf and sdf_writer."""
 import errno
 import io
 import os
@@ -9,7 +9,7 @@ from typing import Iterator
 
 import pytest
 
-from sendoff.sdblock import SDBlock, parse_sdf, write_sdf
+from sendoff.sdblock import SDBlock, parse_sdf, sdf_writer, write_sdf
 from tests.fixtures import Pathy, sdf_of
 
 
@@ -207,3 +207,104 @@ def test_write_sdf_propagates_file_object_errors() -> None:
     handle.close()
     with pytest.raises(ValueError, match="closed file"):
         write_sdf(handle, [SDBlock("t\nM  END\n")])
+
+
+def test_sdf_writer_writes_as_write_sdf(tmp_path: Path) -> None:
+    """One pass writes to several paths and handles as write_sdf would.
+
+    Args:
+        tmp_path: pytest fixture of a temporary directory
+    """
+    text = str.join(
+        "",
+        [
+            f"t{i}\nM  END\n> <A>\n{'é' * (i % 7 < 2)}{'v' * 1000}\n\n$$$$\n"
+            for i in range(3000)
+        ],
+    )
+    source = tmp_path / "input.sdf"
+    source.write_text(text)
+    paths: list[Pathy] = [source, os.fsencode(source)]
+    for path in paths:
+        blocks = list(parse_sdf(path))
+        handle: typing.Any = io.StringIO() if isinstance(path, Path) else io.BytesIO()
+        expected = tmp_path / "expected.sdf"
+        write_sdf(expected, blocks)
+        with (
+            sdf_writer(tmp_path / "all.sdf") as everything,
+            sdf_writer(handle) as copy,
+            sdf_writer(str(tmp_path / "odd.sdf")) as odd,
+        ):
+            for i, block in enumerate(blocks):
+                everything.write(block)
+                copy.write(block)
+                if i % 2:
+                    odd.write(block)
+        assert (tmp_path / "all.sdf").read_bytes() == expected.read_bytes()
+        written = handle.getvalue()
+        assert (written.encode() if isinstance(written, str) else written) == (
+            expected.read_bytes()
+        )
+        write_sdf(expected, blocks[1::2])
+        assert (tmp_path / "odd.sdf").read_bytes() == expected.read_bytes()
+        assert not handle.closed
+
+
+def test_sdf_writer_closes(tmp_path: Path) -> None:
+    """Closing writes what is buffered, once; dropping or an error closes too.
+
+    Args:
+        tmp_path: pytest fixture of a temporary directory
+    """
+    block = SDBlock("t\nM  END\n")
+    out = tmp_path / "out.sdf"
+    writer = sdf_writer(out)
+    writer.write(block)
+    assert out.read_text() == ""
+    writer.close()
+    writer.close()
+    assert out.read_text() == sdf_of(block)
+    with pytest.raises(ValueError, match="closed"):
+        writer.write(block)
+    writer = sdf_writer(out)
+    writer.write(block)
+    del writer
+    assert out.read_text() == sdf_of(block)
+    with pytest.raises(RuntimeError), sdf_writer(out) as writer:
+        for each in _then_raise([block]):
+            writer.write(each)
+    assert out.read_text() == sdf_of(block)
+    if os.path.exists("/dev/full"):
+        writer = sdf_writer("/dev/full")
+        writer.write(block)
+        with pytest.raises(OSError) as raised:
+            writer.close()
+        assert raised.value.errno == errno.ENOSPC
+        writer.close()
+
+
+def test_sdf_writer_rejects_a_block_and_goes_on(tmp_path: Path) -> None:
+    """A rejected block raises, and the writer keeps the blocks around it.
+
+    Args:
+        tmp_path: pytest fixture of a temporary directory
+    """
+    source = tmp_path / "latin1.sdf"
+    source.write_bytes(b"t\nM  END\n> <A>\n\xe9\n\n$$$$\n")
+    (undecodable,) = parse_sdf(source)
+    a, b = SDBlock("a\nM  END\n"), SDBlock("b\nM  END\n")
+    handle = io.StringIO()
+    with sdf_writer(tmp_path / "out.sdf") as to_path, sdf_writer(handle) as to_handle:
+        for writer in (to_path, to_handle):
+            writer.write(a)
+            with pytest.raises(TypeError):
+                writer.write("t\nM  END\n")  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="mixed"):
+            to_handle.write(SDBlock(b"t\nM  END\n"))  # type: ignore[arg-type]
+        with pytest.raises(UnicodeDecodeError) as raised:
+            to_path.write(undecodable)
+        assert raised.value.__notes__[0].startswith("Writing block 1 (from 0),")
+        to_path.write(b)
+        to_handle.write(b)
+    expected = "a\nM  END\n$$$$\nb\nM  END\n$$$$\n"
+    assert (tmp_path / "out.sdf").read_text() == handle.getvalue() == expected

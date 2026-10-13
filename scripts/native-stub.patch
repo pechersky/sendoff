@@ -1,6 +1,6 @@
 --- a/sendoff/native.pyi
 +++ b/sendoff/native.pyi
-@@ -1,5 +1,22 @@
+@@ -1,5 +1,23 @@
 -from _typeshed import Incomplete
 -from typing import Any, Final, final
 +import os
@@ -14,6 +14,7 @@
 +    Literal,
 +    Mapping,
 +    Protocol,
++    Self,
 +    TypeVar,
 +    final,
 +    overload,
@@ -25,7 +26,7 @@
 
  DEBUG_BUILD: Final[bool]
  """
-@@ -7,6 +24,21 @@
+@@ -7,6 +25,21 @@
  """
 
  __version__: Final[str]
@@ -47,7 +48,7 @@
 
  @final
  class CTable:
-@@ -155,8 +187,11 @@
+@@ -155,8 +188,11 @@
              If all the checks pass, return True.
          """
 
@@ -60,7 +61,7 @@
      """
      Handle a single molecule block from an SD file.
 
-@@ -181,13 +216,18 @@
+@@ -181,13 +217,18 @@
          A block is true even without records, as before it had a length.
          """
 
@@ -86,7 +87,7 @@
          """
          Whether any record is named `name`: `name in block.names()`.
 
-@@ -206,7 +246,7 @@
+@@ -206,7 +247,7 @@
          """
 
      def __deepcopy__(self, memo: dict[int, Any], /) -> SDBlock[AnyStr]: ...
@@ -95,7 +96,7 @@
          """
          Remove every record named `name`, as `remove_record(name)` does.
 
-@@ -216,7 +256,7 @@
+@@ -216,7 +257,7 @@
          """
 
      def __eq__(self, value: object, /) -> bool: ...
@@ -104,7 +105,7 @@
          """
          Return the value of the last record named `name`, like a dict.
 
-@@ -225,7 +265,7 @@
+@@ -225,7 +266,7 @@
              TypeError: if `name` is not the block's type
          """
 
@@ -113,7 +114,7 @@
          """
          Lazily iterate over the record names in input order, duplicates
          included, as `names()` lists them. Like a dict, the iterator raises
-@@ -273,13 +313,14 @@
+@@ -273,13 +314,14 @@
          does not always parse back to the same block.
          """
 
@@ -129,7 +130,7 @@
          """
          Set a record as `set_record(name, value)` does.
 
-@@ -364,10 +405,26 @@
+@@ -364,10 +406,26 @@
              NotImplementedError: as CTable.fix_counts raises
          """
 
@@ -157,7 +158,7 @@
          ),
      ) -> _SDBlockIterator[Any]:
          """
-@@ -404,6 +461,13 @@
+@@ -404,6 +462,13 @@
                  reads that are not str or bytes or that mix the two
          """
 
@@ -171,7 +172,7 @@
      @staticmethod
      def from_sdf(sdf: str | bytes) -> _SDBlockIterator[Any]:
          """
-@@ -424,7 +488,10 @@
+@@ -424,7 +489,10 @@
              TypeError: if `sdf` is not str or bytes
          """
 
@@ -183,7 +184,7 @@
          """
          Return the value of the last record named `name`, or `default`.
 
-@@ -452,7 +519,7 @@
+@@ -452,7 +520,7 @@
          """
 
      @property
@@ -192,7 +193,7 @@
          """
          Return the CTAB after the title, through `M  END`, as one value.
 
-@@ -462,7 +529,7 @@
+@@ -462,7 +530,7 @@
          """
 
      @property
@@ -201,7 +202,7 @@
          """
          Return the title line and CTAB through `M  END` as one value.
 
-@@ -471,7 +538,7 @@
+@@ -471,7 +539,7 @@
          """
 
      @molblock.setter
@@ -210,7 +211,7 @@
          """
          Replace the title line and CTAB, keeping the SD data.
 
-@@ -602,7 +669,7 @@
+@@ -602,7 +670,7 @@
          """
 
      @property
@@ -219,7 +220,7 @@
          """
          Return the title line without trailing whitespace, in the input type.
 
-@@ -612,7 +679,7 @@
+@@ -612,7 +680,7 @@
          """
 
      @title.setter
@@ -228,7 +229,7 @@
          """
          Replace the title line.
 
-@@ -630,13 +697,13 @@
+@@ -630,13 +698,13 @@
          """
 
  @final
@@ -245,7 +246,27 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -644,25 +711,43 @@
+@@ -644,7 +712,7 @@
+         """
+
+ @final
+-class _SDFWriter:
++class _SDFWriter(Generic[AnyStr]):
+     """
+     Write SDBlocks one at a time, buffered as `write_sdf` writes them.
+
+@@ -653,8 +721,8 @@
+     an error. Writing to a closed writer raises ValueError.
+     """
+
+-    def __enter__(self, /) -> _SDFWriter: ...
+-    def __exit__(self, /, *_exc_info) -> None: ...
++    def __enter__(self, /) -> Self: ...
++    def __exit__(self, /, *_exc_info: object) -> None: ...
+     def close(self, /) -> None:
+         """
+         Write the buffered blocks and close a path. Closing twice does nothing.
+@@ -677,25 +745,43 @@
          """
 
  @final
@@ -297,8 +318,23 @@
  ) -> _SDBlockIterator[Any]:
      """
      Lazily parse SDBlocks from an SDF path or file object.
-@@ -695,10 +780,13 @@
+@@ -728,9 +814,12 @@
          TypeError: if `source` is neither a path nor a file object
+     """
+
++@overload
+ def sdf_writer(
+-    dest: str | bytes | os.PathLike[str] | os.PathLike[bytes] | _SupportsWrite[Any],
+-) -> _SDFWriter:
++    dest: str | bytes | os.PathLike[str] | os.PathLike[bytes],
++) -> _SDFWriter[Any]: ...
++@overload
++def sdf_writer(dest: _SupportsWrite[AnyStr]) -> _SDFWriter[AnyStr]:
+     """
+     Write SDBlocks one at a time to a path or a file object, buffered.
+
+@@ -750,10 +839,13 @@
+         OSError: if `dest` cannot be created
      """
 
 +@overload
@@ -313,7 +349,7 @@
      """
      Write SDBlocks to a path or a file object, and return how many.
 
-@@ -731,5 +819,3 @@
+@@ -786,5 +878,3 @@
          UnicodeDecodeError: for a str block that is not UTF-8
          OSError: if `dest` cannot be created or written
      """

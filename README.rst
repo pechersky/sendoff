@@ -33,7 +33,7 @@ Usage
 
    from collections import Counter
    from rdkit import Chem
-   from sendoff import SDBlock, parse_sdf, write_sdf
+   from sendoff import SDBlock, parse_sdf, sdf_writer, write_sdf
 
    for block in parse_sdf("compounds.sdf"):
        block.title
@@ -54,6 +54,10 @@ Usage
        return block
 
    write_sdf("out.sdf", (tag(block) for block in parse_sdf("in.sdf")))
+
+   with sdf_writer("active.sdf") as active, sdf_writer("rest.sdf") as rest:
+       for block in parse_sdf("in.sdf"):
+           (active if block.get("Active") == "1" else rest).write(block)
 
    block = SDBlock(Chem.MolToMolBlock(mol), {"ID": "X-1"})
    str(block)

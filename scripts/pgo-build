@@ -193,7 +193,7 @@ def train_kind(path: str, binary: bool, whole: bool = True) -> None:
         binary: whether to read bytes instead of str
         whole: whether to run every idiom, not just a few
     """
-    from sendoff.sdblock import parse_sdf, write_sdf
+    from sendoff.sdblock import parse_sdf, sdf_writer, write_sdf
 
     arg: str | bytes = os.fsencode(path) if binary else path
     field: str | bytes = b"ID" if binary else "ID"
@@ -214,6 +214,7 @@ def train_kind(path: str, binary: bool, whole: bool = True) -> None:
     [len(b) for b in parse_sdf(arg)]
     Counter(n for b in parse_sdf(arg) for n in b.names())
     write_sdf(os.devnull, parse_sdf(arg))
+    out = sdf_writer(os.devnull)
     for i, b in enumerate(parse_sdf(arg)):
         if i % 3 == 0:
             b.set_record(field, extra)
@@ -224,10 +225,12 @@ def train_kind(path: str, binary: bool, whole: bool = True) -> None:
         if i % 11 == 0:
             b.title = extra
         bytes(b) if binary else str(b)
+        out.write(b)
         if i % 4 == 0:
             _ = (b.num_atoms, b.num_bonds)
         if not binary and i % 50 == 0:
             _ = b.ctable().num_atoms
+    out.close()
 
 
 def run(

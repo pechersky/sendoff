@@ -9,6 +9,7 @@ from typing import (
     Literal,
     Mapping,
     Protocol,
+    Self,
     TypeVar,
     final,
     overload,
@@ -711,6 +712,39 @@ class _SDBlockIterator(Iterator[SDBlock[AnyStr]]):
         """
 
 @final
+class _SDFWriter(Generic[AnyStr]):
+    """
+    Write SDBlocks one at a time, buffered as `write_sdf` writes them.
+
+    `close` writes the blocks still buffered and closes a path; a file
+    object is left open. Leaving a `with` block closes the writer, also on
+    an error. Writing to a closed writer raises ValueError.
+    """
+
+    def __enter__(self, /) -> Self: ...
+    def __exit__(self, /, *_exc_info: object) -> None: ...
+    def close(self, /) -> None:
+        """
+        Write the buffered blocks and close a path. Closing twice does nothing.
+
+        Raises:
+            OSError: if the buffered blocks cannot be written; the writer is
+                closed anyway
+        """
+
+    def write(self, block: SDBlock[AnyStr], /) -> None:
+        """
+        Write a block, ending with $$$$, as `str(block)` or `bytes(block)`.
+
+        Raises:
+            TypeError: for a str block after bytes ones to a file object, or
+                the reverse
+            UnicodeDecodeError: for a str block that is not UTF-8
+            ValueError: if the writer is closed
+            OSError: if a buffered chunk cannot be written
+        """
+
+@final
 class _SDNameIterator(Iterator[AnyStr]):
     """
     Lazily iterate over one block's record names.
@@ -778,6 +812,31 @@ def parse_sdf(
 
     Raises:
         TypeError: if `source` is neither a path nor a file object
+    """
+
+@overload
+def sdf_writer(
+    dest: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+) -> _SDFWriter[Any]: ...
+@overload
+def sdf_writer(dest: _SupportsWrite[AnyStr]) -> _SDFWriter[AnyStr]:
+    """
+    Write SDBlocks one at a time to a path or a file object, buffered.
+
+    Use it as a context manager: `with sdf_writer(dest) as out:` then
+    `out.write(block)` per block, so one pass can write several files.
+    Blocks are written as `write_sdf` writes them; an error leaves the
+    blocks before it written.
+
+    Args:
+        dest: a str, bytes, or os.PathLike path to create or truncate, or a
+            text or binary file object, which stays open
+
+    Returns:
+        A writer whose `close` writes the blocks it still buffers
+
+    Raises:
+        OSError: if `dest` cannot be created
     """
 
 @overload

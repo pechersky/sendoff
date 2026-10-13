@@ -6,3 +6,4 @@ MalformedRecordError = native.MalformedRecordError
 SDBlock = native.SDBlock
 parse_sdf = native.parse_sdf
 write_sdf = native.write_sdf
+sdf_writer = native.sdf_writer

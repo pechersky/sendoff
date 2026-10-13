@@ -33,6 +33,12 @@ mod native {
     use crate::python::write::write_sdf;
 
     #[pymodule_export]
+    use crate::python::write::sdf_writer;
+
+    #[pymodule_export]
+    use crate::python::write::PySDFWriter as _SDFWriter;
+
+    #[pymodule_export]
     #[allow(non_upper_case_globals)]
     const __version__: &str = env!("CARGO_PKG_VERSION");
 

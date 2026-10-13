@@ -14,6 +14,8 @@ New ``SDBlock`` helpers for common tasks:
 - ``sendoff.sdblock.write_sdf(dest, blocks)`` writes blocks to a path or a
   file object and returns how many it wrote. An error leaves the blocks
   before it written.
+- ``sdf_writer(dest)`` is a context manager that writes blocks one at a time,
+  buffered as ``write_sdf`` writes them, so one pass can fill several files.
 - A ``bytes`` block is bytes-like: ``bytes(block)``, ``memoryview(block)``,
   and ``out.write(block)`` read its SDF without copying it, and edits raise
   ``BufferError`` while a view is held.

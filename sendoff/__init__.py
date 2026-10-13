@@ -14,7 +14,13 @@ from sendoff.ctable import (
     IndicesOutOfOrderError,
     MalformedCTableError,
 )
-from sendoff.native import MalformedRecordError, SDBlock, parse_sdf, write_sdf
+from sendoff.native import (
+    MalformedRecordError,
+    SDBlock,
+    parse_sdf,
+    sdf_writer,
+    write_sdf,
+)
 
 __all__ = [
     "CTable",
@@ -26,6 +32,7 @@ __all__ = [
     "MalformedRecordError",
     "SDBlock",
     "parse_sdf",
+    "sdf_writer",
     "write_sdf",
 ]
 
