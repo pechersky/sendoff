@@ -146,6 +146,25 @@ def test_write_sdf_writes_blocks_before_a_failure(
     assert written == "a\nM  END\n$$$$\nb\nM  END\n$$$$\n"
 
 
+def test_writes_check_utf8_until_it_is_known(tmp_path: Path) -> None:
+    """Path text blocks are checked on every write until one decodes.
+
+    Args:
+        tmp_path: pytest fixture of a temporary directory
+    """
+    source = tmp_path / "in.sdf"
+    source.write_bytes(b"t\nM  END\n> <A>\n\xe9\n\n$$$$\nu\nM  END\n$$$$\n")
+    bad, good = parse_sdf(source)
+    out = tmp_path / "out.sdf"
+    for _ in range(2):
+        with pytest.raises(UnicodeDecodeError):
+            write_sdf(out, [bad, bad.__copy__()])
+    good["A"] = "\u00e9"
+    assert good.to_sdf() == "u\nM  END\n> <A>\n\u00e9\n\n$$$$\n"
+    assert write_sdf(out, [good, good]) == 2
+    assert out.read_text() == good.to_sdf() * 2
+
+
 def test_write_sdf_raises_os_errors(tmp_path: Path) -> None:
     """Paths raise the OSError subclass open() would, naming the path.
 

@@ -7,7 +7,7 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::intern;
 use pyo3::prelude::*;
 
-use crate::python::kind::{Kind, decode, same_kind};
+use crate::python::kind::{Kind, same_kind};
 use crate::python::os::{fs_path, os_error};
 use crate::python::sdblock::PySDBlock;
 
@@ -34,7 +34,8 @@ impl Sink<'_> {
     /// CPython stores and encodes ASCII str much faster than wider str, and
     /// one non-ASCII character widens a whole str, so non-ASCII text goes
     /// to a file object a block at a time, keeping ASCII chunks narrow.
-    fn accept(&mut self, py: Python<'_>, kind: Kind, serialized: &[u8]) -> PyResult<bool> {
+    fn accept(&mut self, py: Python<'_>, block: &PySDBlock) -> PyResult<bool> {
+        let kind = block.kind;
         match self {
             // A file object's write validates text chunks as it decodes them.
             Sink::Handle { kind: expected, .. } => {
@@ -43,10 +44,9 @@ impl Sink<'_> {
                         "write_sdf does not accept mixed str and bytes blocks",
                     ));
                 }
-                Ok(kind == Kind::Text && !serialized.is_ascii())
+                Ok(kind == Kind::Text && !block.block.serialized().is_ascii())
             }
-            Sink::File { .. } if kind == Kind::Text => decode(py, serialized).map(|_| false),
-            Sink::File { .. } => Ok(false),
+            Sink::File { .. } => block.check_utf8(py).map(|()| false),
         }
     }
 
@@ -131,12 +131,10 @@ pub(crate) fn write_sdf(dest: &Bound<'_, PyAny>, blocks: &Bound<'_, PyAny>) -> P
             chunk.extend_from_slice(block.block.serialized());
             let noted =
                 |error| block.noted(py, error, || format!("Writing block {count} (from 0),"));
-            let alone = sink
-                .accept(py, block.kind, &chunk[start..])
-                .map_err(|error| {
-                    chunk.truncate(start);
-                    noted(error)
-                })?;
+            let alone = sink.accept(py, &block).map_err(|error| {
+                chunk.truncate(start);
+                noted(error)
+            })?;
             if alone {
                 let mut written = Ok(());
                 if start > 0 {

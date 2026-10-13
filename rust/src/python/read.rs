@@ -227,11 +227,15 @@ pub(crate) struct PySDBlockIterator {
     source: Source,
     kind: Option<Kind>,
     scanner: Scanner,
+    /// Whether text comes from Python str, so is UTF-8; paths decode on
+    /// access.
+    from_str: bool,
 }
 
 impl PySDBlockIterator {
     pub(super) fn new(source: Source) -> Self {
         Self {
+            from_str: !matches!(source, Source::Path { .. }),
             source,
             kind: None,
             scanner: Scanner::default(),
@@ -250,6 +254,7 @@ impl PySDBlockIterator {
             source,
             kind,
             scanner,
+            ..
         } = self;
         source.open(py, kind)?;
         if let Source::Mapped { blocks, batch } = source {
@@ -273,6 +278,7 @@ impl PySDBlockIterator {
             Ok(Some(block)) => Ok(Some(PySDBlock::wrap(
                 block,
                 self.kind.unwrap_or(Kind::Text),
+                self.from_str,
             ))),
             Ok(None) => {
                 self.close();

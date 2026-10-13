@@ -1,6 +1,7 @@
 //! The `SDBlock` Python class and its record iterator.
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use pyo3::exceptions::{
     PyKeyError, PyRuntimeError, PyTypeError, PyUnicodeDecodeError, PyValueError,
@@ -171,6 +172,20 @@ pub(crate) struct PySDBlock {
     /// Counts edits to the SD data, so record iterators can tell they are
     /// stale without copying the records.
     edits: u64,
+    /// Whether a text block's data is known to be UTF-8, as it is when read
+    /// from str or already decoded whole. Edits keep it: they replace whole
+    /// lines with str arguments.
+    utf8: KnownUtf8,
+}
+
+/// An atomic flag, since writes only borrow blocks.
+#[derive(Default)]
+struct KnownUtf8(AtomicBool);
+
+impl Clone for KnownUtf8 {
+    fn clone(&self) -> Self {
+        Self(AtomicBool::new(self.0.load(Ordering::Relaxed)))
+    }
 }
 
 impl PartialEq for PySDBlock {
@@ -180,12 +195,33 @@ impl PartialEq for PySDBlock {
 }
 
 impl PySDBlock {
-    pub(super) fn wrap(block: Block, kind: Kind) -> Self {
+    /// Wrap `block`; `utf8` says its data is known to be UTF-8.
+    pub(super) fn wrap(block: Block, kind: Kind, utf8: bool) -> Self {
         Self {
             block,
             kind,
             edits: 0,
+            utf8: KnownUtf8(AtomicBool::new(utf8)),
         }
+    }
+
+    /// The serialized block as str or bytes, noting a decode error.
+    fn serialized<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let output = self
+            .kind
+            .value(py, self.block.serialized())
+            .map_err(|error| self.noted(py, error, || "Writing".into()))?;
+        self.utf8.0.store(true, Ordering::Relaxed);
+        Ok(output)
+    }
+
+    /// Check that a text block is UTF-8 unless that is already known.
+    pub(super) fn check_utf8(&self, py: Python<'_>) -> PyResult<()> {
+        if self.kind == Kind::Text && !self.utf8.0.load(Ordering::Relaxed) {
+            decode(py, self.block.serialized())?;
+            self.utf8.0.store(true, Ordering::Relaxed);
+        }
+        Ok(())
     }
 
     fn edited(&mut self) {
@@ -436,7 +472,7 @@ impl PySDBlock {
                 "SDBlock() takes one block; use SDBlock.from_sdf to parse several",
             )
         })?;
-        let mut slf = Self::wrap(block, kind);
+        let mut slf = Self::wrap(block, kind, true);
         if let Some(records) = records {
             for (name, value) in record_pairs(records)? {
                 let name = slf.arg_bytes(&name, "record names")?;
@@ -750,7 +786,7 @@ impl PySDBlock {
         // Text blocks from str paths decode on access, so their state need
         // not be UTF-8.
         Block::from_parts(data.to_vec(), title_end, mdl_end)
-            .map(|block| Self::wrap(block, kind))
+            .map(|block| Self::wrap(block, kind, false))
             .ok_or_else(|| PyValueError::new_err("invalid SDBlock state"))
     }
 
@@ -791,9 +827,7 @@ impl PySDBlock {
     /// The inverse of `SDBlock(sdf)`, and what `write` writes.
     #[pyo3(signature = () -> "AnyStr")]
     fn to_sdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        self.kind
-            .value(py, self.block.serialized())
-            .map_err(|error| self.noted(py, error, || "Writing".into()))
+        self.serialized(py)
     }
 
     /// Write the block, ending with $$$$, to a file-like handle.
@@ -810,11 +844,7 @@ impl PySDBlock {
     #[pyo3(signature = (file: "_SupportsWrite[AnyStr]"))]
     fn write(&self, file: &Bound<'_, PyAny>) -> PyResult<()> {
         let py = file.py();
-        let output = self
-            .kind
-            .value(py, self.block.serialized())
-            .map_err(|error| self.noted(py, error, || "Writing".into()))?;
-        file.call_method1(intern!(py, "write"), (output,))?;
+        file.call_method1(intern!(py, "write"), (self.serialized(py)?,))?;
         Ok(())
     }
 
