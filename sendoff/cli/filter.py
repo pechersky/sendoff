@@ -35,7 +35,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     p.add_argument("-v", "--invert", action="store_true", help="keep the others")
     args = p.parse_intermixed_args(argv)
-    blocks = Blocks(args.file)
+    blocks = Blocks(args.file, borrow=True)
     keep = not args.invert
     if args.has is not None:
         name = os.fsencode(args.has)

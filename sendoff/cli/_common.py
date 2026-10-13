@@ -46,10 +46,15 @@ def add_file(p: argparse.ArgumentParser) -> None:
 
 
 class Blocks:
-    """Bytes blocks of an SD file, numbering the block being worked on."""
+    """Bytes blocks of an SD file, numbering the block being worked on.
 
-    def __init__(self, path: str) -> None:
+    ``borrow`` lets blocks of a mapped file read it in place, for commands
+    that never write over their input.
+    """
+
+    def __init__(self, path: str, *, borrow: bool = False) -> None:
         self.path = path
+        self.borrow = borrow
         self.number = 0
 
     def __iter__(self) -> Iterator[SDBlock[bytes]]:
@@ -59,7 +64,8 @@ class Blocks:
             Each block, in bytes mode
         """
         source = sys.stdin.buffer if self.path == STDIN else os.fsencode(self.path)
-        for self.number, block in enumerate(parse_sdf(source), 1):
+        blocks = parse_sdf(source, borrow=self.borrow)
+        for self.number, block in enumerate(blocks, 1):
             yield block
 
 

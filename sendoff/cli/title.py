@@ -35,7 +35,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="copy a record's value, as get NAME | title --from - would",
     )
     args = p.parse_intermixed_args(argv)
-    blocks = Blocks(args.file)
+    blocks = Blocks(args.file, borrow=True)
 
     def titled() -> Iterator[SDBlock[bytes]]:
         if args.field is None:

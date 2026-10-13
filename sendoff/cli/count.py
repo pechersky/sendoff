@@ -26,7 +26,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     out = sys.stdout.buffer
     total = 0
     for path in args.files:
-        blocks = Blocks(path)
+        blocks = Blocks(path, borrow=True)
         with failures(p, blocks):
             count = sum(1 for _ in blocks)
         total += count

@@ -43,7 +43,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         p.error("NAME or -t is required")
     else:
         path = args.file
-    blocks = Blocks(STDIN if path is None else path)
+    blocks = Blocks(STDIN if path is None else path, borrow=True)
     end = b"\0" if args.null else b"\n"
     out = sys.stdout.buffer
     with failures(p, blocks):
