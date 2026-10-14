@@ -17,7 +17,7 @@ use crate::core::ctable::CTable;
 use crate::core::ctable::error::CTableError;
 use crate::core::lines::lines;
 use crate::core::newline::{translated, universal_newlines};
-use crate::core::record::{HeaderStyle, Record};
+use crate::core::record::{HeaderStyle, Record, Records};
 use crate::core::split::single_block;
 use crate::python::ctable::PyCTable;
 use crate::python::exports::Exported;
@@ -223,11 +223,12 @@ impl PySDBlock {
     fn last_value<'py>(&self, name: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
         let py = name.py();
         let name = self.arg_bytes(name, "record names")?;
+        let metadata = self.block.metadata();
         let value = match self.block.index()? {
-            Some(index) => index.last(self.block.metadata(), name),
+            Some(index) => index.last(metadata, name),
             None => {
                 let mut found = None;
-                for header in self.block.headers() {
+                for header in Records::new(metadata, 0).headers() {
                     let header = header?;
                     if header.name == name {
                         found = Some(header.start);
@@ -236,7 +237,7 @@ impl PySDBlock {
                 let Some(start) = found else {
                     return Ok(None);
                 };
-                let record = self.block.records_at(start).next();
+                let record = Records::new(metadata, start).next();
                 let record = record.and_then(Result::ok).expect("a record starts here");
                 Some(record.value)
             }

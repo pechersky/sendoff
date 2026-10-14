@@ -215,17 +215,22 @@ impl Block {
         matches!(self.data, Data::Mapped { .. })
     }
 
-    /// Where the MDL ends, searching for `M  END` on the first call.
-    fn mdl_end(&self) -> usize {
+    /// Where the MDL ends in `data`, searching for `M  END` on the first call.
+    fn mdl_end_in(&self, data: &[u8]) -> usize {
         let found = self.mdl_end.load(Ordering::Relaxed);
         if found != UNFOUND {
             return found;
         }
-        let body_end = self.body_end();
-        let found = mdl_end(&self.data, self.title_end, body_end).unwrap_or(body_end);
+        let body_end = body_end_of(data);
+        let found = mdl_end(data, self.title_end, body_end).unwrap_or(body_end);
         // Racing finds store the same offset.
         self.mdl_end.store(found, Ordering::Relaxed);
         found
+    }
+
+    /// Where the MDL ends, searching for `M  END` on the first call.
+    fn mdl_end(&self) -> usize {
+        self.mdl_end_in(&self.data)
     }
 
     /// The data, ending with a `$$$$` line, and where the title and MDL end:
@@ -234,10 +239,11 @@ impl Block {
     /// Re-parsing the serialized block does not always restore it: SD data
     /// can follow an MDL without `M  END`.
     pub fn parts(&self) -> Parts<'_> {
+        let data: &[u8] = &self.data;
         Parts {
-            data: &self.data,
+            data,
             title_end: self.title_end,
-            mdl_end: self.mdl_end(),
+            mdl_end: self.mdl_end_in(data),
         }
     }
 
@@ -268,15 +274,16 @@ impl Block {
 
     /// Where the SD data ends and the trailer starts.
     fn body_end(&self) -> usize {
-        self.data.len() - self.trailer().len()
+        body_end_of(&self.data)
     }
 
     /// The title line's ending, which lines the block writes also use; the
     /// `$$$$` line's for a block without a title line.
     fn newline(&self) -> &'static [u8] {
+        let data: &[u8] = &self.data;
         match self.title_end {
-            0 => newline(&self.data),
-            end => newline(&self.data[..end]),
+            0 => newline(data),
+            end => newline(&data[..end]),
         }
     }
 
@@ -298,17 +305,20 @@ impl Block {
 
     /// The MDL lines after the title, through `M  END`, each ending in `\n`.
     pub fn mdl(&self) -> &[u8] {
-        &self.data[self.title_end..self.mdl_end()]
+        let data: &[u8] = &self.data;
+        &data[self.title_end..self.mdl_end_in(data)]
     }
 
     /// The title line followed by the MDL lines: a mol block.
     pub fn molblock(&self) -> &[u8] {
-        &self.data[..self.mdl_end()]
+        let data: &[u8] = &self.data;
+        &data[..self.mdl_end_in(data)]
     }
 
     /// The SD data lines, each ending in `\n`.
     pub fn metadata(&self) -> &[u8] {
-        &self.data[self.mdl_end()..self.body_end()]
+        let data: &[u8] = &self.data;
+        &data[self.mdl_end_in(data)..body_end_of(data)]
     }
 
     /// The block as written: its lines and `$$$$`.
@@ -475,7 +485,6 @@ impl Block {
         name: &[u8],
         value: Option<&[u8]>,
     ) -> Result<usize, MissingFieldName> {
-        let metadata = self.metadata();
         let mut spans = Vec::new();
         for header in self.headers() {
             let header = header?;
@@ -487,10 +496,12 @@ impl Block {
             return Ok(0);
         }
         let newline = self.newline();
-        let mdl_end = self.mdl_end();
+        let raw: &[u8] = &self.data;
+        let mdl_end = self.mdl_end_in(raw);
+        let metadata = &raw[mdl_end..body_end_of(raw)];
         let mut data =
-            Vec::with_capacity(self.data.len() + value.map_or(0, <[u8]>::len) + 2 * newline.len());
-        data.extend_from_slice(&self.data[..mdl_end]);
+            Vec::with_capacity(raw.len() + value.map_or(0, <[u8]>::len) + 2 * newline.len());
+        data.extend_from_slice(&raw[..mdl_end]);
         let mut copied = 0;
         for (index, &(start, end)) in spans.iter().enumerate() {
             data.extend_from_slice(&metadata[copied..start]);
@@ -500,7 +511,7 @@ impl Block {
             }
             copied = end;
         }
-        data.extend_from_slice(&self.data[mdl_end + copied..]);
+        data.extend_from_slice(&raw[mdl_end + copied..]);
         self.data = Data::Owned(data);
         Ok(spans.len())
     }
@@ -554,6 +565,11 @@ impl Block {
         let header = owned.each_ref().map(|line| line.as_deref().unwrap_or(""));
         parse_header(&header[..found])
     }
+}
+
+/// Where the SD data ends and the trailer starts in `data`.
+fn body_end_of(data: &[u8]) -> usize {
+    data.len() - trailer(newline(data)).len()
 }
 
 #[cfg(test)]
