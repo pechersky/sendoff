@@ -29,7 +29,9 @@ test = [
     "hypothesis>=6.100,<7",
     "rdkit==2022.9.5; python_version == '3.11'",
     "numpy==1.23.5; python_version == '3.11'",
-    "rdkit==2026.3.6; python_version >= '3.12'",
+    "rdkit==2026.3.6; python_version >= '3.12' and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+    # The last RDKit with Intel macOS wheels.
+    "rdkit==2025.9.3; python_version >= '3.12' and sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "numpy>=1.26.4,<3; python_version >= '3.12'",
 ]
 dev = [
@@ -60,7 +62,36 @@ include = [
     {path = ".isort.cfg", format = "sdist"},
     {path = ".flake8", format = "sdist"},
 ]
-exclude = ["sendoff/*.so", "sendoff/__pycache__/**"]
+exclude = ["sendoff/*.so", "sendoff/*.pyd", "sendoff/__pycache__/**"]
+
+[tool.cibuildwheel]
+# Per-version wheels; .github/workflows/wheels.yml also builds the abi3 one
+# with MATURIN_PEP517_ARGS="--features abi3".
+build = "cp311-* cp312-* cp313-* cp314-*"
+skip = "*-musllinux_*"
+archs = "native"
+# Audits the abi3 wheel; the default is unpinned.
+audit-requires = ["abi3audit==0.0.26", "abi3info==2026.9.25"]
+# Profile every build first, for CARGO_BUILD_RUSTFLAGS below to use.
+before-build = "python -m pip install maturin==1.15.0 && python scripts/pgo-build --profile"
+# Without the package sources, the tests import the installed wheel.
+test-sources = ["tests", "setup.cfg"]
+test-extras = ["test"]
+test-requires = ["mypy==2.4.0"]
+test-command = "python -m pytest tests -p no:cacheprovider --no-cov --no-rust-coverage"
+
+# The profile path must be absolute, as pgo-build writes it: /project in the
+# Linux container, and the checkout on GitHub's macOS and Windows runners.
+[tool.cibuildwheel.linux]
+before-all = "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component llvm-tools"
+environment-pass = ["MATURIN_PEP517_ARGS"]
+environment = { PATH = "$HOME/.cargo/bin:$PATH", CARGO_BUILD_RUSTFLAGS = "-Cprofile-use=/project/target/pgo/merged.profdata" }
+
+[tool.cibuildwheel.macos]
+environment = { CARGO_BUILD_RUSTFLAGS = "-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/merged.profdata" }
+
+[tool.cibuildwheel.windows]
+environment = { CARGO_BUILD_RUSTFLAGS = "-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/merged.profdata" }
 
 [tool.black]
 # Match the black pre-commit hook; scripts/native-stub formats with it too.
@@ -110,7 +141,8 @@ cmd = "cargo check && git add -- Cargo.lock"
 # - At release time after bumping version number, run:
 #   VIRTUAL_ENV="$PWD/.venv" .venv/bin/maturin develop --locked
 #   .venv/bin/towncrier --draft, then .venv/bin/towncrier
-#   and build the wheel with scripts/pgo-build --out dist
+#   The Build wheels workflow (.github/workflows/wheels.yml) makes the PGO
+#   wheels and sdist; scripts/pgo-build --out dist makes one wheel locally.
 package = "sendoff"
 filename = "doc/changelog.rst"
 directory = "newsfragments"
