@@ -1,14 +1,22 @@
 # mypy: allow-untyped-decorators
 """Provide fixtures of SDFs with well- or misbehaved metadata."""
+from __future__ import annotations
+
+import importlib.util
 import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, overload
 
 import pytest
-from rdkit import Chem
 
 from sendoff.sdblock import SDBlock, parse_sdf, write_sdf
+
+# RDKit writes many fixtures. Tests using them skip where RDKit has no
+# wheels, such as musllinux and Windows ARM64; a broken install fails them.
+RDKIT = importlib.util.find_spec("rdkit") is not None
+if RDKIT or TYPE_CHECKING:
+    from rdkit import Chem
 
 Pathy = str | bytes | os.PathLike[str] | os.PathLike[bytes]
 
@@ -57,11 +65,31 @@ def write_mols(path: Path, *mols: Chem.Mol, v3000: bool = False) -> Path:
     Returns:
         The path.
     """
+    require_rdkit()
     with Chem.SDWriter(str(path)) as writer:
         writer.SetForceV3000(v3000)
         for mol in mols:
             writer.write(mol)
     return path
+
+
+def require_rdkit() -> None:
+    """Skip the test unless RDKit is installed."""
+    if not RDKIT:
+        pytest.skip("RDKit is not installed")
+
+
+def mol_from_smiles(smiles: str) -> Chem.Mol:
+    """Parse a molecule from SMILES with RDKit.
+
+    Args:
+        smiles: the molecule
+
+    Returns:
+        The molecule.
+    """
+    require_rdkit()
+    return Chem.MolFromSmiles(smiles)
 
 
 def titled_mol(smiles: str, title: str) -> Chem.Mol:
@@ -74,7 +102,7 @@ def titled_mol(smiles: str, title: str) -> Chem.Mol:
     Returns:
         The molecule.
     """
-    mol = Chem.MolFromSmiles(smiles)
+    mol = mol_from_smiles(smiles)
     mol.SetProp("_Name", title)
     return mol
 
@@ -92,7 +120,7 @@ def single_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """
     return write_mols(
         tmp_path / "input.sdf",
-        Chem.MolFromSmiles("C"),
+        mol_from_smiles("C"),
         v3000=request.param == "rdkitV3000",
     )
 
@@ -110,8 +138,8 @@ def double_mol_sdf(request: FixtureRequest, tmp_path: Path) -> Path:
     """
     return write_mols(
         tmp_path / "input.sdf",
-        Chem.MolFromSmiles("C"),
-        Chem.MolFromSmiles("CC"),
+        mol_from_smiles("C"),
+        mol_from_smiles("CC"),
         v3000=request.param == "rdkitV3000",
     )
 
@@ -156,7 +184,7 @@ def counted_mol_sdf(request: FixtureRequest, tmp_path: Path) -> CountedMol:
         Path to the sdf, and the molecule's atom and bond counts
     """
     smiles, atoms, bonds, v3000 = COUNTED_MOLS[request.param]
-    path = write_mols(tmp_path / "input.sdf", Chem.MolFromSmiles(smiles), v3000=v3000)
+    path = write_mols(tmp_path / "input.sdf", mol_from_smiles(smiles), v3000=v3000)
     return CountedMol(path, atoms, bonds)
 
 
@@ -251,7 +279,7 @@ def write_record_mol(path: Path, writer: str, record: str, value: str) -> Path:
     Returns:
         The path.
     """
-    mol = Chem.MolFromSmiles("C")
+    mol = mol_from_smiles("C")
     if writer.startswith("rdkit"):
         mol.SetProp(record, value)
         return write_mols(path, mol, v3000=writer == "rdkitV3000")
@@ -457,4 +485,4 @@ def single_mol_v3000_sdf(tmp_path: Path) -> Path:
     Returns:
         Path to the sdf
     """
-    return write_mols(tmp_path / "input.sdf", Chem.MolFromSmiles("C"), v3000=True)
+    return write_mols(tmp_path / "input.sdf", mol_from_smiles("C"), v3000=True)

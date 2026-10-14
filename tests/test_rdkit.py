@@ -4,10 +4,14 @@ import os
 from pathlib import Path
 
 import pytest
-from rdkit import Chem, rdBase
 
 from sendoff.sdblock import parse_sdf
-from tests.fixtures import INDEX_DEFECTS, CountedMol, Pathy
+from tests.fixtures import INDEX_DEFECTS, RDKIT, CountedMol, Pathy
+
+if not RDKIT:
+    pytest.skip("RDKit is not installed", allow_module_level=True)
+
+from rdkit import Chem, rdBase  # noqa: E402
 
 # rdkit/rdkit#9047 preserves embedded ">" starting in 2025.09.5.
 RIGHT_ANGLE_BRACKET_FIELD = (
