@@ -1,11 +1,15 @@
 # mypy: allow-untyped-decorators
 """Test reading SDFs into blocks: parse_sdf, from_lines, from_sdf, decoding."""
+import bz2
 import copy
 import errno
 import gc
+import gzip
 import io
+import lzma
 import os
 import pickle
+import re
 import signal
 import subprocess
 import sys
@@ -596,6 +600,55 @@ def test_parse_sdf_raises_open_errors_on_first_next(tmp_path: Path) -> None:
         next(parse_sdf(os.fsencode(tmp_path)))
     with pytest.raises(TypeError, match="path or a file object, not int"):
         parse_sdf(1)  # type: ignore[call-overload]
+
+
+COMPRESSORS = [
+    ("gzip", gzip.compress, "gzip.open() or zcat"),
+    ("bzip2", bz2.compress, "bz2.open() or bzcat"),
+    ("xz", lzma.compress, "lzma.open() or xzcat"),
+]
+if sys.version_info >= (3, 14):
+    from compression import zstd
+
+    COMPRESSORS.append(("zstd", zstd.compress, "compression.zstd.open() or zstdcat"))
+
+
+@pytest.mark.parametrize(("name", "compress", "decompress"), COMPRESSORS)
+def test_compressed_input_raises(
+    tmp_path: Path,
+    name: str,
+    compress: typing.Callable[[bytes], bytes],
+    decompress: str,
+) -> None:
+    """Compressed input raises rather than reading as one garbage block.
+
+    Args:
+        tmp_path: Temporary directory for the compressed files.
+        name: the compression format
+        compress: compresses bytes in that format
+        decompress: how the error says to decompress it
+    """
+    data = compress(TWO * 1000)
+    path = tmp_path / "in.sdf.z"
+    path.write_bytes(data)
+    why = f"is {name}-compressed; decompress it first, with {decompress}"
+    for source in (path, os.fsencode(path)):
+        named = re.escape(f"{str(path)!r} {why}")
+        with pytest.raises(ValueError, match=f"^{named}$"):
+            next(parse_sdf(source))
+    unnamed = f"^{re.escape(f'the input {why}')}$"
+    with path.open("rb") as f, pytest.raises(ValueError, match=unnamed):
+        next(parse_sdf(f))
+    with pytest.raises(ValueError, match=unnamed):
+        next(SDBlock.from_sdf(data))
+    if hasattr(os, "mkfifo"):
+        pipe = tmp_path / "pipe.sdf"
+        os.mkfifo(pipe)
+        writer = threading.Thread(target=pipe.write_bytes, args=(data,), daemon=True)
+        writer.start()
+        with pytest.raises(ValueError, match=re.escape(f"{str(pipe)!r} {why}")):
+            next(parse_sdf(pipe))
+        writer.join(timeout=60)
 
 
 def test_parse_sdf_reads_file_objects_from_their_position(tmp_path: Path) -> None:

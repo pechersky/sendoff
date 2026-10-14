@@ -95,6 +95,7 @@ Shell pipelines
 .. code-block:: bash
 
    python -m sendoff.cli.count my.sdf
+   zcat chembl.sdf.gz | python -m sendoff.cli.count
    python -m sendoff.cli.get Supplier my.sdf | sort | uniq -c
    paste <(python -m sendoff.cli.get -t my.sdf) <(python -m sendoff.cli.get CAS my.sdf)
    python -m sendoff.cli.get ID my.sdf | sed 's/^/TL-/' |
@@ -106,7 +107,9 @@ The ``count``, ``get``, ``set``, ``title``, and ``filter`` commands read
 ``FILE`` or ``-i FILE``, else stdin, as bytes and write ``-o FILE``, else
 stdout; ``-o`` cannot name an input. ``get`` prints one line per block, empty
 where a record is missing, and ``--from`` reads one line per block; ``-z`` uses
-NUL instead. Run any with ``-h``.
+NUL instead. Run any with ``-h``. Compressed input raises ValueError;
+decompress it first, as ``zcat`` does.
 
-In Python, write a pipe with ``write_sdf(sys.stdout, blocks)``, or
-``sys.stdout.buffer`` for bytes blocks.
+In Python, read compressed files with ``parse_sdf(gzip.open(path))``, and
+write a pipe with ``write_sdf(sys.stdout, blocks)``, or ``sys.stdout.buffer``
+for bytes blocks.

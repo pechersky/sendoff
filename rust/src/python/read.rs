@@ -5,13 +5,14 @@ use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::path::PathBuf;
 
-use pyo3::exceptions::PyTypeError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyIterator, PyString};
 use pyo3::{PyTraverseError, PyVisit};
 
 use crate::core::block::Block;
+use crate::core::compressed::compression;
 use crate::core::mapped::MappedBlocks;
 use crate::core::newline::{TRANSLATE_SLACK, missing_ending, title_newline, translate_newlines};
 use crate::core::split::{Scanner, Tail};
@@ -33,6 +34,27 @@ fn set_kind(kind: &mut Option<Kind>, found: Kind, mixed: &'static str) -> PyResu
     } else {
         Err(PyTypeError::new_err(mixed))
     }
+}
+
+/// Raise ValueError if `data` starts as compressed input does, naming
+/// `filename`, a str or bytes path, if given.
+fn refuse_compressed(py: Python<'_>, data: &[u8], filename: Option<&Py<PyAny>>) -> PyResult<()> {
+    let Some(found) = compression(data) else {
+        return Ok(());
+    };
+    let input = match filename {
+        Some(filename) => {
+            let os = py.import(intern!(py, "os"))?;
+            os.call_method1(intern!(py, "fsdecode"), (filename,))?
+                .repr()?
+                .to_string()
+        }
+        None => "the input".to_owned(),
+    };
+    Err(PyValueError::new_err(format!(
+        "{input} is {}-compressed; decompress it first, with {}",
+        found.name, found.decompress
+    )))
 }
 
 /// A file object's bound `read1` or `read` method, preferring `read1`,
@@ -106,6 +128,9 @@ impl Source {
             })
             .map_err(|error| os_error(py, error, filename))?;
         *kind = Some(Kind::of(*text));
+        if let Some(blocks) = &mapped {
+            refuse_compressed(py, blocks.data(), Some(filename))?;
+        }
         *self = match mapped {
             Some(blocks) => Source::Mapped {
                 blocks,
@@ -119,6 +144,14 @@ impl Source {
             },
         };
         Ok(())
+    }
+
+    /// The path being read, if any.
+    fn filename(&self) -> Option<&Py<PyAny>> {
+        match self {
+            Source::Path { filename, .. } | Source::File { filename, .. } => Some(filename),
+            _ => None,
+        }
     }
 
     /// Append input to `tail`, returning `true` at end of input.
@@ -233,6 +266,8 @@ pub(crate) struct PySDBlockIterator {
     /// Whether text comes from Python str, so is UTF-8; paths decode on
     /// access.
     from_str: bool,
+    /// Whether the start of input has been checked for compression.
+    checked: bool,
 }
 
 impl PySDBlockIterator {
@@ -242,6 +277,7 @@ impl PySDBlockIterator {
             source,
             kind: None,
             scanner: Scanner::default(),
+            checked: false,
         }
     }
 
@@ -257,8 +293,10 @@ impl PySDBlockIterator {
             source,
             kind,
             scanner,
+            checked,
             ..
         } = self;
+        // Mapped files are checked as they open.
         source.open(py, kind)?;
         if let Source::Mapped { blocks, batch } = source {
             if batch.is_empty() {
@@ -266,7 +304,14 @@ impl PySDBlockIterator {
             }
             return Ok(batch.pop_front());
         }
-        scanner.next_block(|tail| source.fill(py, kind, tail))
+        scanner.next_block(|tail| {
+            let end = source.fill(py, kind, tail)?;
+            if !*checked {
+                *checked = true;
+                refuse_compressed(py, tail.input(), source.filename())?;
+            }
+            Ok(end)
+        })
     }
 }
 
@@ -358,6 +403,9 @@ impl PySDBlockIterator {
 ///
 /// Raises:
 ///     TypeError: if `source` is neither a path nor a file object
+///     ValueError: on the first `next()`, if the input is gzip, bzip2, xz, or
+///         zstd compressed; decompress it first, as `gzip.open()` or
+///         `zcat` do
 #[pyfunction]
 #[pyo3(signature = (source: "str | bytes | os.PathLike[str] | os.PathLike[bytes]", *, borrow: "bool" = false) -> "_SDBlockIterator[Any]")]
 pub(crate) fn parse_sdf(source: &Bound<'_, PyAny>, borrow: bool) -> PyResult<PySDBlockIterator> {

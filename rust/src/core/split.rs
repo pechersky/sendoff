@@ -224,6 +224,12 @@ pub struct Tail<'a> {
 }
 
 impl Tail<'_> {
+    /// The input not yet split into blocks, which is all input until the
+    /// first block.
+    pub fn input(&self) -> &[u8] {
+        &self.buf[..*self.end]
+    }
+
     /// Append `bytes` to the input.
     pub fn extend(&mut self, bytes: &[u8]) {
         self.space(bytes.len())[..bytes.len()].copy_from_slice(bytes);

@@ -827,6 +827,9 @@ def parse_sdf(
 
     Raises:
         TypeError: if `source` is neither a path nor a file object
+        ValueError: on the first `next()`, if the input is gzip, bzip2, xz, or
+            zstd compressed; decompress it first, as `gzip.open()` or
+            `zcat` do
     """
 
 @overload
