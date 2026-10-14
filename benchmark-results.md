@@ -18,6 +18,33 @@ and cannot read B, which is not UTF-8. Geomeans take each toolkit's fastest
 mode per case, whether or not its output matched. Write cases are not compared,
 as the toolkits reserialize records.
 
+## At a glance
+
+How many times faster sendoff is than each toolkit, in operation time on
+x86_64 / arm64, for a sample of the full matrix: a case or two per
+[dataset](#datasets), including where the margin is smallest. Write cases are
+not like for like, as the toolkits reserialize records.
+
+| Dataset | Case | main | RDKit default | RDKit fast | OEChem default | OEChem tokenizer | OEChem threaded |
+|---|---|---:|---:|---:|---:|---:|---:|
+| B full | `molecule_count` | - | 159× / 122× † | 75× / 61× | 72× / 55× † | 21× / 10× | 16× / 7.8× |
+| A full | `title_extraction` | 25× / 22× | 89× / 73× † | 48× / 39× | 36× / 28× | 9.0× / 4.1× | 8.2× / 4.2× |
+| C full | `field_get` | - | 75× / 62× | 37× / 31× | 33× / 25× | 27× / 21× | 20× / 18× |
+| B full | `field_get` | - | 74× / 59× † | 36× / 30× | 35× / 26× † | 43× / 34× | 34× / 30× |
+| A full | `record_dicts` | - | 47× / 41× † | 28× / 25× † | 28× / 23× † | 17× / 14× † | 13× / 12× † |
+| B full | `record_name_set` | - | 57× / 47× | 31× / 26× | 42× / 34× | 28× / 24× | 22× / 20× |
+| D full | `field_extraction` | 16× / 15× | 20× / 16× † | 17× / 14× | 19× / 17× | 15× / 13× | 14× / 13× |
+| A full | `write_round_trip` | 21× / 21× | 97× / 83× | 61× / 52× | 44× / 46× | 6.4× / 3.8× | 4.5× / 2.6× |
+| A full | `write_sdf_round_trip` | - | 161× / 124× | 102× / 77× | 74× / 69× | 11× / 5.7× | 7.7× / 3.9× |
+| A full | `mdl_scan` | 14× / 14× | 2.7× / 2.6× | 2.7× / 2.6× | 6.2× / 3.2× | 7.5× / 4.1× | 4.2× / 2.4× |
+| D full | `mdl_scan` | 55× / 57× | 2.4× / 2.2× | 2.4× / 2.2× | 17× / 7.0× | 19× / 8.0× | 18× / 7.5× |
+
+On 100-record files, where start-up dominates, wall time is 1.5× faster than
+`main`, 4.4–4.6× than RDKit and 5.1–5.4× than OEChem ([geomeans](#summary)).
+The perf round since `8e357ba` cut operation time a further 5% (x86_64) and 6%
+(arm64), and `parse_sdf(path, borrow=True)` another 9–21% on B–D (`00a0e25`,
+c6i/c7g.16xlarge); these tables predate both.
+
 ## Implementations
 
 | Name | Reads with |
