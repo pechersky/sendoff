@@ -3,10 +3,15 @@ name = "sendoff"
 dynamic = ["version"]
 description = "The minimal SDF metadata parser"
 authors = [{name = "Yakov Pechersky", email = "ypechersky@treeline.bio"}]
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.rst"
 requires-python = ">=3.11"
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Typing :: Typed",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -14,11 +19,12 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3.15",
     "Programming Language :: Rust",
-    "License :: OSI Approved :: MIT License",
 ]
 
 [project.urls]
 Repository = "https://github.com/pechersky/sendoff"
+Changelog = "https://github.com/pechersky/sendoff/blob/main/doc/changelog.rst"
+Issues = "https://github.com/pechersky/sendoff/issues"
 
 [project.optional-dependencies]
 # Without RDKit, the tests that need it skip.
