@@ -103,6 +103,7 @@ Shell pipelines
        python -m sendoff.cli.title --from - my.sdf > titled.sdf
    python -m sendoff.cli.filter --eq Availability In-stock vendor.sdf |
        python -m sendoff.cli.set Batch --value B7 -o batch.sdf
+   python -m sendoff.cli.filter --unique InChIKey my.sdf > unique.sdf
 
 The ``count``, ``get``, ``set``, ``title``, and ``filter`` commands read
 ``FILE`` or ``-i FILE``, else stdin, as bytes and write ``-o FILE``, else

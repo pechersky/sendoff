@@ -463,6 +463,28 @@ def test_filter(
     assert out == (second + third).replace(b"\n", b"\r\n")
 
 
+def test_filter_unique(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Filter --unique keeps the first block per value and those without one.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+    """
+    first, second, third = (block + b"$$$$\n" for block in SDF.split(b"$$$$\n")[:3])
+    repeated = first + second + first + third + second + third
+    assert cli(capsysbinary, monkeypatch, "filter", "--unique", "ID", stdin=repeated) == (
+        0,
+        first + second + third + second,
+        b"",
+    )
+    assert cli(
+        capsysbinary, monkeypatch, "filter", "-v", "--unique", "ID", stdin=repeated
+    ) == (0, first + third, b"")
+
+
 COMMANDS = [
     ("count",),
     ("get", "ID"),
@@ -470,6 +492,7 @@ COMMANDS = [
     ("set", "ID", "--value", "X"),
     ("title", "--field", "ID"),
     ("filter", "--has", "ID"),
+    ("filter", "--unique", "ID"),
 ]
 
 

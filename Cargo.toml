@@ -15,7 +15,6 @@ include = [
     "/pyproject.toml",
     "/README.rst",
     "/LICENSE",
-    "/scripts/sdf-unique-record",
 ]
 
 [lib]
