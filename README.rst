@@ -7,24 +7,29 @@ sendoff
 
 .. image:: https://github.com/pechersky/sendoff/actions/workflows/tox.yml/badge.svg
    :target: https://github.com/pechersky/sendoff/actions/workflows/tox.yml
-   :alt: Tox status
+   :alt: Tests
 
 The minimal SDF metadata parser.
 
-Often, SDFs have lots of useful metadata on them in the title and record fields/values.
-However, reading a molecule (via rdkit, OpenEye toolkits, etc) can be slow because those
-libraries also construct the molecules. Modifying the metadata, or filtering/sorting based
-on the metadata also can induce non-idempotent differences in the file based on
-opinionated approaches in chemical libraries.
+sendoff reads and edits SDF titles and data records without building
+molecules, and writes back everything it doesn't edit byte for byte, even
+malformed chemistry. Tests check it against RDKit on edge cases such as
+multiline values and ``$$$$`` titles.
 
-This library strives to be able to handle SDF files even with malformed chemistry or
-metadata. Since much debugging of our files and data deals with such files, having access
-to simple fast tools to interrogate the files while not modifying the file is crucial.
+In time per operation, it is 27–59× faster than RDKit, 6.4–23× faster than
+OEChem, and 8.2–48× faster than the pure-Python sendoff 0.1.6 (geomeans by
+dataset; see the `benchmarks
+<https://github.com/pechersky/sendoff/blob/main/benchmark-results.md>`_).
 
-This package also tries to document the "canonical" ways metadata is handled by the larger
-packages. To wit, there are tests to monitor how, for example, rdkit deals with molecules
-that have multiline record values, or a "$$$$" molecule title.
+Install
+-------
 
+.. code-block:: bash
+
+   pip install sendoff
+
+Wheels cover CPython 3.11 and later on Linux (glibc and musl), macOS, and
+Windows, on x86_64 and arm64.
 
 Usage
 -----
