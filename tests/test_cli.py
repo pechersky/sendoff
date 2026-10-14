@@ -1,14 +1,18 @@
 # mypy: allow-untyped-decorators
 """Test the python -m sendoff.cli.<command> shell helpers."""
+import errno
 import gzip
 import importlib
 import io
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from sendoff.cli._common import STDIN, Blocks, failures, parser, run
 
 MOL = b"\n  sendoff\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\nM  END\n"
 GBK = "\N{GREEK SMALL LETTER BETA}-Bisabolene".encode("gbk")
@@ -132,21 +136,60 @@ def test_compressed_input(
     )
 
 
-def test_module_dies_quietly_on_closed_pipe(sdf: Path) -> None:
+# Runs the module as Windows would, where writes to a closed pipe raise.
+WITHOUT_SIGPIPE = (
+    "import runpy, signal; vars(signal).pop('SIGPIPE', None); "
+    "runpy.run_module('sendoff.cli.count', run_name='__main__')"
+)
+
+
+@pytest.mark.parametrize(
+    "module",
+    [["-m", "sendoff.cli.count"], ["-c", WITHOUT_SIGPIPE]],
+    ids=["sigpipe", "no-sigpipe"],
+)
+def test_module_dies_quietly_on_closed_pipe(sdf: Path, module: list[str]) -> None:
     """The module runs with python -m and stops silently when stdout closes.
 
     Args:
         sdf: pytest fixture of a Path to the sdf
+        module: how python runs the count module
     """
-    count = [sys.executable, "-m", "sendoff.cli.count", str(sdf)]
+    count = [sys.executable, *module, str(sdf)]
     assert subprocess.run(count, capture_output=True, check=True).stdout == b"3\n"
-    many = [sys.executable, "-m", "sendoff.cli.count", *[str(sdf)] * 5000]
+    many = [sys.executable, *module, *[str(sdf)] * 5000]
     with subprocess.Popen(many, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
         assert p.stdout is not None and p.stderr is not None
         p.stdout.read(1)
         p.stdout.close()
         assert p.stderr.read() == b""
     assert p.returncode != 0
+
+
+def test_run_without_sigpipe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A closed pipe passes failures() and exits 1; other OSErrors raise.
+
+    Args:
+        monkeypatch: pytest fixture to remove SIGPIPE and replace stdout
+        tmp_path: pytest fixture of a temporary directory
+    """
+
+    def closed(_: object) -> int:
+        with failures(parser("count", ""), Blocks(STDIN)):
+            raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+
+    def full(_: object) -> int:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.delattr(signal, "SIGPIPE", raising=False)
+    # run() points stdout's descriptor at os.devnull.
+    with open(tmp_path / "stdout", "w", encoding="utf-8") as stdout:
+        monkeypatch.setattr(sys, "stdout", stdout)
+        with pytest.raises(SystemExit) as exited:
+            run(closed)
+        assert exited.value.code == 1
+        with pytest.raises(OSError, match="No space"):
+            run(full)
 
 
 def test_get(

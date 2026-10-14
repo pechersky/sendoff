@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import os
 import signal
 import sys
@@ -258,12 +259,22 @@ def failures(p: argparse.ArgumentParser, blocks: Blocks) -> Iterator[None]:
 
     Yields:
         Nothing
+
+    Raises:
+        OSError: if output's reader went away, for `run`
     """
     try:
         yield
-    except (OSError, ValueError) as exc:
-        where = f"block {blocks.number}: " if blocks.number else ""
-        p.exit(1, f"{p.prog}: {where}{exc}\n")
+    except OSError as exc:
+        if reader_gone(exc):
+            raise
+        error: OSError | ValueError = exc
+    except ValueError as exc:
+        error = exc
+    else:
+        return
+    where = f"block {blocks.number}: " if blocks.number else ""
+    p.exit(1, f"{p.prog}: {where}{error}\n")
 
 
 def run(main: Callable[[Sequence[str] | None], int]) -> NoReturn:
@@ -271,7 +282,36 @@ def run(main: Callable[[Sequence[str] | None], int]) -> NoReturn:
 
     Args:
         main: the command's main function
+
+    Raises:
+        OSError: unless stdout's reader went away
     """
     if hasattr(signal, "SIGPIPE"):
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-    sys.exit(main(None))
+    try:
+        status = main(None)
+        sys.stdout.flush()
+    except OSError as exc:
+        if not reader_gone(exc):
+            raise
+        # Python flushes stdout again as it exits.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        status = 1
+    sys.exit(status)
+
+
+def reader_gone(exc: OSError) -> bool:
+    """Return whether a write failed because its pipe's reader went away.
+
+    Such writes raise only without SIGPIPE, as on Windows, which reports
+    them as EINVAL.
+
+    Args:
+        exc: the error
+
+    Returns:
+        Whether it is EPIPE, or EINVAL on Windows
+    """
+    return isinstance(exc, BrokenPipeError) or (
+        sys.platform == "win32" and exc.errno == errno.EINVAL
+    )
