@@ -1,6 +1,6 @@
 //! Whether a block holds str or bytes, and converting between the two.
 
-use pyo3::exceptions::PyUnicodeDecodeError;
+use pyo3::exceptions::{PyTypeError, PyUnicodeDecodeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
@@ -41,10 +41,18 @@ pub(super) fn bytes_of<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<Option<(Kind
     }
 }
 
-/// Settle `expected` on the first kind found, returning whether `found`
-/// matches it.
-pub(super) fn same_kind(expected: &mut Option<Kind>, found: Kind) -> bool {
-    *expected.get_or_insert(found) == found
+/// Settle `expected` on the first kind found, or raise `TypeError(mixed)`
+/// if `found` differs.
+pub(super) fn same_kind(
+    expected: &mut Option<Kind>,
+    found: Kind,
+    mixed: &'static str,
+) -> PyResult<()> {
+    if *expected.get_or_insert(found) == found {
+        Ok(())
+    } else {
+        Err(PyTypeError::new_err(mixed))
+    }
 }
 
 /// `bytes` as UTF-8, or the `UnicodeDecodeError` Python would raise.

@@ -25,19 +25,9 @@ use crate::python::sdblock::PySDBlock;
 /// file objects, and used less memory.
 const CHUNK: usize = 128 << 10;
 
-/// Settle `kind` on the kind of input found, which must not change, or raise
-/// `TypeError(mixed)`.
-fn set_kind(kind: &mut Option<Kind>, found: Kind, mixed: &'static str) -> PyResult<()> {
-    if same_kind(kind, found) {
-        Ok(())
-    } else {
-        Err(PyTypeError::new_err(mixed))
-    }
-}
-
 /// A file object's bound `read1` or `read` method, preferring `read1`,
 /// which returns what one raw read gives instead of filling the chunk.
-pub(super) fn reader(source: &Bound<'_, PyAny>) -> Option<Py<PyAny>> {
+fn reader(source: &Bound<'_, PyAny>) -> Option<Py<PyAny>> {
     let py = source.py();
     [intern!(py, "read1"), intern!(py, "read")]
         .into_iter()
@@ -46,25 +36,22 @@ pub(super) fn reader(source: &Bound<'_, PyAny>) -> Option<Py<PyAny>> {
 }
 
 /// Where `_SDBlockIterator` reads SDF from.
-pub(super) enum Source {
+enum Source {
     /// A Python iterable of str or bytes lines.
     Lines(Py<PyIterator>),
     /// A file object's bound `read1` or `read` method.
     Reader(Py<PyAny>),
-    /// An in-memory str or bytes, copied out a chunk at a time from `pos`;
-    /// `text` translates newlines.
+    /// An in-memory str or bytes, copied out a chunk at a time from `pos`.
     Buffer {
         data: Py<PyAny>,
         pos: usize,
-        text: bool,
         pending_cr: bool,
     },
-    /// A path to open on the first read; `text` translates newlines, and
-    /// `borrow` lets blocks borrow the file if it maps.
+    /// A path to open on the first read; `borrow` lets blocks borrow the
+    /// file if it maps.
     Path {
         path: PathBuf,
         filename: Py<PyAny>,
-        text: bool,
         borrow: bool,
     },
     /// A file mapped from `Path`, split a batch of blocks at a time without
@@ -78,7 +65,6 @@ pub(super) enum Source {
     File {
         file: File,
         filename: Py<PyAny>,
-        text: bool,
         pending_cr: bool,
     },
     Closed,
@@ -86,26 +72,24 @@ pub(super) enum Source {
 
 impl Source {
     /// Open a `Path`, mapping the file when it maps.
-    fn open(&mut self, py: Python<'_>, kind: &mut Option<Kind>) -> PyResult<()> {
+    fn open(&mut self, py: Python<'_>, text: bool) -> PyResult<()> {
         let Source::Path {
             path,
             filename,
-            text,
             borrow,
         } = self
         else {
             return Ok(());
         };
-        let (text_mode, borrow) = (*text, *borrow);
+        let borrow = *borrow;
         // Opening a FIFO waits for a writer, which may be a Python thread.
         let (file, mapped) = py
             .detach(|| {
                 let file = File::open(&*path)?;
-                let mapped = MappedBlocks::open(&file, text_mode, borrow);
+                let mapped = MappedBlocks::open(&file, text, borrow);
                 Ok((file, mapped))
             })
             .map_err(|error| os_error(py, error, filename))?;
-        *kind = Some(Kind::of(*text));
         *self = match mapped {
             Some(blocks) => Source::Mapped {
                 blocks,
@@ -114,7 +98,6 @@ impl Source {
             None => Source::File {
                 file,
                 filename: filename.clone_ref(py),
-                text: *text,
                 pending_cr: false,
             },
         };
@@ -128,6 +111,7 @@ impl Source {
         kind: &mut Option<Kind>,
         tail: &mut Tail<'_>,
     ) -> PyResult<bool> {
+        let text = *kind == Some(Kind::Text);
         match self {
             Source::Lines(lines) => {
                 let mut lines = lines.bind(py).clone();
@@ -143,7 +127,7 @@ impl Source {
                             "SDBlock.from_lines lines must be str or bytes",
                         ));
                     };
-                    set_kind(
+                    same_kind(
                         kind,
                         found,
                         "SDBlock.from_lines does not accept mixed str and bytes lines",
@@ -167,14 +151,13 @@ impl Source {
                 if bytes.is_empty() {
                     return Ok(true);
                 }
-                set_kind(kind, found, "file objects must not mix str and bytes reads")?;
+                same_kind(kind, found, "file objects must not mix str and bytes reads")?;
                 tail.extend(bytes);
                 Ok(false)
             }
             Source::Buffer {
                 data,
                 pos,
-                text,
                 pending_cr,
             } => {
                 let Some((_, bytes)) = bytes_of(data.bind(py))? else {
@@ -182,7 +165,7 @@ impl Source {
                 };
                 let chunk = &bytes[*pos..bytes.len().min(*pos + CHUNK)];
                 *pos += chunk.len();
-                if *text {
+                if text {
                     let space = tail.space(chunk.len() + TRANSLATE_SLACK);
                     space[..chunk.len()].copy_from_slice(chunk);
                     let len = translate_newlines(space, chunk.len(), pending_cr);
@@ -198,7 +181,6 @@ impl Source {
             Source::File {
                 file,
                 filename,
-                text,
                 pending_cr,
             } => {
                 let space = tail.space(CHUNK + TRANSLATE_SLACK);
@@ -211,7 +193,7 @@ impl Source {
                     }
                 };
                 let read = read.map_err(|error| os_error(py, error, filename))?;
-                let len = if *text {
+                let len = if text {
                     translate_newlines(space, read, pending_cr)
                 } else {
                     read
@@ -236,7 +218,7 @@ pub(crate) struct PySDBlockIterator {
 }
 
 impl PySDBlockIterator {
-    pub(super) fn new(source: Source) -> Self {
+    fn new(source: Source) -> Self {
         Self {
             from_str: !matches!(source, Source::Path { .. }),
             source,
@@ -245,11 +227,40 @@ impl PySDBlockIterator {
         }
     }
 
-    pub(super) fn of_kind(source: Source, kind: Kind) -> Self {
+    fn of_kind(source: Source, kind: Kind) -> Self {
         Self {
             kind: Some(kind),
             ..Self::new(source)
         }
+    }
+
+    pub(super) fn from_lines(lines: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if lines.is_instance_of::<PyString>() || lines.is_instance_of::<PyBytes>() {
+            return Err(PyTypeError::new_err(
+                "SDBlock.from_lines takes lines or a file object; \
+                 use SDBlock.from_sdf to parse SDF str or bytes",
+            ));
+        }
+        if let Some(read) = reader(lines) {
+            return Ok(Self::new(Source::Reader(read)));
+        }
+        Ok(Self::new(Source::Lines(lines.try_iter()?.unbind())))
+    }
+
+    pub(super) fn from_sdf(sdf: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let Some((kind, _)) = bytes_of(sdf)? else {
+            return Err(PyTypeError::new_err(
+                "SDBlock.from_sdf argument must be str or bytes",
+            ));
+        };
+        Ok(Self::of_kind(
+            Source::Buffer {
+                data: sdf.clone().unbind(),
+                pos: 0,
+                pending_cr: false,
+            },
+            kind,
+        ))
     }
 
     fn next_block(&mut self, py: Python<'_>) -> PyResult<Option<Block>> {
@@ -259,7 +270,7 @@ impl PySDBlockIterator {
             scanner,
             ..
         } = self;
-        source.open(py, kind)?;
+        source.open(py, *kind == Some(Kind::Text))?;
         if let Source::Mapped { blocks, batch } = source {
             if batch.is_empty() {
                 py.detach(|| blocks.split(CHUNK, batch));
@@ -375,11 +386,13 @@ pub(crate) fn parse_sdf(source: &Bound<'_, PyAny>, borrow: bool) -> PyResult<PyS
         };
     }
     let (filename, path) = fs_path(source)?;
-    let text = filename.is_instance_of::<PyString>();
-    Ok(PySDBlockIterator::new(Source::Path {
-        path,
-        filename: filename.unbind(),
-        text,
-        borrow,
-    }))
+    let kind = Kind::of(filename.is_instance_of::<PyString>());
+    Ok(PySDBlockIterator::of_kind(
+        Source::Path {
+            path,
+            filename: filename.unbind(),
+            borrow,
+        },
+        kind,
+    ))
 }

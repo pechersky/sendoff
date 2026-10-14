@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io::Write;
 
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 use pyo3::{PyTraverseError, PyVisit, intern};
@@ -40,11 +40,11 @@ impl Sink {
         match self {
             // A file object's write validates text chunks as it decodes them.
             Sink::Handle { kind: expected, .. } => {
-                if !same_kind(expected, kind) {
-                    return Err(PyTypeError::new_err(
-                        "cannot write mixed str and bytes blocks to a file object",
-                    ));
-                }
+                same_kind(
+                    expected,
+                    kind,
+                    "cannot write mixed str and bytes blocks to a file object",
+                )?;
                 Ok(kind == Kind::Text && !block.block.serialized().is_ascii())
             }
             Sink::File { .. } => block.check_utf8(py).map(|()| false),
@@ -108,35 +108,23 @@ impl Writer {
 
     /// Add a block, writing the chunk once it is full.
     fn push(&mut self, py: Python<'_>, block: &PySDBlock) -> PyResult<()> {
-        let Writer {
-            sink,
-            chunk,
-            limit,
-            count,
-        } = self;
-        let start = chunk.len();
-        chunk.extend_from_slice(block.block.serialized());
+        let count = self.count;
         let noted = |error| block.noted(py, error, || format!("Writing block {count} (from 0),"));
-        let alone = sink.accept(py, block).map_err(|error| {
-            chunk.truncate(start);
-            noted(error)
-        })?;
+        let alone = self.sink.accept(py, block).map_err(noted)?;
         if alone {
-            let mut written = Ok(());
-            if start > 0 {
-                written = sink.write(py, &chunk[..start]);
-            }
+            self.flush(py)?;
             // Text blocks that are not ASCII, which include any that are not
             // UTF-8, are written alone, so a decode error is this block's.
-            let written = written.and_then(|()| sink.write(py, &chunk[start..]).map_err(noted));
-            chunk.clear();
-            written?;
-        } else if chunk.len() >= *limit {
-            let written = sink.write(py, chunk);
-            chunk.clear();
-            written?;
+            self.sink
+                .write(py, block.block.serialized())
+                .map_err(noted)?;
+        } else {
+            self.chunk.extend_from_slice(block.block.serialized());
+            if self.chunk.len() >= self.limit {
+                self.flush(py)?;
+            }
         }
-        *count += 1;
+        self.count += 1;
         Ok(())
     }
 

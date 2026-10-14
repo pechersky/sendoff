@@ -23,7 +23,7 @@ use crate::python::ctable::PyCTable;
 use crate::python::exports::Exported;
 use crate::python::kind::{Kind, bytes_of, decode};
 use crate::python::names::Namer;
-use crate::python::read::{PySDBlockIterator, Source, reader};
+use crate::python::read::PySDBlockIterator;
 
 /// Collect `(name, value)` pairs from a mapping or an iterable of pairs.
 fn record_pairs<'py>(
@@ -419,18 +419,7 @@ impl PySDBlock {
         lines: "Iterable[str] | Iterable[bytes] | _SupportsRead[str] | _SupportsRead[bytes]",
     ) -> "_SDBlockIterator[Any]")]
     fn from_lines(lines: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
-        if lines.is_instance_of::<PyString>() || lines.is_instance_of::<PyBytes>() {
-            return Err(PyTypeError::new_err(
-                "SDBlock.from_lines takes lines or a file object; \
-                 use SDBlock.from_sdf to parse SDF str or bytes",
-            ));
-        }
-        if let Some(read) = reader(lines) {
-            return Ok(PySDBlockIterator::new(Source::Reader(read)));
-        }
-        Ok(PySDBlockIterator::new(Source::Lines(
-            lines.try_iter()?.unbind(),
-        )))
+        PySDBlockIterator::from_lines(lines)
     }
 
     /// Parse one block from SDF str or bytes, such as a molblock.
@@ -505,20 +494,7 @@ impl PySDBlock {
     #[staticmethod]
     #[pyo3(signature = (sdf: "str | bytes") -> "_SDBlockIterator[Any]")]
     fn from_sdf(sdf: &Bound<'_, PyAny>) -> PyResult<PySDBlockIterator> {
-        let Some((kind, _)) = bytes_of(sdf)? else {
-            return Err(PyTypeError::new_err(
-                "SDBlock.from_sdf argument must be str or bytes",
-            ));
-        };
-        Ok(PySDBlockIterator::of_kind(
-            Source::Buffer {
-                data: sdf.clone().unbind(),
-                pos: 0,
-                text: kind == Kind::Text,
-                pending_cr: false,
-            },
-            kind,
-        ))
+        PySDBlockIterator::from_sdf(sdf)
     }
 
     /// Return the title line without trailing whitespace, in the input type.
