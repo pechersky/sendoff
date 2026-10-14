@@ -52,6 +52,11 @@ fn title_end(data: &[u8], delimiter: Option<usize>) -> usize {
     }
 }
 
+/// Where the SD data ends and the trailer starts in `data`.
+fn body_end_of(data: &[u8]) -> usize {
+    data.len() - trailer(newline(data)).len()
+}
+
 /// A block's bytes: its own, or a range of a mapped file, borrowed until
 /// the first edit copies it.
 #[derive(Debug)]
@@ -390,10 +395,9 @@ impl Block {
         }
         let old_end = self.title_end;
         let newline = self.newline();
-        let mut line = Vec::with_capacity(title.len() + newline.len());
-        line.extend_from_slice(title);
-        line.extend_from_slice(newline);
-        self.data.to_mut().splice(..old_end, line);
+        self.data
+            .to_mut()
+            .splice(..old_end, title.iter().chain(newline).copied());
         self.title_end = title.len() + newline.len();
         // A new title moves an unfound MDL end with the lines it searches.
         let mdl_end = self.mdl_end.get_mut();
@@ -565,11 +569,6 @@ impl Block {
         let header = owned.each_ref().map(|line| line.as_deref().unwrap_or(""));
         parse_header(&header[..found])
     }
-}
-
-/// Where the SD data ends and the trailer starts in `data`.
-fn body_end_of(data: &[u8]) -> usize {
-    data.len() - trailer(newline(data)).len()
 }
 
 #[cfg(test)]

@@ -123,7 +123,7 @@ pub(super) fn section_range(
 
 /// The text of `line` before a terminal `-` that continues it onto the next
 /// line, if it has one.
-pub(super) fn continued(line: &str) -> Option<&str> {
+fn continued(line: &str) -> Option<&str> {
     line.trim_end_matches(['\r', '\n']).strip_suffix('-')
 }
 
@@ -238,6 +238,16 @@ pub(super) fn renumbered(
 ) -> Result<(Vec<String>, Vec<String>), CTableError> {
     let prefix = "M  V30 ";
     let (atom_lines, bond_lines) = (&lines[atoms.clone()], &lines[bonds.clone()]);
+    if atom_lines
+        .iter()
+        .chain(bond_lines)
+        .any(|line| continued(line).is_some())
+    {
+        return Err(CTableError::Unsupported {
+            operation: "renumbering",
+            construct: "continued (-) atom or bond lines",
+        });
+    }
     let mut changed = false;
     let mut atom_index_mapping = HashMap::with_capacity(atom_lines.len());
     let mut new_atom_lines = Vec::with_capacity(atom_lines.len());

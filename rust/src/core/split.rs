@@ -111,6 +111,35 @@ impl Scanner {
     }
 }
 
+/// Writable space after a scanner's input.
+pub struct Tail<'a> {
+    buf: &'a mut Vec<u8>,
+    end: &'a mut usize,
+}
+
+impl Tail<'_> {
+    /// Append `bytes` to the input.
+    pub fn extend(&mut self, bytes: &[u8]) {
+        self.space(bytes.len())[..bytes.len()].copy_from_slice(bytes);
+        self.commit(bytes.len());
+    }
+
+    /// Return at least `len` writable bytes with unspecified contents.
+    pub fn space(&mut self, len: usize) -> &mut [u8] {
+        let needed = *self.end + len;
+        if self.buf.len() < needed {
+            self.buf.resize(needed, 0);
+        }
+        &mut self.buf[*self.end..]
+    }
+
+    /// Append the first `len` bytes of `space` to the input.
+    pub fn commit(&mut self, len: usize) {
+        assert!(*self.end + len <= self.buf.len());
+        *self.end += len;
+    }
+}
+
 /// Where the first block in complete input ends, and where its `$$$$` line
 /// starts, if it has one.
 fn bounds(data: &[u8]) -> (usize, Option<usize>) {
@@ -140,11 +169,13 @@ fn text_delimiter(data: &[u8]) -> Option<usize> {
     None
 }
 
-/// Where the first block in complete input ends, and where its `$$$$` line
-/// starts, if it has one; `text` reads universal newlines.
-fn extent(data: &[u8], text: bool) -> (usize, Option<usize>) {
+/// Where the first block in complete input ends, where its `$$$$` line
+/// starts (if it has one), and how many leading bytes need no newline
+/// translation; `text` reads universal newlines.
+fn extent(data: &[u8], text: bool) -> (usize, Option<usize>, usize) {
     if !text {
-        return bounds(data);
+        let (end, delimiter) = bounds(data);
+        return (end, delimiter, end);
     }
     let delimiter = text_delimiter(data);
     let end = delimiter
@@ -152,7 +183,8 @@ fn extent(data: &[u8], text: bool) -> (usize, Option<usize>) {
         .map_or(data.len(), |at| {
             at + 1 + usize::from(data[at..].starts_with(b"\r\n"))
         });
-    (end, delimiter)
+    let clean = memchr(b'\r', &data[..end]).unwrap_or(end);
+    (end, delimiter, clean)
 }
 
 /// Split the first block from complete, nonempty input, returning it and
@@ -161,13 +193,8 @@ fn extent(data: &[u8], text: bool) -> (usize, Option<usize>) {
 /// `text` reads universal newlines, translating them as `translated` does,
 /// so blocks match a `Scanner` over translated input.
 pub fn split_block(data: &[u8], text: bool) -> (Block, usize) {
-    let (end, delimiter) = extent(data, text);
-    let clean = if text {
-        memchr(b'\r', &data[..end]).unwrap_or(end)
-    } else {
-        end
-    };
-    (copied(&data[..end], delimiter, text, clean), end)
+    let (end, delimiter, clean) = extent(data, text);
+    (copied(&data[..end], delimiter, clean), end)
 }
 
 /// Split the first block from `map[pos..]`, which is nonempty, as
@@ -177,27 +204,21 @@ pub fn split_block(data: &[u8], text: bool) -> (Block, usize) {
 /// in a `$$$$` line, and, for `text`, without `\r` to translate.
 pub fn borrow_block(map: &Arc<Mmap>, pos: usize, text: bool) -> (Block, usize) {
     let data = &map[pos..];
-    let (end, delimiter) = extent(data, text);
-    // Translation of a block that cannot borrow resumes at its first `\r`.
-    let clean = if text {
-        memchr(b'\r', &data[..end]).unwrap_or(end)
-    } else {
-        end
-    };
+    let (end, delimiter, clean) = extent(data, text);
     if let Some(start) = delimiter
         && clean == end
         && let Some(block) = Block::borrowed(map, pos, pos + end, start)
     {
         return (block, end);
     }
-    (copied(&data[..end], delimiter, text, clean), end)
+    (copied(&data[..end], delimiter, clean), end)
 }
 
 /// Copy one block's input, whose `$$$$` line, if any, starts at
-/// `delimiter`, translating universal newlines for `text` from `clean`, as
-/// no `\r` comes before it.
-fn copied(data: &[u8], delimiter: Option<usize>, text: bool, clean: usize) -> Block {
-    if !text || clean == data.len() {
+/// `delimiter`, translating universal newlines from `clean`, as no `\r`
+/// comes before it.
+fn copied(data: &[u8], delimiter: Option<usize>, clean: usize) -> Block {
+    if clean == data.len() {
         return Block::new(data.to_vec(), delimiter);
     }
     let block = translated_from(data, clean);
@@ -220,35 +241,6 @@ pub fn single_block(mut data: Vec<u8>) -> Option<Block> {
     }
     data.truncate(end);
     Some(Block::new(data, delimiter))
-}
-
-/// Writable space after a scanner's input.
-pub struct Tail<'a> {
-    buf: &'a mut Vec<u8>,
-    end: &'a mut usize,
-}
-
-impl Tail<'_> {
-    /// Append `bytes` to the input.
-    pub fn extend(&mut self, bytes: &[u8]) {
-        self.space(bytes.len())[..bytes.len()].copy_from_slice(bytes);
-        self.commit(bytes.len());
-    }
-
-    /// Return at least `len` writable bytes with unspecified contents.
-    pub fn space(&mut self, len: usize) -> &mut [u8] {
-        let needed = *self.end + len;
-        if self.buf.len() < needed {
-            self.buf.resize(needed, 0);
-        }
-        &mut self.buf[*self.end..]
-    }
-
-    /// Append the first `len` bytes of `space` to the input.
-    pub fn commit(&mut self, len: usize) {
-        assert!(*self.end + len <= self.buf.len());
-        *self.end += len;
-    }
 }
 
 #[cfg(test)]

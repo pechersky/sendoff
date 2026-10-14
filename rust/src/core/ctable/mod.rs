@@ -8,7 +8,7 @@ mod v3000;
 
 use error::CTableError;
 use header::{Counts, HEADER_LINES, V3000_COUNTS_LINE, parse_header, with_v3000_counts};
-use v3000::{continued, logical_lines, renumbered, section_range, sections, validate_indices};
+use v3000::{logical_lines, renumbered, section_range, sections, validate_indices};
 
 /// The supported connection-table formats.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,16 +121,6 @@ impl CTable {
     pub fn renumber_indices(&mut self) -> Result<(), CTableError> {
         self.require_v3000("renumbering")?;
         let (atoms, bonds) = sections("renumbering", &self.lines)?;
-        if self.lines[atoms.clone()]
-            .iter()
-            .chain(&self.lines[bonds.clone()])
-            .any(|line| continued(line).is_some())
-        {
-            return Err(CTableError::Unsupported {
-                operation: "renumbering",
-                construct: "continued (-) atom or bond lines",
-            });
-        }
         let (mut new_atoms, mut new_bonds) = renumbered(&self.lines, atoms.clone(), bonds.clone())?;
         self.lines[atoms].swap_with_slice(&mut new_atoms);
         self.lines[bonds].swap_with_slice(&mut new_bonds);

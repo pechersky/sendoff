@@ -90,7 +90,7 @@ pub fn translate_newlines(space: &mut [u8], len: usize, pending_cr: &mut bool) -
     // and every `\r` a window's mask finds is at or after `read`.
     let lane_end = space.len().saturating_sub(LANE);
     while base < len {
-        let mut mask = byte_mask(&space[base..len.min(base + WINDOW)], b'\r');
+        let mut mask = byte_mask(&space[base..len], b'\r');
         while mask != 0 {
             let cr = base + mask.trailing_zeros() as usize;
             mask &= mask - 1;

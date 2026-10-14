@@ -7,12 +7,12 @@
 /// Bytes covered by one `byte_mask`.
 pub const WINDOW: usize = 64;
 
-/// Bit `i` is set when `window[i]` is `byte`; `window` may be short.
+/// Bit `i` is set when `window[i]` is `byte`, for the first `WINDOW` bytes.
 #[inline]
 pub fn byte_mask(window: &[u8], byte: u8) -> u64 {
-    match <&[u8; WINDOW]>::try_from(window) {
-        Ok(full) => full_mask(full, byte),
-        Err(_) => {
+    match window.first_chunk::<WINDOW>() {
+        Some(full) => full_mask(full, byte),
+        None => {
             let mut padded = [0; WINDOW];
             padded[..window.len()].copy_from_slice(window);
             full_mask(&padded, byte) & low_bits(window.len())
@@ -45,6 +45,10 @@ fn full_mask(window: &[u8; WINDOW], byte: u8) -> u64 {
 }
 
 /// The window's four 16-byte lanes, as integers that compile to vector loads.
+#[cfg(any(
+    all(target_arch = "x86_64", target_feature = "sse2"),
+    all(target_arch = "aarch64", target_feature = "neon"),
+))]
 #[inline]
 fn lanes(window: &[u8; WINDOW]) -> [u128; 4] {
     std::array::from_fn(|index| {
@@ -135,9 +139,7 @@ impl<'a> Lines<'a> {
     /// Iterate over the lines of `data` starting at `pos`.
     #[inline]
     pub fn new(data: &'a [u8], pos: usize) -> Self {
-        let newlines = data
-            .get(pos..)
-            .map_or(0, |rest| byte_mask(&rest[..rest.len().min(WINDOW)], b'\n'));
+        let newlines = data.get(pos..).map_or(0, |rest| byte_mask(rest, b'\n'));
         Self {
             data,
             pos,
@@ -150,12 +152,6 @@ impl<'a> Lines<'a> {
     #[inline]
     pub fn pos(&self) -> usize {
         self.pos
-    }
-
-    /// The data the lines are read from.
-    #[inline]
-    pub fn data(&self) -> &'a [u8] {
-        self.data
     }
 }
 
@@ -193,7 +189,7 @@ impl<'a> Iterator for Lines<'a> {
                 self.pos = self.data.len();
                 return Some(line);
             };
-            self.newlines = byte_mask(&rest[..rest.len().min(WINDOW)], b'\n');
+            self.newlines = byte_mask(rest, b'\n');
         }
         let end = self.base + self.newlines.trailing_zeros() as usize + 1;
         self.newlines &= self.newlines - 1;
