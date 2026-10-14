@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from sendoff.cli._common import STDIN, Blocks, failures, parser, run
+from sendoff.cli._common import STDIO, Blocks, failures, parser, run
 
 MOL = b"\n  sendoff\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\nM  END\n"
 GBK = "\N{GREEK SMALL LETTER BETA}-Bisabolene".encode("gbk")
@@ -147,7 +147,7 @@ def test_run_without_sigpipe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     """
 
     def closed(_: object) -> int:
-        with failures(parser("count", ""), Blocks(STDIN)):
+        with failures(parser("count", ""), Blocks(STDIO)):
             raise BrokenPipeError(errno.EPIPE, "Broken pipe")
 
     def full(_: object) -> int:

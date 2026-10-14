@@ -6,7 +6,7 @@ import os
 from collections.abc import Sequence
 
 from sendoff.cli._common import (
-    STDIN,
+    STDIO,
     Blocks,
     add_io,
     failures,
@@ -30,11 +30,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("files", nargs="*", metavar="FILE", help="default: stdin")
     add_io(p, many=True)
     args = p.parse_intermixed_args(argv)
-    paths = [*args.files, *(args.input or [])] or [STDIN]
+    paths = [*args.files, *(args.input or [])] or [STDIO]
     total = 0
     with opened(p, output(p, args.output, *paths)) as out:
         for path in paths:
-            blocks = Blocks(path, borrow=True)
+            blocks = Blocks(path)
             with failures(p, blocks):
                 count = sum(1 for _ in blocks)
             total += count

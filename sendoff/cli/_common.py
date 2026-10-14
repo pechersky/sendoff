@@ -13,7 +13,7 @@ from typing import BinaryIO, NoReturn
 
 from sendoff import SDBlock, parse_sdf
 
-STDIN = "-"
+STDIO = "-"
 
 
 def parser(command: str, description: str) -> argparse.ArgumentParser:
@@ -56,7 +56,7 @@ def add_io(p: argparse.ArgumentParser, *, many: bool = False) -> None:
         help="SD file, in place of FILE" + ("; repeatable" if many else ""),
     )
     p.add_argument(
-        "-o", "--output", default=STDIN, metavar="FILE", help="default: stdout"
+        "-o", "--output", default=STDIO, metavar="FILE", help="default: stdout"
     )
 
 
@@ -77,7 +77,7 @@ def input_path(
         p.error("give FILE or -i, not both")
     if option is not None:
         return option
-    return STDIN if operand is None else operand
+    return STDIO if operand is None else operand
 
 
 def output(
@@ -95,10 +95,10 @@ def output(
     Returns:
         The path, or stdout's buffer
     """
-    if path == STDIN:
+    if path == STDIO:
         return sys.stdout.buffer
     for source in inputs:
-        if source is not None and source != STDIN and same_file(source, path):
+        if source is not None and source != STDIO and same_file(source, path):
             p.error(f"-o {path} is also an input; write elsewhere, then mv")
     return path
 
@@ -144,13 +144,12 @@ def opened(p: argparse.ArgumentParser, target: str | BinaryIO) -> Iterator[Binar
 class Blocks:
     """Bytes blocks of an SD file, numbering the block being worked on.
 
-    ``borrow`` lets blocks of a mapped file read it in place, for commands
-    that never write over their input.
+    Mapped files are borrowed in place: commands refuse ``-o`` equal to an
+    input file, and edited blocks copy on write.
     """
 
-    def __init__(self, path: str, *, borrow: bool = False) -> None:
+    def __init__(self, path: str) -> None:
         self.path = path
-        self.borrow = borrow
         self.number = 0
 
     def __iter__(self) -> Iterator[SDBlock[bytes]]:
@@ -159,8 +158,8 @@ class Blocks:
         Yields:
             Each block, in bytes mode
         """
-        source = sys.stdin.buffer if self.path == STDIN else os.fsencode(self.path)
-        blocks = parse_sdf(source, borrow=self.borrow)
+        source = sys.stdin.buffer if self.path == STDIO else os.fsencode(self.path)
+        blocks = parse_sdf(source, borrow=True)
         for self.number, block in enumerate(blocks, 1):
             yield block
 
@@ -210,9 +209,9 @@ def pairs(
     if args.source is None:
         value = os.fsencode(args.value)
         return ((block, value) for block in blocks)
-    if args.source == STDIN == blocks.path:
+    if args.source == STDIO == blocks.path:
         p.error("--from - needs a FILE")
-    if args.source == STDIN:
+    if args.source == STDIO:
         data = sys.stdin.buffer.read()
     else:
         with open(args.source, "rb") as f:
@@ -220,7 +219,7 @@ def pairs(
     values = data.split(b"\0" if args.null else b"\n")
     if values[-1] == b"":
         values.pop()
-    return aligned(blocks, values, "stdin" if args.source == STDIN else args.source)
+    return aligned(blocks, values, "stdin" if args.source == STDIO else args.source)
 
 
 def aligned(

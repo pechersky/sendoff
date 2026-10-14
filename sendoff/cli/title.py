@@ -37,7 +37,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = p.parse_intermixed_args(argv)
     path = input_path(p, args.file, args.input)
-    blocks = Blocks(path, borrow=True)
+    blocks = Blocks(path)
     out = output(p, args.output, path, args.source)
 
     def titled() -> Iterator[SDBlock[bytes]]:

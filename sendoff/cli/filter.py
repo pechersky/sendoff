@@ -74,7 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("-v", "--invert", action="store_true", help="keep the others")
     args = p.parse_intermixed_args(argv)
     path = input_path(p, args.file, args.input)
-    blocks = Blocks(path, borrow=True)
+    blocks = Blocks(path)
     out = output(p, args.output, path)
     keep = not args.invert
     kept: Iterator[SDBlock[bytes]]

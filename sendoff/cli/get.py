@@ -55,7 +55,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         path = args.file
     path = input_path(p, path, args.input)
-    blocks = Blocks(path, borrow=True)
+    blocks = Blocks(path)
     end = b"\0" if args.null else b"\n"
     with opened(p, output(p, args.output, path)) as out, failures(p, blocks):
         if args.title:
