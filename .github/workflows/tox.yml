@@ -1,4 +1,4 @@
-name: Test
+name: Test and publish
 
 on:
   push:
@@ -52,6 +52,18 @@ jobs:
         check-latest: true
         allow-prereleases: false
         freethreaded: false
+    - name: Check the release tag against the Cargo version
+      if: startsWith(github.ref, 'refs/tags/')
+      env:
+        RELEASE_TAG: ${{ github.ref_name }}
+      run: |
+        python - <<'PY'
+        import os
+        import tomllib
+        from pathlib import Path
+        version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+        assert os.environ["RELEASE_TAG"] == f"v{version}", "tag/Cargo version mismatch"
+        PY
     - name: Set up Rust
       run: |
         rustup toolchain install stable --profile minimal
@@ -61,3 +73,48 @@ jobs:
       run: |
         python -m pip install --disable-pip-version-check 'tox>=4.24,<5'
         python -m tox -e py
+
+  wheels:
+    needs: [clippy, test]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/wheels.yml
+
+  # PyPI trusts this workflow and environment to publish sendoff.
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: wheels
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: pypi
+      url: https://pypi.org/project/sendoff/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        pattern: sendoff-*
+        path: dist
+        merge-multiple: true
+    # Eight platforms: manylinux and musllinux on x86_64 and aarch64, macOS
+    # and Windows on x86_64 and arm64.
+    - name: Check the artifact set
+      run: |
+        python3 - <<'PY'
+        import tomllib
+        from collections import Counter
+        from pathlib import Path
+        version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+        names = {path.name for path in Path("dist").iterdir()}
+        wheels = {name for name in names if name.endswith(".whl")}
+        assert names - wheels == {f"sendoff-{version}.tar.gz"}, sorted(names - wheels)
+        assert all(name.startswith(f"sendoff-{version}-") for name in wheels)
+        abis = Counter(name.split("-")[3] for name in wheels)
+        expected = dict.fromkeys(["cp311", "cp312", "cp313", "cp314", "cp315", "abi3"], 8)
+        assert abis == expected, abis
+        PY
+    - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

@@ -159,6 +159,7 @@ cmd = "cargo check && git add -- Cargo.lock"
 #   .venv/bin/towncrier --draft, then .venv/bin/towncrier
 #   The Build wheels workflow (.github/workflows/wheels.yml) makes the PGO
 #   wheels and sdist; scripts/pgo-build --out dist makes one wheel locally.
+#   Pushing the v* tag tests, builds, and publishes to PyPI (tox.yml).
 package = "sendoff"
 filename = "doc/changelog.rst"
 directory = "newsfragments"
