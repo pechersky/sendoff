@@ -134,15 +134,14 @@ def test_module_dies_quietly_on_closed_pipe(sdf: Path, module: list[str]) -> Non
     """
     count = [sys.executable, *module, str(sdf)]
     assert subprocess.run(count, capture_output=True, check=True).stdout == b"3\n"
-    many = [sys.executable, *module, *[sdf.name] * 4000]
-    with subprocess.Popen(
-        many, cwd=sdf.parent, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    ) as p:
-        assert p.stdout is not None and p.stderr is not None
-        p.stdout.read(1)
-        p.stdout.close()
-        assert p.stderr.read() == b""
-    assert p.returncode != 0
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)
+    try:
+        closed = subprocess.run(count, stdout=write_fd, stderr=subprocess.PIPE)
+    finally:
+        os.close(write_fd)
+    assert closed.stderr == b""
+    assert closed.returncode != 0
 
 
 def test_run_without_sigpipe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
