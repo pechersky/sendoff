@@ -74,9 +74,7 @@ also skips copying each block: blocks read the file in place until edited,
 so the same holds for as long as they live.
 
 New headers are ``> <name>``; ``header="padded"`` writes ``>  <name>``, as
-RDKit does, and ``header="copy"`` follows the block's first header. Names and
-values are not validated: keep names to one line, and values free of blank
-lines and ``$$$$`` lines, or they read back as other records or blocks.
+RDKit does, and ``header="copy"`` follows the block's first header.
 
 Non-UTF-8 files
 ---------------
