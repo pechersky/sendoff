@@ -157,8 +157,9 @@ fn unchanged<'py>(
 /// invalid ones differently.
 ///
 /// A record's value is its lines up to a blank one, as read but without
-/// their line endings, joined with "\n". Lines that `str.strip()`, or
-/// `bytes.strip()` for bytes blocks, empties are blank. Methods that read
+/// their line endings, joined with "\n". Lines of only ASCII whitespace,
+/// which `bytes.strip()` removes, are blank, in str blocks too, as in RDKit
+/// and OEChem. Methods that read
 /// records raise sendoff.MalformedRecordError, a ValueError, at a header
 /// line with no `<name>`. Values are written unchecked too: a value with a
 /// blank line or a `$$$$` line reads back as more records or blocks.
@@ -347,7 +348,7 @@ impl PySDBlock {
         action: impl FnOnce() -> String,
     ) -> PyErr {
         if error.is_instance_of::<PyUnicodeDecodeError>(py) {
-            let title = String::from_utf8_lossy(self.block.title(Strip::Str));
+            let title = String::from_utf8_lossy(self.block.title(Strip::Bytes));
             let note = format!("{} the SDBlock titled '{title}'. {DECODE_HINT}", action());
             if let Err(error) = error.add_note(py, note) {
                 return error;
@@ -530,9 +531,8 @@ impl PySDBlock {
 
     /// Return the title line without trailing whitespace, in the input type.
     ///
-    /// The title is right-stripped as `str.rstrip()` does for str blocks and
-    /// as `bytes.rstrip()` does for bytes blocks; `molblock` and writes keep
-    /// the whole title line.
+    /// Only ASCII whitespace is stripped, as `bytes.rstrip()` does, in str
+    /// blocks too; `molblock` and writes keep the whole title line.
     #[getter]
     fn title<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.kind

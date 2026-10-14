@@ -33,10 +33,7 @@ impl Kind {
 
     /// The Python `strip()` that values of this kind follow.
     pub(super) fn strip(self) -> Strip {
-        match self {
-            Kind::Text => Strip::Str,
-            Kind::Bytes => Strip::Bytes,
-        }
+        Strip::Bytes
     }
 }
 

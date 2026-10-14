@@ -10,7 +10,8 @@ including input past the read chunk and the map's resident window, and
 blocks borrowed from a mapped file.
 
 The alphabet includes whitespace that only ``str.strip`` removes, such as
-``\x1f`` and the ideographic space, but not ``str.splitlines`` breaks.
+``\x1f`` and the ideographic space, which neither mode strips, but not
+``str.splitlines`` breaks.
 """
 
 from __future__ import annotations

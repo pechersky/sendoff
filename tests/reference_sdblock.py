@@ -16,8 +16,9 @@ doubled. The title line is kept and written as read, and ``title`` only
 right-strips it, since a stripped title such as `` $$$$`` written back reads
 as a delimiter. Record values keep their lines as read, without the line
 endings, as RDKit reads them; blank lines and headers are still found by
-stripping. Divergences that are accepted but not modeled here are kept
-out of the generated inputs instead.
+stripping ASCII whitespace, as ``bytes.strip()`` does, in str blocks too,
+where main used ``str.strip()``. Divergences that are accepted but not modeled
+here are kept out of the generated inputs instead.
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ from itertools import groupby
 from typing import Generic, Iterable, Iterator, TypeVar
 
 AnyStr = TypeVar("AnyStr", str, bytes)
+
+SPACE = " \t\n\r\x0b\x0c"
 
 
 def _lit(sample: AnyStr, text: str) -> AnyStr:
@@ -42,6 +45,18 @@ def _lit(sample: AnyStr, text: str) -> AnyStr:
     if isinstance(sample, str):
         return text
     return text.encode()
+
+
+def _strip(line: AnyStr) -> AnyStr:
+    """Strip ASCII whitespace from both ends, as ``bytes.strip()`` does.
+
+    Args:
+        line: a str or bytes line
+
+    Returns:
+        The stripped line.
+    """
+    return line.strip(_lit(line, SPACE))
 
 
 @dataclass
@@ -105,7 +120,7 @@ class RefBlock(Generic[AnyStr]):
         Returns:
             The right-stripped title line.
         """
-        return self.title_line.rstrip()
+        return self.title_line.rstrip(_lit(self.title_line, SPACE))
 
     def records(self) -> list[tuple[AnyStr, AnyStr]]:
         """Return (name, value) records as main's generator groups them.
@@ -115,13 +130,12 @@ class RefBlock(Generic[AnyStr]):
             newlines.
         """
         records: list[tuple[AnyStr, AnyStr]] = []
-        for _, chunk in groupby(self.metadata, lambda line: bool(line.strip())):
-            record_line = next(chunk).strip()
+        for _, chunk in groupby(self.metadata, lambda line: bool(_strip(line))):
+            record_line = _strip(next(chunk))
             if not record_line.startswith(_lit(record_line, "> ")):
                 continue
             name = (
-                record_line.split(_lit(record_line, "> "), 1)[1]
-                .strip()
+                _strip(record_line.split(_lit(record_line, "> "), 1)[1])
                 .rsplit(_lit(record_line, ">"), 1)[0]
                 .split(_lit(record_line, "<"), 1)[1]
             )
@@ -144,7 +158,7 @@ class RefBlock(Generic[AnyStr]):
         """
         newline = self.newline
         self.titled = True
-        if self.metadata and self.metadata[-1].strip():
+        if self.metadata and _strip(self.metadata[-1]):
             self.metadata.append(newline)
         before = _lit(name, ">  <" if header == "padded" else "> <")
         after = _lit(name, ">")
@@ -161,9 +175,9 @@ class RefBlock(Generic[AnyStr]):
             The text through ``<`` and from the closing ``>``, without the
             line ending, or None without a named header or a closing ``>``.
         """
-        for _, chunk in groupby(self.metadata, lambda line: bool(line.strip())):
+        for _, chunk in groupby(self.metadata, lambda line: bool(_strip(line))):
             line = next(chunk)
-            field = line.strip()
+            field = _strip(line)
             if not field.startswith(_lit(line, "> ")):
                 continue
             if _lit(line, "<") not in field[2:].rsplit(_lit(line, ">"), 1)[0]:

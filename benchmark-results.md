@@ -455,4 +455,5 @@ as their values are GBK.
 - OEChem default drops B's 12 zero-atom records per 10,000.
 - A `record_dicts`: in text mode, sendoff treats a value line holding only
   U+3000 (ideographic space) as blank, ending the value. The toolkits and
-  sendoff's bytes mode treat only ASCII whitespace as blank.
+  sendoff's bytes mode treat only ASCII whitespace as blank. Since fixed:
+  str blocks use ASCII whitespace too.

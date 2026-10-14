@@ -734,12 +734,12 @@ def test_title_setter_replaces_only_the_title() -> None:
     assert block.title == " $$$$"
 
 
-def test_text_strips_like_str_and_bytes_like_bytes() -> None:
-    """Text blocks strip str whitespace; bytes blocks only ASCII whitespace.
+def test_only_ascii_whitespace_strips() -> None:
+    """Str and bytes blocks strip only ASCII whitespace, as RDKit does.
 
     Titles are right-stripped and values kept as read. A value line holding
-    only Unicode whitespace is blank in text blocks, as with str.strip() in
-    pure-Python sendoff 0.1.x, so it ends the record.
+    only Unicode whitespace is not blank, unlike str.strip() in pure-Python
+    sendoff 0.1.x, so it does not end the record.
     """
     text_block = next(
         SDBlock.from_lines(
@@ -772,7 +772,10 @@ def test_text_strips_like_str_and_bytes_like_bytes() -> None:
         )
     )
 
-    assert text_block.title == " \u2003Title"
-    assert text_block.records() == [("Record", "\u2003Text\x1f"), ("Blank", "")]
+    assert text_block.title == " \u2003Title\u3000"
+    assert text_block.records() == [
+        ("Record", "\u2003Text\x1f"),
+        ("Blank", "\u3000\nskipped"),
+    ]
     assert byte_block.title == b"\xc2\xa0Title\xc2\xa0"
     assert byte_block.records() == [(b"Record", b"\xc2\xa0Bytes\x1f")]
