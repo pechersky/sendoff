@@ -324,8 +324,8 @@
  ) -> _SDBlockIterator[Any]:
      """
      Lazily parse SDBlocks from an SDF path or file object.
-@@ -740,9 +832,12 @@
-             `zcat` do
+@@ -737,9 +829,12 @@
+         TypeError: if `source` is neither a path nor a file object
      """
 
 +@overload
@@ -339,7 +339,7 @@
      """
      Write SDBlocks one at a time to a path or a file object, buffered.
 
-@@ -762,10 +857,13 @@
+@@ -759,10 +854,13 @@
          OSError: if `dest` cannot be created
      """
 
@@ -355,7 +355,7 @@
      """
      Write SDBlocks to a path or a file object, and return how many.
 
-@@ -798,5 +896,3 @@
+@@ -795,5 +893,3 @@
          UnicodeDecodeError: for a str block that is not UTF-8
          OSError: if `dest` cannot be created or written
      """

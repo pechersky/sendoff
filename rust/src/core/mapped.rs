@@ -70,11 +70,6 @@ impl MappedBlocks {
         })
     }
 
-    /// The whole file.
-    pub fn data(&self) -> &[u8] {
-        &self.map
-    }
-
     /// Whether every block has been split.
     pub fn is_done(&self) -> bool {
         self.pos == self.map.len()

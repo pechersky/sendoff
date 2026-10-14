@@ -1,7 +1,6 @@
 //! Pure Rust algorithms, independent of PyO3.
 
 pub mod block;
-pub mod compressed;
 pub mod ctable;
 pub mod index;
 pub mod lines;

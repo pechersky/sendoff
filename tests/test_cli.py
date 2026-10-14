@@ -1,7 +1,6 @@
 # mypy: allow-untyped-decorators
 """Test the python -m sendoff.cli.<command> shell helpers."""
 import errno
-import gzip
 import importlib
 import io
 import os
@@ -107,33 +106,6 @@ def test_missing_file(
     status, out, err = cli(capsysbinary, monkeypatch, "count", tmp_path / "nope")
     assert (status, out) == (1, b"")
     assert err.startswith(b"python -m sendoff.cli.count: [Errno 2]")
-
-
-def test_compressed_input(
-    capsysbinary: pytest.CaptureFixture[bytes],
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Gzip input fails with status 1, asking for zcat.
-
-    Args:
-        capsysbinary: pytest fixture capturing binary output
-        monkeypatch: pytest fixture to replace stdin
-        tmp_path: pytest fixture of a temporary directory
-    """
-    path = tmp_path / "in.sdf.gz"
-    path.write_bytes(gzip.compress(SDF))
-    why = b" is gzip-compressed; decompress it first, with gzip.open() or zcat\n"
-    assert cli(capsysbinary, monkeypatch, "count", path) == (
-        1,
-        b"",
-        b"python -m sendoff.cli.count: " + repr(str(path)).encode() + why,
-    )
-    assert cli(capsysbinary, monkeypatch, "count", stdin=path.read_bytes()) == (
-        1,
-        b"",
-        b"python -m sendoff.cli.count: the input" + why,
-    )
 
 
 # Runs the module as Windows would, where writes to a closed pipe raise.

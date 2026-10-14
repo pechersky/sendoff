@@ -107,8 +107,7 @@ The ``count``, ``get``, ``set``, ``title``, and ``filter`` commands read
 ``FILE`` or ``-i FILE``, else stdin, as bytes and write ``-o FILE``, else
 stdout; ``-o`` cannot name an input. ``get`` prints one line per block, empty
 where a record is missing, and ``--from`` reads one line per block; ``-z`` uses
-NUL instead. Run any with ``-h``. Compressed input raises ValueError;
-decompress it first, as ``zcat`` does.
+NUL instead. Run any with ``-h``.
 
 In Python, read compressed files with ``parse_sdf(gzip.open(path))``, and
 write a pipe with ``write_sdf(sys.stdout, blocks)``, or ``sys.stdout.buffer``
