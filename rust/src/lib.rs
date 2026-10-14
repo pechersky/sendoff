@@ -18,10 +18,10 @@ mod native {
     use crate::python::read::PySDBlockIterator as _SDBlockIterator;
 
     #[pymodule_export]
-    use crate::python::sdblock::PySDRecordIterator as _SDRecordIterator;
+    use crate::python::iter::PySDRecordIterator as _SDRecordIterator;
 
     #[pymodule_export]
-    use crate::python::sdblock::PySDNameIterator as _SDNameIterator;
+    use crate::python::iter::PySDNameIterator as _SDNameIterator;
 
     #[pymodule_export]
     use crate::python::errors::MalformedRecordError;

@@ -1,12 +1,10 @@
-//! The `SDBlock` Python class and its record iterator.
+//! The `SDBlock` Python class.
 
 use std::borrow::Cow;
 use std::ffi::c_int;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use pyo3::exceptions::{
-    PyKeyError, PyRuntimeError, PyTypeError, PyUnicodeDecodeError, PyValueError,
-};
+use pyo3::exceptions::{PyKeyError, PyTypeError, PyUnicodeDecodeError, PyValueError};
 use pyo3::ffi;
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -14,13 +12,12 @@ use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyList, PyString, PyTuple, Py
 
 use crate::core::block::{Block, Parts};
 use crate::core::ctable::CTable;
-use crate::core::ctable::error::CTableError;
-use crate::core::lines::lines;
 use crate::core::newline::{translated, universal_newlines};
 use crate::core::record::{HeaderStyle, Record};
 use crate::core::split::single_block;
 use crate::python::ctable::PyCTable;
 use crate::python::exports::Exported;
+use crate::python::iter::{PySDNameIterator, PySDRecordIterator};
 use crate::python::kind::{Kind, bytes_of, decode};
 use crate::python::names::Namer;
 use crate::python::read::PySDBlockIterator;
@@ -47,98 +44,6 @@ fn header_style(header: &str) -> PyResult<HeaderStyle> {
             "header must be 'plain', 'padded', or 'copy', not '{header}'"
         ))),
     }
-}
-
-/// Lazily iterate over one block's SD data records.
-#[pyclass(name = "_SDRecordIterator", module = "sendoff.native")]
-pub(crate) struct PySDRecordIterator {
-    block: Py<PySDBlock>,
-    edits: u64,
-    pos: usize,
-    finished: bool,
-}
-
-#[pymethods]
-impl PySDRecordIterator {
-    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        slf
-    }
-
-    fn __next__<'py>(&mut self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyTuple>>> {
-        if self.finished {
-            return Ok(None);
-        }
-        let block = unchanged(self.block.bind(py), self.edits, &mut self.finished)?;
-        let mut records = block.block.records_at(self.pos);
-        let result = match records.next() {
-            Some(Ok(record)) => Namer::with(block.kind, |names| names.lookup(py, record.name))
-                .and_then(|name| PyTuple::new(py, [name, block.kind.value(py, &record.value)?]))
-                .map_err(|error| block.noted(py, error, || reading_record(record.name)))
-                .map(Some),
-            None => Ok(None),
-            Some(Err(error)) => Err(error.into()),
-        };
-        self.pos = records.pos();
-        if !matches!(result, Ok(Some(_))) {
-            self.finished = true;
-        }
-        result
-    }
-}
-
-/// Lazily iterate over one block's record names.
-#[pyclass(name = "_SDNameIterator", module = "sendoff.native")]
-pub(crate) struct PySDNameIterator {
-    block: Py<PySDBlock>,
-    edits: u64,
-    pos: usize,
-    finished: bool,
-}
-
-#[pymethods]
-impl PySDNameIterator {
-    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        slf
-    }
-
-    fn __next__<'py>(&mut self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyAny>>> {
-        if self.finished {
-            return Ok(None);
-        }
-        let block = unchanged(self.block.bind(py), self.edits, &mut self.finished)?;
-        let mut headers = block.block.records_at(self.pos).headers();
-        let result = match headers.next() {
-            Some(Ok(header)) => {
-                self.pos = header.end;
-                Namer::with(block.kind, |names| names.lookup(py, header.name))
-                    .map_err(|error| block.noted(py, error, || reading_record(header.name)))
-                    .map(Some)
-            }
-            None => Ok(None),
-            Some(Err(error)) => Err(error.into()),
-        };
-        if !matches!(result, Ok(Some(_))) {
-            self.finished = true;
-        }
-        result
-    }
-}
-
-/// Borrow an iterator's block, or end the iteration with RuntimeError if
-/// its records changed since the iterator was made.
-fn unchanged<'py>(
-    block: &Bound<'py, PySDBlock>,
-    edits: u64,
-    finished: &mut bool,
-) -> PyResult<PyRef<'py, PySDBlock>> {
-    let block = block.try_borrow()?;
-    if block.edits != edits {
-        *finished = true;
-        return Err(PyRuntimeError::new_err(
-            "SDBlock records changed during iteration",
-        ));
-    }
-    Ok(block)
 }
 
 /// Handle a single molecule block from an SD file.
@@ -172,7 +77,7 @@ pub(crate) struct PySDBlock {
     pub(super) kind: Kind,
     /// Counts edits to the SD data, so record iterators can tell they are
     /// stale without copying the records.
-    edits: u64,
+    pub(super) edits: u64,
     /// Whether a text block's data is known to be UTF-8, as it is when read
     /// from str or already decoded whole. Edits keep it: they replace whole
     /// lines with str arguments.
@@ -233,14 +138,13 @@ impl PySDBlock {
     }
 
     /// Set the record `name` as `set_record` does.
-    fn put(
+    fn put_record(
         &mut self,
         name: &Bound<'_, PyAny>,
         value: &Bound<'_, PyAny>,
         style: HeaderStyle,
     ) -> PyResult<()> {
-        let name = self.arg_bytes(name, "record names")?;
-        let value = self.arg_bytes(value, "values")?;
+        let (name, value) = self.arg_pair(name, value)?;
         self.block.get_mut()?.set_record(name, value, style)?;
         self.edited();
         Ok(())
@@ -251,7 +155,7 @@ impl PySDBlock {
     /// Inlined into records() and to_dict(): called out of line once per
     /// record, it cost those 2-3%.
     #[inline(always)]
-    fn record<'py>(
+    fn record_pair<'py>(
         &self,
         py: Python<'py>,
         names: &mut Namer<'_>,
@@ -262,56 +166,6 @@ impl PySDBlock {
             names.name(py, record.name).map_err(noted)?,
             self.kind.value(py, &record.value).map_err(noted)?,
         ))
-    }
-
-    /// Parse the title and MDL lines as a CTable, decoding a bytes block's
-    /// as Latin-1, so every byte round-trips.
-    fn parse_ctable(&self, py: Python<'_>) -> PyResult<CTable> {
-        let title = self.block.title();
-        let decoded = match self.kind {
-            Kind::Text => {
-                let noted = |error| self.noted(py, error, || "Reading the CTAB of".into());
-                let mut decoded = vec![decode(py, title).map_err(noted)?.to_owned()];
-                for line in lines(self.block.mdl()) {
-                    decoded.push(decode(py, line).map_err(noted)?.to_owned());
-                }
-                decoded
-            }
-            Kind::Bytes => std::iter::once(title)
-                .chain(lines(self.block.mdl()))
-                .map(|line| line.iter().map(|&byte| char::from(byte)).collect())
-                .collect(),
-        };
-        Ok(CTable::parse(decoded)?)
-    }
-
-    /// Apply `edit` to the block's CTable, then replace the MDL lines with
-    /// the edited table's.
-    fn edit_ctable(
-        &mut self,
-        py: Python<'_>,
-        edit: impl FnOnce(&mut CTable) -> Result<(), CTableError>,
-    ) -> PyResult<()> {
-        let mut ctable = self.parse_ctable(py)?;
-        edit(&mut ctable)?;
-        let lines = &ctable.lines[1..];
-        match self.kind {
-            Kind::Text => self
-                .block
-                .get_mut()?
-                .replace_mdl(lines.iter().map(String::as_bytes)),
-            Kind::Bytes => {
-                // Edits write ASCII, so every char is a Latin-1 byte.
-                let encoded: Vec<Vec<u8>> = lines
-                    .iter()
-                    .map(|line| line.chars().map(|c| c as u8).collect())
-                    .collect();
-                self.block
-                    .get_mut()?
-                    .replace_mdl(encoded.iter().map(Vec::as_slice));
-            }
-        }
-        Ok(())
     }
 
     /// Add to a decode error a note naming this block, what of it `action`
@@ -343,13 +197,26 @@ impl PySDBlock {
             })),
         }
     }
+
+    /// The bytes of a record `(name, value)` pair, both matching the block's
+    /// type.
+    fn arg_pair<'a>(
+        &self,
+        name: &'a Bound<'_, PyAny>,
+        value: &'a Bound<'_, PyAny>,
+    ) -> PyResult<(&'a [u8], &'a [u8])> {
+        Ok((
+            self.arg_bytes(name, "record names")?,
+            self.arg_bytes(value, "values")?,
+        ))
+    }
 }
 
 /// How to read SDF that is not UTF-8, for notes on decode errors.
 const DECODE_HINT: &str = "parse_sdf(os.fsencode(path)) reads such files as bytes, and \
     parse_sdf(open(path, encoding=...)) decodes another encoding.";
 
-fn reading_record(name: &[u8]) -> String {
+pub(super) fn reading_record(name: &[u8]) -> String {
     format!("Reading record '{}' of", String::from_utf8_lossy(name))
 }
 
@@ -449,8 +316,7 @@ impl PySDBlock {
         let mut slf = Self::wrap(block, kind, true);
         if let Some(records) = records {
             for (name, value) in record_pairs(records)? {
-                let name = slf.arg_bytes(&name, "record names")?;
-                let value = slf.arg_bytes(&value, "values")?;
+                let (name, value) = slf.arg_pair(&name, &value)?;
                 slf.block.get_mut()?.append_record(name, value, style);
             }
         }
@@ -559,7 +425,7 @@ impl PySDBlock {
         let list = PyList::empty(py);
         Namer::with(self.kind, |names| {
             for record in self.block.records() {
-                list.append(self.record(py, names, &record?)?)?;
+                list.append(self.record_pair(py, names, &record?)?)?;
             }
             Ok(list)
         })
@@ -572,13 +438,7 @@ impl PySDBlock {
     /// in a loop, loop over `records()`.
     #[pyo3(signature = () -> "_SDRecordIterator[AnyStr]")]
     fn iter_records(slf: Bound<'_, Self>) -> PySDRecordIterator {
-        let edits = slf.borrow().edits;
-        PySDRecordIterator {
-            block: slf.unbind(),
-            edits,
-            pos: 0,
-            finished: false,
-        }
+        PySDRecordIterator::new(slf)
     }
 
     /// Return the value of the last record named `name`, or `default`.
@@ -622,7 +482,7 @@ impl PySDBlock {
     /// Raises:
     ///     TypeError: if `name` or `value` is not the block's type
     fn __setitem__(&mut self, name: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.put(name, value, HeaderStyle::Plain)
+        self.put_record(name, value, HeaderStyle::Plain)
     }
 
     /// Remove every record named `name`, as `remove_record(name)` does.
@@ -641,13 +501,7 @@ impl PySDBlock {
     /// included, as `names()` lists them. Like a dict, the iterator raises
     /// RuntimeError if the records change.
     fn __iter__(slf: Bound<'_, Self>) -> PySDNameIterator {
-        let edits = slf.borrow().edits;
-        PySDNameIterator {
-            block: slf.unbind(),
-            edits,
-            pos: 0,
-            finished: false,
-        }
+        PySDNameIterator::new(slf)
     }
 
     /// Return the record names in input order, duplicates included.
@@ -768,7 +622,7 @@ impl PySDBlock {
         let dict = PyDict::new(py);
         Namer::with(self.kind, |names| {
             for record in self.block.records() {
-                let (name, value) = self.record(py, names, &record?)?;
+                let (name, value) = self.record_pair(py, names, &record?)?;
                 dict.set_item(name, value)?;
             }
             Ok(dict)
@@ -864,8 +718,7 @@ impl PySDBlock {
         header: &str,
     ) -> PyResult<()> {
         let style = header_style(header)?;
-        let name = self.arg_bytes(name, "record names")?;
-        let value = self.arg_bytes(value, "values")?;
+        let (name, value) = self.arg_pair(name, value)?;
         self.block.get_mut()?.append_record(name, value, style);
         self.edited();
         Ok(())
@@ -894,7 +747,7 @@ impl PySDBlock {
         value: &Bound<'_, PyAny>,
         header: &str,
     ) -> PyResult<()> {
-        self.put(name, value, header_style(header)?)
+        self.put_record(name, value, header_style(header)?)
     }
 
     /// Remove every record named `name`.
@@ -948,12 +801,7 @@ impl PySDBlock {
         let mut this = slf.try_borrow_mut()?;
         let records = pairs
             .iter()
-            .map(|(name, value)| {
-                Ok((
-                    this.arg_bytes(name, "record names")?,
-                    this.arg_bytes(value, "values")?,
-                ))
-            })
+            .map(|(name, value)| this.arg_pair(name, value))
             .collect::<PyResult<Vec<_>>>()?;
         this.block.get_mut()?.replace_records(records, style);
         this.edited();

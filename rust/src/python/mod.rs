@@ -1,6 +1,7 @@
 pub(crate) mod ctable;
 pub(crate) mod errors;
 mod exports;
+pub(crate) mod iter;
 mod kind;
 mod names;
 mod os;

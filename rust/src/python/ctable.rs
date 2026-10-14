@@ -1,6 +1,10 @@
 use pyo3::prelude::*;
 
+use crate::core::ctable::error::CTableError;
 use crate::core::ctable::{CTable, Section};
+use crate::core::lines::lines;
+use crate::python::kind::{Kind, decode};
+use crate::python::sdblock::PySDBlock;
 
 /// Handle a Connection table (CTAB) from a single molecule block.
 ///
@@ -169,5 +173,54 @@ impl PyCTable {
 impl From<CTable> for PyCTable {
     fn from(inner: CTable) -> Self {
         Self { inner }
+    }
+}
+
+impl PySDBlock {
+    /// Parse the title and MDL lines as a CTable, decoding a bytes block's
+    /// as Latin-1, so every byte round-trips.
+    pub(super) fn parse_ctable(&self, py: Python<'_>) -> PyResult<CTable> {
+        let raw_lines = std::iter::once(self.block.title()).chain(lines(self.block.mdl()));
+        let decoded = match self.kind {
+            Kind::Text => {
+                let noted = |error| self.noted(py, error, || "Reading the CTAB of".into());
+                raw_lines
+                    .map(|line| Ok(decode(py, line).map_err(noted)?.to_owned()))
+                    .collect::<PyResult<Vec<_>>>()?
+            }
+            Kind::Bytes => raw_lines
+                .map(|line| line.iter().map(|&byte| char::from(byte)).collect())
+                .collect(),
+        };
+        Ok(CTable::parse(decoded)?)
+    }
+
+    /// Apply `edit` to the block's CTable, then replace the MDL lines with
+    /// the edited table's.
+    pub(super) fn edit_ctable(
+        &mut self,
+        py: Python<'_>,
+        edit: impl FnOnce(&mut CTable) -> Result<(), CTableError>,
+    ) -> PyResult<()> {
+        let mut ctable = self.parse_ctable(py)?;
+        edit(&mut ctable)?;
+        let lines = &ctable.lines[1..];
+        match self.kind {
+            Kind::Text => self
+                .block
+                .get_mut()?
+                .replace_mdl(lines.iter().map(String::as_bytes)),
+            Kind::Bytes => {
+                // Edits write ASCII, so every char is a Latin-1 byte.
+                let encoded: Vec<Vec<u8>> = lines
+                    .iter()
+                    .map(|line| line.chars().map(|c| c as u8).collect())
+                    .collect();
+                self.block
+                    .get_mut()?
+                    .replace_mdl(encoded.iter().map(Vec::as_slice));
+            }
+        }
+        Ok(())
     }
 }
