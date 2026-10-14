@@ -160,7 +160,8 @@ fn unchanged<'py>(
 /// their line endings, joined with "\n". Lines that `str.strip()`, or
 /// `bytes.strip()` for bytes blocks, empties are blank. Methods that read
 /// records raise sendoff.MalformedRecordError, a ValueError, at a header
-/// line with no `<name>`.
+/// line with no `<name>`. Values are written unchecked too: a value with a
+/// blank line or a `$$$$` line reads back as more records or blocks.
 #[pyclass(
     name = "SDBlock",
     module = "sendoff.native",
