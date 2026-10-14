@@ -61,3 +61,6 @@ dist-rel/
 /scripts/sdf_benchmark_ec2/
 /tests/test_benchmark.py
 /tests/test_benchmark_ec2.py
+
+# Local release-note drafts
+/.release-notes/

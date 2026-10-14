@@ -23,7 +23,7 @@ classifiers = [
 
 [project.urls]
 Repository = "https://github.com/pechersky/sendoff"
-Changelog = "https://github.com/pechersky/sendoff/blob/main/doc/changelog.rst"
+Changelog = "https://github.com/pechersky/sendoff/releases"
 Issues = "https://github.com/pechersky/sendoff/issues"
 
 [project.optional-dependencies]
@@ -54,7 +54,6 @@ dev = [
     "flake8-docstrings>=1.7.0,<2",
     "pydocstyle>=6.3.0,<7",
     "black>=25.1,<26",
-    "towncrier>=23.10.0,<27",
     "pre-commit>=3.5.0,<5",
     "darglint>=1.8.1,<2",
     "tbump>=6.11.0,<7",
@@ -127,6 +126,10 @@ exclude = '''
 )/
 '''
 
+# Release: `tbump X.Y.Z` bumps Cargo.toml and Cargo.lock, commits, tags vX.Y.Z
+# and pushes. The tag runs tox.yml: tests, PGO wheels and sdist (wheels.yml),
+# then PyPI. scripts/pgo-build --out dist makes one wheel locally. Release
+# notes go on the GitHub release.
 [tool.tbump.version]
 current = "0.1.6"
 
@@ -149,20 +152,6 @@ search = 'version = "{current_version}"'
 [[tool.tbump.before_commit]]
 name = "Synchronize the package version in Cargo.lock"
 cmd = "cargo check && git add -- Cargo.lock"
-
-[tool.towncrier]
-# Usage: (Source: https://github.com/python-trio/trio/blob/master/pyproject.toml)
-# - PRs should drop a file like "issuenumber.feature" in newsfragments
-#   (or "bugfix", "doc", "removal", "misc")
-# - At release time after bumping version number, run:
-#   VIRTUAL_ENV="$PWD/.venv" .venv/bin/maturin develop --locked
-#   .venv/bin/towncrier --draft, then .venv/bin/towncrier
-#   The Build wheels workflow (.github/workflows/wheels.yml) makes the PGO
-#   wheels and sdist; scripts/pgo-build --out dist makes one wheel locally.
-#   Pushing the v* tag tests, builds, and publishes to PyPI (tox.yml).
-package = "sendoff"
-filename = "doc/changelog.rst"
-directory = "newsfragments"
 
 [build-system]
 requires = ["maturin==1.15.0"]
