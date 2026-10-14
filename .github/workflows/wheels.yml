@@ -39,7 +39,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-2025]
+        os:
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+          - macos-15-intel
+          - macos-15
+          - windows-2025
+          - windows-11-arm
         abi: [per-version, abi3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,14 +58,14 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal --component llvm-tools
           rustup default stable
-      # One abi3 wheel serves CPython 3.15 and later; test it on the oldest
+      # One abi3 wheel serves CPython 3.16 and later; test it on the oldest
       # and newest supported versions.
       - name: Select the abi3 build
         if: matrix.abi == 'abi3'
         shell: bash
         run: |
           echo 'MATURIN_PEP517_ARGS=--features abi3' >> "$GITHUB_ENV"
-          echo 'CIBW_BUILD=cp311-* cp314-*' >> "$GITHUB_ENV"
+          echo 'CIBW_BUILD=cp311-* cp315-*' >> "$GITHUB_ENV"
       - uses: pypa/cibuildwheel@b3395e271a35f73dad77f21802abe9b986dfe299 # v4.3.1
         with:
           output-dir: wheelhouse
