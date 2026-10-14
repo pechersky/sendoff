@@ -162,7 +162,12 @@ fn extent(data: &[u8], text: bool) -> (usize, Option<usize>) {
 /// so blocks match a `Scanner` over translated input.
 pub fn split_block(data: &[u8], text: bool) -> (Block, usize) {
     let (end, delimiter) = extent(data, text);
-    (copied(&data[..end], delimiter, text, 0), end)
+    let clean = if text {
+        memchr(b'\r', &data[..end]).unwrap_or(end)
+    } else {
+        end
+    };
+    (copied(&data[..end], delimiter, text, clean), end)
 }
 
 /// Split the first block from `map[pos..]`, which is nonempty, as
@@ -192,7 +197,7 @@ pub fn borrow_block(map: &Arc<Mmap>, pos: usize, text: bool) -> (Block, usize) {
 /// `delimiter`, translating universal newlines for `text` from `clean`, as
 /// no `\r` comes before it.
 fn copied(data: &[u8], delimiter: Option<usize>, text: bool, clean: usize) -> Block {
-    if !text {
+    if !text || clean == data.len() {
         return Block::new(data.to_vec(), delimiter);
     }
     let block = translated_from(data, clean);

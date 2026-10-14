@@ -69,12 +69,26 @@ pub fn translate_newlines(space: &mut [u8], len: usize, pending_cr: &mut bool) -
     if std::mem::take(pending_cr) && space[read] == b'\n' {
         read += 1;
     }
+    // Skip the `\r`-free prefix with vectorized `memchr` before entering the
+    // windowed translator: LF-only inputs return immediately, and blocks with
+    // LF molblocks and CRLF SD records jump straight to the first `\r`.
+    let mut base = if read == 0 && space[0] != b'\r' {
+        match memchr(b'\r', &space[..len]) {
+            Some(first) => {
+                read = first;
+                write = first;
+                first
+            }
+            None => return len,
+        }
+    } else {
+        0
+    };
     // Scan each window once for `\r` instead of calling `memchr` per `\r`:
     // CRLF files have a `\r` every line, where per-call setup dominates.
     // Writes stay below `read`, so bytes at or after `read` are unmodified,
     // and every `\r` a window's mask finds is at or after `read`.
     let lane_end = space.len().saturating_sub(LANE);
-    let mut base = 0;
     while base < len {
         let mut mask = byte_mask(&space[base..len.min(base + WINDOW)], b'\r');
         while mask != 0 {
@@ -116,12 +130,18 @@ pub fn translate_newlines(space: &mut [u8], len: usize, pending_cr: &mut bool) -
 /// `bytes` with `\r\n` and lone `\r` translated to `\n`, as Python reads
 /// text.
 pub fn translated(bytes: &[u8]) -> Vec<u8> {
-    translated_from(bytes, 0)
+    match memchr(b'\r', bytes) {
+        Some(from) => translated_from(bytes, from),
+        None => bytes.to_vec(),
+    }
 }
 
 /// `translated`, for `bytes` known to have no `\r` before `from`, which it
 /// copies without scanning.
 pub fn translated_from(bytes: &[u8], from: usize) -> Vec<u8> {
+    if from == bytes.len() {
+        return bytes.to_vec();
+    }
     let mut buffer = Vec::with_capacity(bytes.len() + TRANSLATE_SLACK);
     buffer.extend_from_slice(bytes);
     buffer.resize(bytes.len() + TRANSLATE_SLACK, 0);
@@ -132,10 +152,9 @@ pub fn translated_from(bytes: &[u8], from: usize) -> Vec<u8> {
 
 /// Like `translated`, but borrow `bytes` when it has no `\r`.
 pub fn universal_newlines(bytes: &[u8]) -> Cow<'_, [u8]> {
-    if memchr(b'\r', bytes).is_some() {
-        Cow::Owned(translated(bytes))
-    } else {
-        Cow::Borrowed(bytes)
+    match memchr(b'\r', bytes) {
+        Some(from) => Cow::Owned(translated_from(bytes, from)),
+        None => Cow::Borrowed(bytes),
     }
 }
 
