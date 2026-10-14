@@ -17,6 +17,7 @@ use crate::core::split::{borrow_block, split_block};
 /// Input kept mapped in behind the cursor before older pages are dropped.
 ///
 /// An 8 MiB window parsed no faster but added its size to peak RSS.
+#[cfg_attr(not(unix), expect(dead_code))]
 const RESIDENT: usize = 1 << 20;
 
 /// Blocks split from a mapped file.
@@ -25,6 +26,7 @@ pub struct MappedBlocks {
     /// Start of the next block.
     pos: usize,
     /// Pages before this offset have been dropped.
+    #[cfg_attr(not(unix), expect(dead_code))]
     dropped: usize,
     text: bool,
     borrow: bool,
