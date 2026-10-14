@@ -169,18 +169,21 @@ def test_write_sdf_raises_os_errors(tmp_path: Path) -> None:
         tmp_path: pytest fixture of a temporary directory
     """
     blocks = [SDBlock("t\nM  END\n")]
-    locked = tmp_path / "locked"
-    locked.mkdir(mode=0o500)
-    dests: dict[type[OSError], Path] = {
-        IsADirectoryError: tmp_path,
-        FileNotFoundError: tmp_path / "missing" / "x.sdf",
-    }
-    if os.geteuid() != 0:
-        dests[PermissionError] = locked / "x.sdf"
-    for error, dest in dests.items():
-        with pytest.raises(error) as raised:
+    dests = [tmp_path, tmp_path / "missing" / "x.sdf"]
+    # Windows ignores the mode, and root ignores permissions.
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        locked = tmp_path / "locked"
+        locked.mkdir(mode=0o500)
+        dests.append(locked / "x.sdf")
+    for dest in dests:
+        with pytest.raises(OSError) as expected:
+            open(dest, "wb")
+        with pytest.raises(type(expected.value)) as raised:
             write_sdf(dest, blocks)
-        assert raised.value.filename == str(dest)
+        assert (raised.value.errno, raised.value.filename) == (
+            expected.value.errno,
+            str(dest),
+        )
     if os.path.exists("/dev/full"):
         with pytest.raises(OSError) as raised:
             write_sdf(b"/dev/full", blocks)

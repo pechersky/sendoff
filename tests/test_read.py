@@ -596,8 +596,11 @@ def test_parse_sdf_raises_open_errors_on_first_next(tmp_path: Path) -> None:
         next(blocks)
     assert info.value.errno == errno.ENOENT
     assert info.value.filename == str(missing)
-    with pytest.raises(IsADirectoryError):
+    with pytest.raises(OSError) as expected:
+        open(tmp_path, "rb")
+    with pytest.raises(type(expected.value)) as raised:
         next(parse_sdf(os.fsencode(tmp_path)))
+    assert raised.value.errno == expected.value.errno
     with pytest.raises(TypeError, match="path or a file object, not int"):
         parse_sdf(1)  # type: ignore[call-overload]
 
