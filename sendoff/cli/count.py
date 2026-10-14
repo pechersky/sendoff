@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import os
-import sys
 from collections.abc import Sequence
 
-from sendoff.cli._common import STDIN, Blocks, failures, parser, run
+from sendoff.cli._common import (
+    STDIN,
+    Blocks,
+    add_io,
+    failures,
+    opened,
+    output,
+    parser,
+    run,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -19,23 +27,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         Exit status
     """
     p = parser("count", "Count blocks. Several files print COUNT<TAB>FILE lines.")
-    p.add_argument(
-        "files", nargs="*", default=[STDIN], metavar="FILE", help="default: stdin"
-    )
+    p.add_argument("files", nargs="*", metavar="FILE", help="default: stdin")
+    add_io(p, many=True)
     args = p.parse_intermixed_args(argv)
-    out = sys.stdout.buffer
+    paths = [*args.files, *(args.input or [])] or [STDIN]
     total = 0
-    for path in args.files:
-        blocks = Blocks(path, borrow=True)
-        with failures(p, blocks):
-            count = sum(1 for _ in blocks)
-        total += count
-        if len(args.files) == 1:
-            out.write(b"%d\n" % count)
-        else:
-            out.write(b"%d\t%s\n" % (count, os.fsencode(path)))
-    if len(args.files) > 1:
-        out.write(b"%d\ttotal\n" % total)
+    with opened(p, output(p, args.output, *paths)) as out:
+        for path in paths:
+            blocks = Blocks(path, borrow=True)
+            with failures(p, blocks):
+                count = sum(1 for _ in blocks)
+            total += count
+            if len(paths) == 1:
+                out.write(b"%d\n" % count)
+            else:
+                out.write(b"%d\t%s\n" % (count, os.fsencode(path)))
+        if len(paths) > 1:
+            out.write(b"%d\ttotal\n" % total)
     return 0
 
 

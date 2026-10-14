@@ -8,7 +8,7 @@ import signal
 import sys
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import NoReturn
+from typing import BinaryIO, NoReturn
 
 from sendoff import SDBlock, parse_sdf
 
@@ -31,18 +31,113 @@ def parser(command: str, description: str) -> argparse.ArgumentParser:
 
 
 def add_file(p: argparse.ArgumentParser) -> None:
-    """Add the optional input file operand.
+    """Add the optional input file operand, with -i and -o.
 
     Args:
         p: the command's parser
     """
+    p.add_argument("file", nargs="?", metavar="FILE", help="SD file (default: stdin)")
+    add_io(p)
+
+
+def add_io(p: argparse.ArgumentParser, *, many: bool = False) -> None:
+    """Add -i, an input file in place of the FILE operand, and -o.
+
+    Args:
+        p: the command's parser
+        many: whether -i may repeat
+    """
     p.add_argument(
-        "file",
-        nargs="?",
-        default=STDIN,
+        "-i",
+        "--input",
+        action="append" if many else "store",
         metavar="FILE",
-        help="SD file (default: stdin)",
+        help="SD file, in place of FILE" + ("; repeatable" if many else ""),
     )
+    p.add_argument(
+        "-o", "--output", default=STDIN, metavar="FILE", help="default: stdout"
+    )
+
+
+def input_path(
+    p: argparse.ArgumentParser, operand: str | None, option: str | None
+) -> str:
+    """Return the input file, from the FILE operand or -i, or stdin.
+
+    Args:
+        p: the command's parser
+        operand: the FILE operand, if given
+        option: -i, if given
+
+    Returns:
+        The path, or ``-`` for stdin
+    """
+    if operand is not None and option is not None:
+        p.error("give FILE or -i, not both")
+    if option is not None:
+        return option
+    return STDIN if operand is None else operand
+
+
+def output(
+    p: argparse.ArgumentParser, path: str, *inputs: str | None
+) -> str | BinaryIO:
+    """Return -o's path, or stdout for ``-``, refusing an input file.
+
+    Writing over a mapped input would truncate it while it is read.
+
+    Args:
+        p: the command's parser
+        path: -o
+        inputs: files the command reads
+
+    Returns:
+        The path, or stdout's buffer
+    """
+    if path == STDIN:
+        return sys.stdout.buffer
+    for source in inputs:
+        if source is not None and source != STDIN and same_file(source, path):
+            p.error(f"-o {path} is also an input; write elsewhere, then mv")
+    return path
+
+
+def same_file(a: str, b: str) -> bool:
+    """Return whether two paths name the same existing file.
+
+    Args:
+        a: a path
+        b: another path
+
+    Returns:
+        Whether both exist and are one file
+    """
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+@contextmanager
+def opened(p: argparse.ArgumentParser, target: str | BinaryIO) -> Iterator[BinaryIO]:
+    """Open an output from `output` for writing bytes.
+
+    Args:
+        p: the command's parser
+        target: a path or a binary file
+
+    Yields:
+        A binary file, closed after if opened here
+    """
+    if not isinstance(target, str):
+        yield target
+        return
+    try:
+        f = open(target, "wb")  # noqa: SIM115
+    except OSError as exc:
+        p.exit(1, f"{p.prog}: {exc}\n")
+    with f:
+        yield f
 
 
 class Blocks:

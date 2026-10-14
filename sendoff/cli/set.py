@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import sys
 from collections.abc import Iterator, Sequence
 
 from sendoff import SDBlock, write_sdf
@@ -12,6 +11,8 @@ from sendoff.cli._common import (
     add_file,
     add_sources,
     failures,
+    input_path,
+    output,
     pairs,
     parser,
     run,
@@ -49,7 +50,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = p.parse_intermixed_args(argv)
     name = os.fsencode(args.name)
-    blocks = Blocks(args.file)
+    path = input_path(p, args.file, args.input)
+    blocks = Blocks(path)
+    out = output(p, args.output, path, args.source)
     edit = SDBlock.append_record if args.append else SDBlock.set_record
 
     def edited() -> Iterator[SDBlock[bytes]]:
@@ -59,7 +62,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             yield block
 
     with failures(p, blocks):
-        write_sdf(sys.stdout.buffer, edited())
+        write_sdf(out, edited())
     return 0
 
 

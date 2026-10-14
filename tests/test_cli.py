@@ -416,3 +416,68 @@ def test_filter(
         capsysbinary, monkeypatch, "filter", "-v", "--eq", "ID", "A-1", stdin=crlf
     )
     assert out == (second + third).replace(b"\n", b"\r\n")
+
+
+COMMANDS = [
+    ("count",),
+    ("get", "ID"),
+    ("get", "-t"),
+    ("set", "ID", "--value", "X"),
+    ("title", "--field", "ID"),
+    ("filter", "--has", "ID"),
+]
+
+
+@pytest.mark.parametrize("command", COMMANDS)
+def test_input_and_output_options(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    sdf: Path,
+    command: tuple[str, ...],
+) -> None:
+    """-i reads like FILE, -o writes what stdout would, and -o FILE is no input.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        sdf: pytest fixture of a Path to the sdf
+        command: module name and arguments
+    """
+    expected = cli(capsysbinary, monkeypatch, *command, sdf)
+    assert expected[0] == 0 and expected[1]
+    assert cli(capsysbinary, monkeypatch, *command, "-i", sdf) == expected
+    out = sdf.with_name("out")
+    assert cli(capsysbinary, monkeypatch, *command, "-i", sdf, "-o", out) == (
+        0,
+        b"",
+        b"",
+    )
+    assert out.read_bytes() == expected[1]
+    status, _, err = cli(capsysbinary, monkeypatch, *command, sdf, "-i", sdf)
+    if command[0] != "count":
+        assert status == 2
+        assert b"give FILE or -i, not both" in err
+    status, _, err = cli(capsysbinary, monkeypatch, *command, "-i", sdf, "-o", sdf)
+    assert status == 2
+    assert b"is also an input" in err
+    assert sdf.read_bytes() == SDF
+    missing = sdf.with_name("no-dir") / "out"
+    status, _, err = cli(capsysbinary, monkeypatch, *command, sdf, "-o", missing)
+    assert status == 1
+    assert b"[Errno 2]" in err
+
+
+def test_count_repeats_input(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    sdf: Path,
+) -> None:
+    """Count reads every FILE and -i.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        sdf: pytest fixture of a Path to the sdf
+    """
+    _, out, _ = cli(capsysbinary, monkeypatch, "count", sdf, "-i", sdf, "-i", sdf)
+    assert out == b"3\t%s\n" % bytes(sdf) * 3 + b"9\ttotal\n"

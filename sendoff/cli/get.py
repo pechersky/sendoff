@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import os
-import sys
 from collections.abc import Sequence
 
-from sendoff.cli._common import STDIN, Blocks, failures, parser, run
+from sendoff.cli._common import (
+    Blocks,
+    add_io,
+    failures,
+    input_path,
+    opened,
+    output,
+    parser,
+    run,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -23,7 +31,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "Print a record's value, or with -t the title, of each block, one line "
         "per block. Values are raw bytes; the last record wins for duplicates.",
     )
-    p.usage = "%(prog)s [-h] [-z] [--missing STR] (NAME | -t) [FILE]"
+    p.usage = (
+        "%(prog)s [-h] [-z] [--missing STR] [-i FILE] [-o FILE] (NAME | -t) [FILE]"
+    )
     p.add_argument("name", nargs="?", metavar="NAME", help="record name")
     p.add_argument("file", nargs="?", metavar="FILE", help="SD file (default: stdin)")
     p.add_argument("-t", "--title", action="store_true", help="print titles")
@@ -34,6 +44,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="STR",
         help="print for blocks without the record (default: empty)",
     )
+    add_io(p)
     args = p.parse_intermixed_args(argv)
     if args.title:
         if args.file is not None:
@@ -43,10 +54,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         p.error("NAME or -t is required")
     else:
         path = args.file
-    blocks = Blocks(STDIN if path is None else path, borrow=True)
+    path = input_path(p, path, args.input)
+    blocks = Blocks(path, borrow=True)
     end = b"\0" if args.null else b"\n"
-    out = sys.stdout.buffer
-    with failures(p, blocks):
+    with opened(p, output(p, args.output, path)) as out, failures(p, blocks):
         if args.title:
             out.writelines(block.title + end for block in blocks)
         else:

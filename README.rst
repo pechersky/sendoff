@@ -100,10 +100,11 @@ Shell pipelines
    python -m sendoff.cli.get ID my.sdf | sed 's/^/TL-/' |
        python -m sendoff.cli.title --from - my.sdf > titled.sdf
    python -m sendoff.cli.filter --eq Availability In-stock vendor.sdf |
-       python -m sendoff.cli.set Batch --value B7 > batch.sdf
+       python -m sendoff.cli.set Batch --value B7 -o batch.sdf
 
-The ``count``, ``get``, ``set``, ``title``, and ``filter`` commands read a file
-or stdin as bytes and write stdout. ``get`` prints one line per block, empty
+The ``count``, ``get``, ``set``, ``title``, and ``filter`` commands read
+``FILE`` or ``-i FILE``, else stdin, as bytes and write ``-o FILE``, else
+stdout; ``-o`` cannot name an input. ``get`` prints one line per block, empty
 where a record is missing, and ``--from`` reads one line per block; ``-z`` uses
 NUL instead. Run any with ``-h``.
 
