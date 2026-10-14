@@ -8,11 +8,22 @@ release profile's fat LTO.
 
     scripts/pgo-build                  write the wheel to target/wheels
     scripts/pgo-build --out dist       write it elsewhere
+    scripts/pgo-build --profile        only write target/pgo/merged.profdata
 
 Needs maturin on PATH or next to this interpreter, and llvm-profdata from
 `rustup component add llvm-tools`. The training data is synthetic so that
 real datasets stay held out for measuring the gain. `maturin build
---release` still makes a correct, LTO-only wheel.
+--release` still makes a correct, LTO-only wheel. The wheel targets this
+interpreter; MATURIN_PEP517_ARGS='--features abi3' makes it abi3.
+
+--profile lets any PEP 517 frontend build the PGO wheel, as the wheel CI
+does through cibuildwheel:
+
+    CARGO_BUILD_RUSTFLAGS=-Cprofile-use=$PWD/target/pgo/merged.profdata \
+        pip wheel --no-deps .
+
+The path must be absolute, since rustc compiles dependencies in their own
+directories; a missing profile fails the build.
 
 RUSTFLAGS is appended to, so `RUSTFLAGS=-Cforce-frame-pointers=yes
 scripts/pgo-build` (or the same with `maturin build --release`) makes a wheel
@@ -26,6 +37,7 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import shlex
 import shutil
 import subprocess
 import sys
@@ -137,7 +149,7 @@ def synthetic_sdf(path: Path, blocks: int) -> None:
         blocks: how many blocks
     """
     rng = random.Random(20261006)
-    with path.open("w", newline="\n") as out:
+    with path.open("w", encoding="utf-8", newline="\n") as out:
         for index in range(blocks):
             title = f"SYN-{index:06d}" if rng.random() < 0.5 else ""
             out.write(str.join("\n", [title, *ctab(rng)]) + "\n")
@@ -281,10 +293,12 @@ def profdata() -> str:
     host = next(
         line.split()[1] for line in info.stdout.splitlines() if line.startswith("host:")
     )
-    found = Path(sysroot, "lib", "rustlib", host, "bin", "llvm-profdata")
-    if not found.exists():
+    found = shutil.which(
+        "llvm-profdata", path=Path(sysroot, "lib", "rustlib", host, "bin")
+    )
+    if not found:
         raise SystemExit("pgo-build: run `rustup component add llvm-tools`")
-    return str(found)
+    return found
 
 
 def build(out: Path, rustflags: str) -> Path:
@@ -298,6 +312,8 @@ def build(out: Path, rustflags: str) -> Path:
         The wheel
     """
     env = dict(os.environ)
+    # RUSTFLAGS overrides CARGO_BUILD_RUSTFLAGS, which may carry the profile
+    # this build is about to make.
     env["RUSTFLAGS"] = f"{env.get('RUSTFLAGS', '')} {rustflags}".strip()
     # A separate target dir keeps instrumented objects out of normal builds.
     env.setdefault("CARGO_TARGET_DIR", str(ROOT / "target" / "pgo"))
@@ -305,7 +321,8 @@ def build(out: Path, rustflags: str) -> Path:
     maturin = tool("maturin")
     run(
         [maturin, "build", "--release", "--locked", "--interpreter", sys.executable]
-        + ["--out", str(out)],
+        + ["--out", str(out)]
+        + shlex.split(os.environ.get("MATURIN_PEP517_ARGS", "")),
         env=env,
     )
     (wheel,) = out.glob("*.whl")
@@ -316,6 +333,13 @@ def main() -> None:
     """Build the PGO wheel, or train when called with --train."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--out", type=Path, default=ROOT / "target" / "wheels")
+    parser.add_argument(
+        "--profile",
+        type=Path,
+        nargs="?",
+        const=ROOT / "target" / "pgo" / "merged.profdata",
+        help="only write the merged profile, by default to %(const)s",
+    )
     parser.add_argument("--blocks", type=int, default=BLOCKS, help=argparse.SUPPRESS)
     parser.add_argument("--train", help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -336,8 +360,12 @@ def main() -> None:
             cwd=work,
             env={**os.environ, "PYTHONPATH": str(site)},
         )
-        merged = work / "merged.profdata"
+        merged = args.profile.resolve() if args.profile else work / "merged.profdata"
+        merged.parent.mkdir(parents=True, exist_ok=True)
         run([merge, "merge", "-o", str(merged), str(work / "profiles")])
+        if args.profile:
+            print(merged)
+            return
         wheel = build(work / "optimized", f"-Cprofile-use={merged}")
         args.out.mkdir(parents=True, exist_ok=True)
         print(shutil.copy2(wheel, args.out / wheel.name))
