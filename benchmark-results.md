@@ -1,7 +1,7 @@
 # Benchmark results
 
-sendoff `8e357ba` against `main` (`4d997bd`, pure Python), RDKit 2026.3.6 and
-OEChem 2026.1.0, measured 2026-10-13 on EC2 c6i.2xlarge (x86_64) and
+sendoff's native rewrite against 0.1.6 (the last pure-Python release), RDKit
+2026.3.6 and OEChem 2026.1.0, measured 2026-10-13 on EC2 c6i.2xlarge (x86_64) and
 c7g.2xlarge (arm64): Amazon Linux 2023, Python 3.11.16, sendoff from a plain
 release wheel. sendoff is faster in every cell.
 
@@ -13,7 +13,7 @@ Every number is other ÷ sendoff, so above 1 means sendoff is faster. Cells read
 - *op*: the median time of the operation itself, timed in process after imports.
 
 † marks output that differs from sendoff's (see [Differences](#differences)),
-*error* a run that raised, and - a run not made: `main` lacks the newer methods
+*error* a run that raised, and - a run not made: 0.1.6 lacks the newer methods
 and cannot read B, which is not UTF-8. Geomeans take each toolkit's fastest
 mode per case, whether or not its output matched. Write cases are not compared,
 as the toolkits reserialize records.
@@ -25,7 +25,7 @@ x86_64 / arm64, for a sample of the full matrix: a case or two per
 [dataset](#datasets), including where the margin is smallest. Write cases are
 not like for like, as the toolkits reserialize records.
 
-| Dataset | Case | main | RDKit default | RDKit fast | OEChem default | OEChem tokenizer | OEChem threaded |
+| Dataset | Case | 0.1.6 | RDKit default | RDKit fast | OEChem default | OEChem tokenizer | OEChem threaded |
 |---|---|---:|---:|---:|---:|---:|---:|
 | B full | `molecule_count` | - | 159× / 122× † | 75× / 61× | 72× / 55× † | 21× / 10× | 16× / 7.8× |
 | A full | `title_extraction` | 25× / 22× | 89× / 73× † | 48× / 39× | 36× / 28× | 9.0× / 4.1× | 8.2× / 4.2× |
@@ -40,16 +40,16 @@ not like for like, as the toolkits reserialize records.
 | D full | `mdl_scan` | 55× / 57× | 2.4× / 2.2× | 2.4× / 2.2× | 17× / 7.0× | 19× / 8.0× | 18× / 7.5× |
 
 On 100-record files, where start-up dominates, wall time is 1.5× faster than
-`main`, 4.4–4.6× than RDKit and 5.1–5.4× than OEChem ([geomeans](#summary)).
-The perf round since `8e357ba` cut operation time a further 5% (x86_64) and 6%
-(arm64), and `parse_sdf(path, borrow=True)` another 9–21% on B–D (`00a0e25`,
-c6i/c7g.16xlarge); these tables predate both.
+0.1.6, 4.4–4.6× than RDKit and 5.1–5.4× than OEChem ([geomeans](#summary)).
+These tables predate a final perf round, which cut operation time a further 5%
+(x86_64) and 6% (arm64), and `parse_sdf(path, borrow=True)` another 9–21% on
+B–D (measured on c6i/c7g.16xlarge).
 
 ## Implementations
 
 | Name | Reads with |
 |---|---|
-| sendoff, main | `parse_sdf` and `SDBlock` methods |
+| sendoff, 0.1.6 | `parse_sdf` and `SDBlock` methods |
 | RDKit default | `Chem.SDMolSupplier(path)`; skips records it cannot parse |
 | RDKit fast | `Chem.SDMolSupplier(path, sanitize=False, removeHs=False, strictParsing=False)` |
 | OEChem default | `oemolistream` and `OEReadMolecule` |
@@ -102,7 +102,7 @@ as their values are GBK.
 
 ### Geomean speedup, wall time
 
-| Dataset | main x86_64 | main arm64 | RDKit x86_64 | RDKit arm64 | OEChem x86_64 | OEChem arm64 |
+| Dataset | 0.1.6 x86_64 | 0.1.6 arm64 | RDKit x86_64 | RDKit arm64 | OEChem x86_64 | OEChem arm64 |
 |---|---:|---:|---:|---:|---:|---:|
 | A smoke | 1.52 | 1.56 | 4.42 | 4.56 | 5.29 | 5.18 |
 | A representative | 8.09 | 8.69 | 16.2 | 15.6 | 7.53 | 6.69 |
@@ -118,7 +118,7 @@ as their values are GBK.
 
 ### Geomean speedup, operation time
 
-| Dataset | main x86_64 | main arm64 | RDKit x86_64 | RDKit arm64 | OEChem x86_64 | OEChem arm64 |
+| Dataset | 0.1.6 x86_64 | 0.1.6 arm64 | RDKit x86_64 | RDKit arm64 | OEChem x86_64 | OEChem arm64 |
 |---|---:|---:|---:|---:|---:|---:|
 | A smoke | 8.91 | 11.1 | 27.7 | 29.8 | 6.96 | 6.73 |
 | A representative | 17.6 | 17.2 | 33.3 | 28.4 | 10.5 | 7.73 |
@@ -134,7 +134,7 @@ as their values are GBK.
 
 ### Peak RSS, MB, x86_64 (largest over cases)
 
-| Dataset | sendoff | main | RDKit default | RDKit fast | OEChem default | OEChem tokenizer | OEChem threaded |
+| Dataset | sendoff | 0.1.6 | RDKit default | RDKit fast | OEChem default | OEChem tokenizer | OEChem threaded |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | A smoke | 11 | 12 | 57 | 57 | 55 | 53 | 53 |
 | A representative | 14 | 68 | 58 | 57 | 56 | 71 | 60 |
@@ -152,7 +152,7 @@ as their values are GBK.
 
 ### x86_64 (c6i.2xlarge)
 
-| Dataset | Case | sendoff ms | main | RDKit default | RDKit fast | OEChem default | OEChem tokenizer | OEChem threaded |
+| Dataset | Case | sendoff ms | 0.1.6 | RDKit default | RDKit fast | OEChem default | OEChem tokenizer | OEChem threaded |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | A smoke | `append_record_write` | 18.8 / 0.349 | 1.53 / 8.61 | 4.93 / 53.9 | 4.57 / 37.6 | 5.58 / 20.9 | 5.32 / 6.68 | 5.21 / 6.16 |
 | A smoke | `field_extraction` | 19.2 / 0.38 | 1.51 / 8.75 | 4.57 / 35.5 | 4.39 / 25.6 | 5.39 / 15.6 | 5.23 / 8.96 | 5.1 / 8.32 |
@@ -300,7 +300,7 @@ as their values are GBK.
 
 ### arm64 (c7g.2xlarge)
 
-| Dataset | Case | sendoff ms | main | RDKit default | RDKit fast | OEChem default | OEChem tokenizer | OEChem threaded |
+| Dataset | Case | sendoff ms | 0.1.6 | RDKit default | RDKit fast | OEChem default | OEChem tokenizer | OEChem threaded |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | A smoke | `append_record_write` | 19.7 / 0.338 | 1.57 / 11.4 | 5.06 / 59 | 4.71 / 41.3 | 5.51 / 27 | 5.14 / 6.77 | 5.19 / 6.58 |
 | A smoke | `field_extraction` | 19.5 / 0.398 | 1.61 / 10.3 | 4.81 / 37.1 | 4.56 / 25.8 | 5.4 / 15.8 | 5.24 / 9.15 | 5.27 / 9 |
