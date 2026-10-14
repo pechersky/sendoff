@@ -17,7 +17,7 @@ use crate::core::ctable::CTable;
 use crate::core::ctable::error::CTableError;
 use crate::core::lines::lines;
 use crate::core::newline::{translated, universal_newlines};
-use crate::core::record::{HeaderStyle, Record, Records};
+use crate::core::record::{HeaderStyle, Record};
 use crate::core::split::single_block;
 use crate::python::ctable::PyCTable;
 use crate::python::exports::Exported;
@@ -223,26 +223,7 @@ impl PySDBlock {
     fn last_value<'py>(&self, name: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
         let py = name.py();
         let name = self.arg_bytes(name, "record names")?;
-        let metadata = self.block.metadata();
-        let value = match self.block.index()? {
-            Some(index) => index.last(metadata, name),
-            None => {
-                let mut found = None;
-                for header in Records::new(metadata, 0).headers() {
-                    let header = header?;
-                    if header.name == name {
-                        found = Some(header.start);
-                    }
-                }
-                let Some(start) = found else {
-                    return Ok(None);
-                };
-                let record = Records::new(metadata, start).next();
-                let record = record.and_then(Result::ok).expect("a record starts here");
-                Some(record.value)
-            }
-        };
-        let Some(value) = value else {
+        let Some(value) = self.block.last(name)? else {
             return Ok(None);
         };
         self.kind
@@ -691,15 +672,7 @@ impl PySDBlock {
 
     /// The number of records, duplicates included: `len(block.records())`.
     fn __len__(&self) -> PyResult<usize> {
-        if let Some(index) = self.block.index()? {
-            return Ok(index.len());
-        }
-        let mut count = 0;
-        for header in self.block.headers() {
-            header?;
-            count += 1;
-        }
-        Ok(count)
+        Ok(self.block.record_count()?)
     }
 
     /// A block is true even without records, as before it had a length.
@@ -784,14 +757,7 @@ impl PySDBlock {
     ///     MalformedRecordError: if a record header has no `<name>`
     fn __contains__(&self, name: &Bound<'_, PyAny>) -> PyResult<bool> {
         let name = self.arg_bytes(name, "record names")?;
-        if let Some(index) = self.block.index()? {
-            return Ok(index.contains(self.block.metadata(), name));
-        }
-        let mut seen = false;
-        for header in self.block.headers() {
-            seen |= header?.name == name;
-        }
-        Ok(seen)
+        Ok(self.block.contains(name)?)
     }
 
     /// Return the records as a dict, later duplicates winning.

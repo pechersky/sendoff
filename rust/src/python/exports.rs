@@ -1,6 +1,7 @@
 //! Blocks that refuse edits while Python buffers export their bytes, and
 //! index their records for repeated lookups.
 
+use std::borrow::Cow;
 use std::ffi::c_void;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,18 +12,39 @@ use pyo3::exceptions::PyBufferError;
 
 use crate::core::block::Block;
 use crate::core::index::Index;
-use crate::core::record::MissingFieldName;
+use crate::core::record::{MissingFieldName, Records};
+
+/// Tracks active Python buffer exports via an `Arc<()>` reference count,
+/// allocated on the first export so releasing a buffer needs no borrow of
+/// the `SDBlock`.
+#[derive(Default)]
+struct Exports(OnceLock<Arc<()>>);
+
+impl Exports {
+    fn is_active(&self) -> bool {
+        self.0
+            .get()
+            .is_some_and(|exports| Arc::strong_count(exports) > 1)
+    }
+
+    fn acquire(&self) -> *mut c_void {
+        let exports = self.0.get_or_init(Arc::default);
+        Arc::into_raw(Arc::clone(exports)).cast_mut().cast()
+    }
+
+    #[allow(unsafe_code)]
+    unsafe fn release(token: *mut c_void) {
+        // SAFETY: the caller passes a pointer from `Arc::into_raw`, once.
+        drop(unsafe { Arc::from_raw(token.cast_const().cast::<()>()) });
+    }
+}
 
 /// A block whose bytes buffers may export, so edits, which may move or free
 /// them, raise until every export is released. Edits also drop the index
 /// of its records.
-///
-/// Each export holds a reference to `exports`, made on the first, so
-/// releasing one needs no borrow of the block, which a mutable borrow
-/// running Python code (a GC, say) could be holding.
 pub(crate) struct Exported {
     block: Block,
-    exports: OnceLock<Arc<()>>,
+    exports: Exports,
     /// The records' index, built on the second lookup since the last edit,
     /// so blocks looked up once allocate none.
     index: OnceLock<Option<Index>>,
@@ -33,37 +55,78 @@ impl Exported {
     pub(crate) fn new(block: Block) -> Self {
         Self {
             block,
-            exports: OnceLock::new(),
+            exports: Exports::default(),
             index: OnceLock::new(),
             looked_up: AtomicBool::new(false),
         }
     }
 
-    /// The index of the records, read with `strip`, for a lookup: `None`
-    /// for the first since the last edit, or SD data too large to index.
-    ///
-    /// # Errors
-    ///
-    /// `MissingFieldName` if a record header has no `<name>`.
-    pub(crate) fn index(&self) -> Result<Option<&Index>, MissingFieldName> {
+    /// The index of the records for a lookup: `None` for the first since
+    /// the last edit, or SD data too large to index.
+    fn index(&self) -> Result<Option<&Index>, MissingFieldName> {
         if let Some(index) = self.index.get() {
             return Ok(index.as_ref());
         }
-        if !self.looked_up.load(Ordering::Relaxed) {
-            self.looked_up.store(true, Ordering::Relaxed);
+        if !self.looked_up.swap(true, Ordering::Relaxed) {
             return Ok(None);
         }
         let index = Index::build(self.block.metadata())?;
         Ok(self.index.get_or_init(|| index).as_ref())
     }
 
+    /// The value of the last record named `name`, if any.
+    pub(crate) fn last<'a>(
+        &'a self,
+        name: &[u8],
+    ) -> Result<Option<Cow<'a, [u8]>>, MissingFieldName> {
+        let metadata = self.block.metadata();
+        if let Some(index) = self.index()? {
+            return Ok(index.last(metadata, name));
+        }
+        let mut found = None;
+        for header in Records::new(metadata, 0).headers() {
+            let header = header?;
+            if header.name == name {
+                found = Some(header.start);
+            }
+        }
+        let Some(start) = found else {
+            return Ok(None);
+        };
+        let record = Records::new(metadata, start).next();
+        let record = record.and_then(Result::ok).expect("a record starts here");
+        Ok(Some(record.value))
+    }
+
+    /// Whether any record is named `name`.
+    pub(crate) fn contains(&self, name: &[u8]) -> Result<bool, MissingFieldName> {
+        let metadata = self.block.metadata();
+        if let Some(index) = self.index()? {
+            return Ok(index.contains(metadata, name));
+        }
+        let mut seen = false;
+        for header in Records::new(metadata, 0).headers() {
+            seen |= header?.name == name;
+        }
+        Ok(seen)
+    }
+
+    /// The number of records, duplicates included.
+    pub(crate) fn record_count(&self) -> Result<usize, MissingFieldName> {
+        if let Some(index) = self.index()? {
+            return Ok(index.len());
+        }
+        let mut count = 0;
+        for header in self.block.headers() {
+            header?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
     /// The block, to edit, unless a buffer exports it; drops the index.
     pub(crate) fn get_mut(&mut self) -> PyResult<&mut Block> {
-        if self
-            .exports
-            .get()
-            .is_some_and(|exports| Arc::strong_count(exports) > 1)
-        {
+        if self.exports.is_active() {
             return Err(PyBufferError::new_err(
                 "Existing exports of data: SDBlock cannot be edited",
             ));
@@ -75,8 +138,7 @@ impl Exported {
 
     /// Count an export, returning the token `release` takes.
     pub(crate) fn export(&self) -> *mut c_void {
-        let exports = self.exports.get_or_init(Arc::default);
-        Arc::into_raw(Arc::clone(exports)).cast_mut().cast()
+        self.exports.acquire()
     }
 
     /// Count an export released.
@@ -86,8 +148,8 @@ impl Exported {
     /// `token` comes from `export`, and is released once.
     #[allow(unsafe_code)]
     pub(crate) unsafe fn release(token: *mut c_void) {
-        // SAFETY: the caller passes a pointer from `Arc::into_raw`, once.
-        drop(unsafe { Arc::from_raw(token.cast_const().cast::<()>()) });
+        // SAFETY: forwarded from caller.
+        unsafe { Exports::release(token) };
     }
 }
 
