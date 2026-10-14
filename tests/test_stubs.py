@@ -30,7 +30,7 @@ def test_native_stub_matches_extension(tmp_path: Path) -> None:
     """
     pytest.importorskip("mypy.stubtest")
     allowlist = tmp_path / "allowlist.txt"
-    allowlist.write_text(ALLOWLIST)
+    allowlist.write_text(ALLOWLIST, encoding="utf-8")
     completed = subprocess.run(
         [
             sys.executable,
@@ -43,7 +43,7 @@ def test_native_stub_matches_extension(tmp_path: Path) -> None:
         capture_output=True,
         check=False,
         cwd=Path(__file__).parents[1],
-        text=True,
+        encoding="utf-8",
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
 

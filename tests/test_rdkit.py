@@ -235,7 +235,7 @@ def test_molblock_setter_swaps_structures_from_rdkit(
         tmp_path: pytest fixture for writing files to a temp directory
     """
     outpath = tmp_path / "swapped.sdf"
-    with open(outpath, "w") as handle:
+    with open(outpath, "w", encoding="utf-8") as handle:
         for block in parse_sdf(str(double_mol_sdf)):
             mol = Chem.MolFromSmiles("CCO")
             mol.SetProp("_Name", f"{block.title!s}-swapped")

@@ -52,7 +52,9 @@ def cli(
     Returns:
         Exit status, stdout, and stderr
     """
-    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(stdin)))
+    monkeypatch.setattr(
+        sys, "stdin", io.TextIOWrapper(io.BytesIO(stdin), encoding="utf-8")
+    )
     main = importlib.import_module(f"sendoff.cli.{command}").main
     try:
         status = main([str(arg) for arg in argv])

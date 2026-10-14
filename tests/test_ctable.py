@@ -242,7 +242,7 @@ def test_single_mol_v3000_sdf_idempotent_renumber(single_mol_v3000_sdf: Path) ->
     Args:
         single_mol_v3000_sdf: pytest fixture of a Path to the sdf
     """
-    text = single_mol_v3000_sdf.read_text()
+    text = single_mol_v3000_sdf.read_text(encoding="utf-8")
     for mol in (
         next(parse_sdf(single_mol_v3000_sdf)),
         next(SDBlock.from_lines(text.splitlines())),

@@ -23,7 +23,7 @@ def test_single_mol_newline_write(single_mol_sdf: Pathy) -> None:
     buffer = io.StringIO()
     write_sdf(buffer, mols)
     assert len(buffer.getvalue().splitlines()) == len(
-        open(single_mol_sdf).read().splitlines()
+        open(single_mol_sdf, encoding="utf-8").read().splitlines()
     )
 
 
@@ -33,11 +33,13 @@ def test_single_mol_newline_write_splitlines(single_mol_sdf: Pathy) -> None:
     Args:
         single_mol_sdf: pytest fixture of a Path to the sdf
     """
-    mols = list(SDBlock.from_lines(open(single_mol_sdf).read().splitlines()))
+    mols = list(
+        SDBlock.from_lines(open(single_mol_sdf, encoding="utf-8").read().splitlines())
+    )
     buffer = io.StringIO()
     write_sdf(buffer, mols)
     assert len(buffer.getvalue().splitlines()) == len(
-        open(single_mol_sdf).read().splitlines()
+        open(single_mol_sdf, encoding="utf-8").read().splitlines()
     )
 
 
@@ -57,7 +59,7 @@ def test_write_sdf_writes_each_blocks_sdf(tmp_path: Path) -> None:
         ],
     )
     source = tmp_path / "input.sdf"
-    source.write_text(text, newline="")
+    source.write_bytes(text.encode())
     out = tmp_path / "out.sdf"
     paths: list[Pathy] = [source, os.fsencode(source)]
     for path in paths:
@@ -137,7 +139,7 @@ def test_write_sdf_writes_blocks_before_a_failure(
         write_sdf(out if to_path else handle, blocks)
     if error is UnicodeDecodeError:
         assert raised.value.__notes__[0].startswith("Writing block 2 (from 0),")
-    written = out.read_text() if to_path else handle.getvalue()
+    written = out.read_text(encoding="utf-8") if to_path else handle.getvalue()
     assert written == "a\nM  END\n$$$$\nb\nM  END\n$$$$\n"
 
 
@@ -157,7 +159,7 @@ def test_writes_check_utf8_until_it_is_known(tmp_path: Path) -> None:
     good["A"] = "\u00e9"
     assert sdf_of(good) == "u\nM  END\n> <A>\n\u00e9\n\n$$$$\n"
     assert write_sdf(out, [good, good]) == 2
-    assert out.read_text() == sdf_of(good) * 2
+    assert out.read_text(encoding="utf-8") == sdf_of(good) * 2
 
 
 def test_write_sdf_raises_os_errors(tmp_path: Path) -> None:
@@ -195,10 +197,10 @@ def test_write_sdf_checks_blocks_before_creating_the_path(tmp_path: Path) -> Non
         tmp_path: pytest fixture of a temporary directory
     """
     out = tmp_path / "out.sdf"
-    out.write_text("kept")
+    out.write_text("kept", encoding="utf-8")
     with pytest.raises(TypeError, match="not iterable"):
         write_sdf(out, 5)  # type: ignore[call-overload]
-    assert out.read_text() == "kept"
+    assert out.read_text(encoding="utf-8") == "kept"
 
 
 def test_write_sdf_propagates_file_object_errors() -> None:
@@ -223,7 +225,7 @@ def test_sdf_writer_writes_as_write_sdf(tmp_path: Path) -> None:
         ],
     )
     source = tmp_path / "input.sdf"
-    source.write_text(text)
+    source.write_bytes(text.encode())
     paths: list[Pathy] = [source, os.fsencode(source)]
     for path in paths:
         blocks = list(parse_sdf(path))
@@ -260,20 +262,20 @@ def test_sdf_writer_closes(tmp_path: Path) -> None:
     out = tmp_path / "out.sdf"
     writer = sdf_writer(out)
     writer.write(block)
-    assert out.read_text() == ""
+    assert out.read_text(encoding="utf-8") == ""
     writer.close()
     writer.close()
-    assert out.read_text() == sdf_of(block)
+    assert out.read_text(encoding="utf-8") == sdf_of(block)
     with pytest.raises(ValueError, match="closed"):
         writer.write(block)
     writer = sdf_writer(out)
     writer.write(block)
     del writer
-    assert out.read_text() == sdf_of(block)
+    assert out.read_text(encoding="utf-8") == sdf_of(block)
     with pytest.raises(RuntimeError), sdf_writer(out) as writer:
         for each in _then_raise([block]):
             writer.write(each)
-    assert out.read_text() == sdf_of(block)
+    assert out.read_text(encoding="utf-8") == sdf_of(block)
     if os.path.exists("/dev/full"):
         writer = sdf_writer("/dev/full")
         writer.write(block)
@@ -307,4 +309,8 @@ def test_sdf_writer_rejects_a_block_and_goes_on(tmp_path: Path) -> None:
         to_path.write(b)
         to_handle.write(b)
     expected = "a\nM  END\n$$$$\nb\nM  END\n$$$$\n"
-    assert (tmp_path / "out.sdf").read_text() == handle.getvalue() == expected
+    assert (
+        (tmp_path / "out.sdf").read_text(encoding="utf-8")
+        == handle.getvalue()
+        == expected
+    )

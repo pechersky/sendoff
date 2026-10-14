@@ -54,9 +54,9 @@ def test_unterminated_final_record_is_returned(
         trailing_newline: Newline appended after the unterminated value.
     """
     sdf = tmp_path / "unterminated.sdf"
-    sdf.write_text(
-        "Closed\n\nM  END\n$$$$\n"
-        "Title\n\nM  END\n> <Record>\nValue" + trailing_newline
+    sdf.write_bytes(
+        b"Closed\n\nM  END\n$$$$\n"
+        b"Title\n\nM  END\n> <Record>\nValue" + trailing_newline.encode()
     )
 
     blocks = list(parse_sdf(sdf))
@@ -122,7 +122,7 @@ def test_text_path_preserves_text_values(tmp_path: Path) -> None:
         tmp_path: Temporary directory for the SDF fixture.
     """
     path = tmp_path / "text.sdf"
-    path.write_text("title é\n\nM  END\n> <field>\nvalue é\n\n$$$$\n")
+    path.write_bytes("title é\n\nM  END\n> <field>\nvalue é\n\n$$$$\n".encode())
 
     block = next(parse_sdf(path))
 
@@ -354,7 +354,7 @@ def mapped_paths() -> set[str]:
     Returns:
         Resolved paths of the mapped files.
     """
-    with open("/proc/self/maps") as maps:
+    with open("/proc/self/maps", encoding="utf-8") as maps:
         fields = (line.split(maxsplit=5) for line in maps)
         return {line[5].rstrip("\n") for line in fields if len(line) == 6}
 
@@ -367,7 +367,7 @@ def test_parse_sdf_opens_lazily_and_close_releases_the_file(tmp_path: Path) -> N
         tmp_path: Temporary directory for the SDF fixture.
     """
     path = tmp_path / "two.sdf"
-    path.write_text("First\n\nM  END\n$$$$\nSecond\n\nM  END\n$$$$\n")
+    path.write_bytes(b"First\n\nM  END\n$$$$\nSecond\n\nM  END\n$$$$\n")
 
     blocks = parse_sdf(path)
     assert str(path) not in open_paths()
@@ -518,7 +518,7 @@ def test_truncating_a_borrowed_file_raises_sigbus(tmp_path: Path, borrow: bool) 
         spec.loader.exec_module(native)
 
         blocks = list(native.parse_sdf(sys.argv[1], borrow=sys.argv[3] == "1"))
-        with open("/proc/self/maps") as maps:
+        with open("/proc/self/maps", encoding="utf-8") as maps:
             print(sys.argv[1] in maps.read(), flush=True)
         open(sys.argv[1], "wb").close()
         print(sum(len(str(block)) for block in blocks))
@@ -526,7 +526,7 @@ def test_truncating_a_borrowed_file_raises_sigbus(tmp_path: Path, borrow: bool) 
     result = subprocess.run(
         [sys.executable, "-c", script, str(path), native, str(int(borrow))],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         timeout=60,
     )
     if not borrow:
@@ -573,7 +573,7 @@ def test_parse_sdf_waits_for_a_pipe_writer_without_the_gil(tmp_path: Path) -> No
         [sys.executable, "-c", script, str(pipe), native],
         capture_output=True,
         check=True,
-        text=True,
+        encoding="utf-8",
         timeout=60,
     )
     assert result.stdout == "['t']\n"
@@ -616,7 +616,7 @@ def test_parse_sdf_reads_file_objects_from_their_position(tmp_path: Path) -> Non
     assert [sdf_of(block) for block in blocks] == [sdf.split("$$$$\n", 1)[1].encode()]
     assert blocks == list(SDBlock.from_lines(io.BytesIO(sdf.encode())))[1:]
 
-    with path.open() as handle:
+    with path.open(encoding="utf-8") as handle:
         assert [block.to_dict() for block in parse_sdf(handle)] == [{}, {"A": "1"}]
     assert [block.title for block in parse_sdf(io.StringIO(sdf))] == ["skip", "t"]
 
@@ -926,11 +926,11 @@ def test_from_sdf_parses_like_a_file(tmp_path: Path) -> None:
     value = "v" * (1 << 20)
     text = f"{title}\r\nM  END\r> <A>\r\n1\n\n$$$$\r\nt\nM  END\n> <B>\n{value}\n$$$$\n"
     path = tmp_path / "input.sdf"
-    path.write_text(text, newline="")
+    path.write_bytes(text.encode())
     data = text.encode()
     expected = [sdf_of(b) for b in SDBlock.from_sdf(text)]
     assert [sdf_of(b) for b in parse_sdf(path)] == expected
-    with path.open() as handle:
+    with path.open(encoding="utf-8") as handle:
         assert [sdf_of(b) for b in SDBlock.from_lines(handle)] == expected
     expected_bytes = [sdf_of(b) for b in SDBlock.from_sdf(data)]
     assert [sdf_of(b) for b in parse_sdf(os.fsencode(path))] == expected_bytes
@@ -964,7 +964,7 @@ def test_delimiter_value_ends_a_record(
     blocks = list(parse_sdf(single_delimiter_record_mol_sdf))
     assert blocks[0].records() == [("Record", "")]
     assert str.join("", (sdf_of(block) for block in blocks)) == (
-        single_delimiter_record_mol_sdf.read_text()
+        single_delimiter_record_mol_sdf.read_text(encoding="utf-8")
     )
 
 
