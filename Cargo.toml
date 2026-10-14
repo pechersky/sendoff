@@ -24,13 +24,16 @@ path = "rust/src/lib.rs"
 crate-type = ["cdylib"]
 
 [features]
+# One wheel for every CPython >= 3.11: 1-3% slower overall than a per-version
+# build, up to 10% when building dicts and strs.
+abi3 = ["pyo3/abi3-py311"]
 coverage = []
 stubgen = ["pyo3/experimental-inspect"]
 
 [dependencies]
 memchr = "2"
 memmap2 = "0.9"
-pyo3 = { version = "=0.29.3", features = ["abi3-py311"] }
+pyo3 = "=0.29.3"
 thiserror = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]

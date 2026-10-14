@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 from importlib import import_module
-from importlib.machinery import ExtensionFileLoader
+from importlib.machinery import EXTENSION_SUFFIXES, ExtensionFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -78,7 +78,7 @@ def start() -> tuple[ModuleType, TemporaryDirectory[str], Path]:
         raise pytest.UsageError("Cargo did not produce one native coverage library.")
     for profile in directory.glob("*.profraw"):
         profile.unlink()
-    library = directory / "native.abi3.so"
+    library = directory / f"native{EXTENSION_SUFFIXES[0]}"
     shutil.copyfile(artifacts[0], library)
     os.environ["LLVM_PROFILE_FILE"] = environment["LLVM_PROFILE_FILE"]
     loader = ExtensionFileLoader("sendoff.native", str(library))
