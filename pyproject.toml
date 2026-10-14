@@ -34,7 +34,7 @@ test = [
     "sendoff[test-core]",
     "rdkit==2022.9.5; python_version == '3.11' and platform_machine != 'ARM64'",
     "numpy==1.23.5; python_version == '3.11' and platform_machine != 'ARM64'",
-    "rdkit==2026.3.6; python_version >= '3.12' and platform_machine != 'ARM64' and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+    "rdkit==2026.9.1; python_version >= '3.12' and platform_machine != 'ARM64' and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
     # The last RDKit with Intel macOS wheels.
     "rdkit==2025.9.3; python_version >= '3.12' and python_version < '3.15' and sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "numpy>=1.26.4,<3; python_version >= '3.12' and platform_machine != 'ARM64'",
