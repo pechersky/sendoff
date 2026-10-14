@@ -128,8 +128,8 @@ exclude = '''
 
 # Release: `tbump X.Y.Z` bumps Cargo.toml and Cargo.lock, commits, tags vX.Y.Z
 # and pushes. The tag runs tox.yml: tests, PGO wheels and sdist (wheels.yml),
-# then PyPI. scripts/pgo-build --out dist makes one wheel locally. Release
-# notes go on the GitHub release.
+# PyPI, then a GitHub release with generated notes to edit. scripts/pgo-build
+# --out dist makes one wheel locally.
 [tool.tbump.version]
 current = "0.1.6"
 
