@@ -25,8 +25,8 @@ This package also tries to document the "canonical" ways metadata is handled by 
 packages. To wit, there are tests to monitor how, for example, rdkit deals with molecules
 that have multiline record values, or a "$$$$" molecule title.
 
-In time per operation, sendoff is 27–59× faster than RDKit, 6.4–23× faster
-than OEChem, and 8.2–48× faster than the pure-Python sendoff 0.1.6 (geomeans
+In time per operation, sendoff is 31–79× faster than RDKit, 7.1–30× faster
+than OEChem, and 8.8–59× faster than the pure-Python sendoff 0.1.6 (geomeans
 by dataset; see the `benchmarks
 <https://github.com/pechersky/sendoff/blob/main/benchmark-results.md>`_).
 
