@@ -8,9 +8,6 @@ use crate::core::block::Block;
 use crate::core::ctable::CTable;
 use crate::core::lines::lines;
 use crate::core::record::Record;
-use crate::core::strip::Strip;
-
-pub const STRIPS: [Strip; 2] = [Strip::Bytes, Strip::Str];
 
 /// Check what holds for any block, however it was read or edited.
 pub fn check_block(block: &Block) {
@@ -23,20 +20,18 @@ pub fn check_block(block: &Block) {
     );
 
     assert!(block.serialized().starts_with(block.molblock()));
-    for strip in STRIPS {
-        assert!(block.molblock().starts_with(block.title(strip)));
-        let records: Vec<_> = block.records(strip).collect();
-        let headers: Vec<_> = block.headers(strip).collect();
-        assert_eq!(records.len(), headers.len());
-        for (record, header) in records.iter().zip(&headers) {
-            match (record, header) {
-                (Ok(record), Ok(header)) => {
-                    assert_eq!((record.name, record.start), (header.name, header.start));
-                    assert!(header.start < header.end && header.end <= block.metadata().len());
-                }
-                (Err(_), Err(_)) => {}
-                _ => panic!("records and headers disagree: {record:?} {header:?}"),
+    assert!(block.molblock().starts_with(block.title()));
+    let records: Vec<_> = block.records().collect();
+    let headers: Vec<_> = block.headers().collect();
+    assert_eq!(records.len(), headers.len());
+    for (record, header) in records.iter().zip(&headers) {
+        match (record, header) {
+            (Ok(record), Ok(header)) => {
+                assert_eq!((record.name, record.start), (header.name, header.start));
+                assert!(header.start < header.end && header.end <= block.metadata().len());
             }
+            (Err(_), Err(_)) => {}
+            _ => panic!("records and headers disagree: {record:?} {header:?}"),
         }
     }
 
@@ -51,9 +46,9 @@ pub fn check_block(block: &Block) {
 }
 
 /// The named records, as `(name, value)` pairs.
-pub fn named(block: &Block, strip: Strip) -> Vec<(Vec<u8>, Vec<u8>)> {
+pub fn named(block: &Block) -> Vec<(Vec<u8>, Vec<u8>)> {
     block
-        .records(strip)
+        .records()
         .filter_map(Result::ok)
         .map(|Record { name, value, .. }| (name.to_vec(), value.into_owned()))
         .collect()

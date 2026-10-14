@@ -42,6 +42,7 @@ repos:
     -   id: mypy
         args: [--ignore-missing-imports, --strict]
         additional_dependencies: [hypothesis, pytest]
+        exclude: '^scripts/'
 
 -   repo: local
     hooks:

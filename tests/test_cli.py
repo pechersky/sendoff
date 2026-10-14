@@ -475,7 +475,9 @@ def test_filter_unique(
     """
     first, second, third = (block + b"$$$$\n" for block in SDF.split(b"$$$$\n")[:3])
     repeated = first + second + first + third + second + third
-    assert cli(capsysbinary, monkeypatch, "filter", "--unique", "ID", stdin=repeated) == (
+    assert cli(
+        capsysbinary, monkeypatch, "filter", "--unique", "ID", stdin=repeated
+    ) == (
         0,
         first + second + third + second,
         b"",
