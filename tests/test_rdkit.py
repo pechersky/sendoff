@@ -4,10 +4,17 @@ import os
 from pathlib import Path
 
 import pytest
-from rdkit import Chem
+from rdkit import Chem, rdBase
 
 from sendoff.sdblock import parse_sdf
 from tests.fixtures import INDEX_DEFECTS, CountedMol, Pathy
+
+# rdkit/rdkit#9047 preserves embedded ">" starting in 2025.09.5.
+RIGHT_ANGLE_BRACKET_FIELD = (
+    "Rec"
+    if tuple(map(int, rdBase.rdkitVersion.split("."))) < (2025, 9, 5)
+    else "Rec>ord"
+)
 
 
 def test_single_mol_read(single_mol_sdf: Pathy) -> None:
@@ -140,28 +147,30 @@ def test_multiline_record_name_mol_read(
     assert not mol.HasProp("Rec\nord")
 
 
-def test_right_angle_bracket_record_name_mol_read_field_name_changed(
+def test_right_angle_bracket_record_name_mol_read_field_name(
     single_right_angle_bracket_record_name_mol_sdf: Pathy,
 ) -> None:
-    """An sdf with a record name with a ">" is not present in the read data.
+    """The RDKit version determines whether it preserves ">" in a field name.
 
     Args:
         single_right_angle_bracket_record_name_mol_sdf: fixture of a Path to the sdf
     """
     mol = next(Chem.SDMolSupplier(str(single_right_angle_bracket_record_name_mol_sdf)))
-    assert not mol.HasProp("Rec>ord")
+    assert mol.HasProp(RIGHT_ANGLE_BRACKET_FIELD)
+    other_field = "Rec>ord" if RIGHT_ANGLE_BRACKET_FIELD == "Rec" else "Rec"
+    assert not mol.HasProp(other_field)
 
 
-def test_right_angle_bracket_record_name_mol_read_data_at_modified_field(
+def test_right_angle_bracket_record_name_mol_read_data(
     single_right_angle_bracket_record_name_mol_sdf: Pathy,
 ) -> None:
-    """An sdf with a record name with a ">" contains data at a modified field name.
+    """The value survives RDKit's version-specific handling of ">" in its name.
 
     Args:
         single_right_angle_bracket_record_name_mol_sdf: fixture of a Path to the sdf
     """
     mol = next(Chem.SDMolSupplier(str(single_right_angle_bracket_record_name_mol_sdf)))
-    assert mol.GetProp("Rec") == "Value"
+    assert mol.GetProp(RIGHT_ANGLE_BRACKET_FIELD) == "Value"
 
 
 def test_counts_mol_read(counted_mol_sdf: CountedMol) -> None:
