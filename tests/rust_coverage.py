@@ -8,8 +8,8 @@ import shutil
 import subprocess
 import sys
 from importlib import import_module
-from importlib.machinery import EXTENSION_SUFFIXES, ExtensionFileLoader
-from importlib.util import module_from_spec, spec_from_loader
+from importlib.machinery import EXTENSION_SUFFIXES
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import ModuleType
@@ -81,13 +81,12 @@ def start() -> tuple[ModuleType, TemporaryDirectory[str], Path]:
     library = directory / f"native{EXTENSION_SUFFIXES[0]}"
     shutil.copyfile(artifacts[0], library)
     os.environ["LLVM_PROFILE_FILE"] = environment["LLVM_PROFILE_FILE"]
-    loader = ExtensionFileLoader("sendoff.native", str(library))
-    spec = spec_from_loader("sendoff.native", loader)
-    if spec is None:
+    spec = spec_from_file_location("sendoff.native", library)
+    if spec is None or spec.loader is None:
         raise pytest.UsageError("Cannot load the native coverage library.")
     module = module_from_spec(spec)
     sys.modules[spec.name] = module
-    loader.exec_module(module)
+    spec.loader.exec_module(module)
     setattr(import_module("sendoff"), "native", module)
     return module, session, tools
 

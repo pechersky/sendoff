@@ -112,10 +112,12 @@ fn swar_mask(window: &[u8; WINDOW], byte: u8) -> u64 {
     const LOW: u64 = 0x7f7f_7f7f_7f7f_7f7f;
     let splat = u64::from_ne_bytes([byte; 8]);
     window
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .enumerate()
-        .fold(0, |mask, (index, word)| {
-            let word = u64::from_le_bytes(word.try_into().unwrap()) ^ splat;
+        .fold(0, |mask, (index, &word)| {
+            let word = u64::from_le_bytes(word) ^ splat;
             // Bit 7 of each byte is set exactly when that byte is zero.
             let zero = !(((word & LOW) + LOW) | word | LOW);
             // Gather those bits, byte `i`'s into bit `56 + i`.

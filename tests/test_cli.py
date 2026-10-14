@@ -105,7 +105,12 @@ def test_missing_file(
     """
     status, out, err = cli(capsysbinary, monkeypatch, "count", tmp_path / "nope")
     assert (status, out) == (1, b"")
-    assert err.startswith(b"python -m sendoff.cli.count: [Errno 2]")
+    assert err.startswith(
+        (
+            b"python -m sendoff.cli.count: [Errno 2]",
+            b"python -m sendoff.cli.count: [WinError 2]",
+        )
+    )
 
 
 # Runs the module as Windows would, where writes to a closed pipe raise.
@@ -129,8 +134,10 @@ def test_module_dies_quietly_on_closed_pipe(sdf: Path, module: list[str]) -> Non
     """
     count = [sys.executable, *module, str(sdf)]
     assert subprocess.run(count, capture_output=True, check=True).stdout == b"3\n"
-    many = [sys.executable, *module, *[str(sdf)] * 5000]
-    with subprocess.Popen(many, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
+    many = [sys.executable, *module, *[sdf.name] * 4000]
+    with subprocess.Popen(
+        many, cwd=sdf.parent, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    ) as p:
         assert p.stdout is not None and p.stderr is not None
         p.stdout.read(1)
         p.stdout.close()
@@ -450,12 +457,13 @@ def test_filter(
         third,
         b"",
     )
-    name = os.fsdecode(GBK)
-    assert cli(capsysbinary, monkeypatch, "filter", "--eq", "Name", name, sdf) == (
-        0,
-        first,
-        b"",
-    )
+    if sys.getfilesystemencodeerrors() == "surrogateescape":
+        name = os.fsdecode(GBK)
+        assert cli(capsysbinary, monkeypatch, "filter", "--eq", "Name", name, sdf) == (
+            0,
+            first,
+            b"",
+        )
     crlf = SDF.replace(b"\n", b"\r\n")
     _, out, _ = cli(
         capsysbinary, monkeypatch, "filter", "-v", "--eq", "ID", "A-1", stdin=crlf
@@ -534,7 +542,7 @@ def test_input_and_output_options(
     missing = sdf.with_name("no-dir") / "out"
     status, _, err = cli(capsysbinary, monkeypatch, *command, sdf, "-o", missing)
     assert status == 1
-    assert b"[Errno 2]" in err
+    assert b"[Errno 2]" in err or b"[WinError 3]" in err
 
 
 def test_count_repeats_input(

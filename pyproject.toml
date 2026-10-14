@@ -105,8 +105,20 @@ test-extras = ["test-core"]
 [tool.cibuildwheel.macos]
 environment = { CARGO_BUILD_RUSTFLAGS = "-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/merged.profdata" }
 
+# CPython's x86_64 macOS target is 10.9, below rustc's 10.12 minimum.
+[[tool.cibuildwheel.overrides]]
+select = "*-macosx_x86_64"
+inherit.environment = "append"
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.12" }
+
 [tool.cibuildwheel.windows]
 environment = { CARGO_BUILD_RUSTFLAGS = "-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/merged.profdata" }
+
+# rustc crashes under -Cprofile-generate on aarch64-pc-windows-msvc.
+[[tool.cibuildwheel.overrides]]
+select = "*-win_arm64"
+before-build = ""
+environment = {}
 
 [tool.black]
 # Match the black pre-commit hook; scripts/native-stub formats with it too.

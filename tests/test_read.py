@@ -420,6 +420,7 @@ def borrowed_blocks(path: Path, binary: bool = False) -> list[SDBlock[typing.Any
     return blocks
 
 
+@pytest.mark.skipif(not os.path.exists("/proc/self/maps"), reason="needs /proc")
 def test_borrowed_blocks_keep_the_file_mapped(tmp_path: Path) -> None:
     """Borrowed blocks hold the mapping until the last of them is freed.
 
