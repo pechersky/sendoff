@@ -10,8 +10,13 @@ permissions:
 
 jobs:
   clippy:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each lints its platform's code: aarch64 has NEON, Windows no mmap.
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
