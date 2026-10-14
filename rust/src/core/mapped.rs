@@ -141,7 +141,8 @@ fn is_local(file: &File) -> bool {
         libc::F2FS_SUPER_MAGIC as u32,
         libc::OVERLAYFS_SUPER_MAGIC as u32,
         libc::TMPFS_MAGIC as u32,
-        libc::XFS_SUPER_MAGIC as u32,
+        // XFS_SUPER_MAGIC, which libc lacks on musl.
+        0x5846_5342,
     ];
     let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
     #[allow(unsafe_code)]
