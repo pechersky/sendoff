@@ -546,8 +546,8 @@ impl Block {
 
     /// The format and atom and bond counts declared by the MDL header.
     ///
-    /// Equivalent to parsing a `CTable` from the title and MDL lines, without
-    /// copying them.
+    /// Parses only the header lines, decoded lossily and without copying
+    /// valid UTF-8.
     pub fn counts(&self) -> Result<Counts, CTableError> {
         let mut source = std::iter::once(&b""[..])
             .chain(lines(self.mdl()))

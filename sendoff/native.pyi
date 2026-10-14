@@ -569,8 +569,12 @@ class SDBlock(Generic[AnyStr]):
         """
         The number of atoms declared by the counts line.
 
-        The count may differ from the number of atom lines. Reading it
-        raises MalformedCTableError as ctable does.
+        The count may differ from the number of atom lines. Only the
+        header is read, so unlike ctable a block that doesn't decode is not
+        an error.
+
+        Raises:
+            MalformedCTableError: if the format or counts cannot be read
         """
 
     @property
@@ -578,8 +582,12 @@ class SDBlock(Generic[AnyStr]):
         """
         The number of bonds declared by the counts line.
 
-        The count may differ from the number of bond lines. Reading it
-        raises MalformedCTableError as ctable does.
+        The count may differ from the number of bond lines. Only the
+        header is read, so unlike ctable a block that doesn't decode is not
+        an error.
+
+        Raises:
+            MalformedCTableError: if the format or counts cannot be read
         """
 
     def records(self, /) -> list[tuple[AnyStr, AnyStr]]:
