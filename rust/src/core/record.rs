@@ -6,7 +6,7 @@ use std::ops::Range;
 use memchr::memmem;
 
 use crate::core::lines::{Lines, line_end};
-use crate::core::strip::{Strip, trim, trim_str};
+use crate::core::strip::trim;
 
 /// A metadata header that has no `<name>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -138,8 +138,8 @@ pub struct HeaderPool<'a> {
 impl<'a> HeaderPool<'a> {
     /// Pool the headers of `metadata`, skipping those without a name, for
     /// new headers in `style`.
-    pub fn new(metadata: &'a [u8], strip: Strip, style: HeaderStyle) -> Self {
-        let mut headers = Records::new(metadata, 0, strip).headers();
+    pub fn new(metadata: &'a [u8], style: HeaderStyle) -> Self {
+        let mut headers = Records::new(metadata, 0).headers();
         let next = headers.find_map(Result::ok);
         let copied = match style {
             HeaderStyle::Copy => next.and_then(|header| header.around_name(metadata)),
@@ -196,18 +196,13 @@ impl<'a> HeaderPool<'a> {
 pub struct Records<'a> {
     metadata: &'a [u8],
     pos: usize,
-    strip: Strip,
 }
 
 impl<'a> Records<'a> {
     /// Iterate over the records of `metadata` at or after `pos`.
     #[inline]
-    pub fn new(metadata: &'a [u8], pos: usize, strip: Strip) -> Self {
-        Self {
-            metadata,
-            pos,
-            strip,
-        }
+    pub fn new(metadata: &'a [u8], pos: usize) -> Self {
+        Self { metadata, pos }
     }
 
     /// Where the search for the next record starts.
@@ -231,10 +226,7 @@ impl<'a> Records<'a> {
     #[inline(always)]
     fn parse<const VALUE: bool>(&mut self) -> Option<Result<Span<'a>, MissingFieldName>> {
         let mut lines = Lines::new(self.metadata, self.pos);
-        let found = match self.strip {
-            Strip::Bytes => record_in::<VALUE>(&mut lines, &trim),
-            Strip::Str => record_in::<VALUE>(&mut lines, &trim_str),
-        };
+        let found = record_in::<VALUE>(&mut lines);
         self.pos = lines.pos();
         if found.is_err() {
             self.skip_nameless_run();
@@ -249,10 +241,7 @@ impl<'a> Records<'a> {
     #[inline(never)]
     fn skip_nameless_run(&mut self) {
         let mut lines = Lines::new(self.metadata, self.pos);
-        match self.strip {
-            Strip::Bytes => skip_run(&mut lines, &trim),
-            Strip::Str => skip_run(&mut lines, &trim_str),
-        }
+        skip_run(&mut lines);
         self.pos = lines.pos();
     }
 }
@@ -302,7 +291,6 @@ impl<'a> Iterator for Spans<'a> {
 #[inline(always)]
 fn record_in<'a, const VALUE: bool>(
     lines: &mut Lines<'a>,
-    trim: &impl Fn(&[u8]) -> &[u8],
 ) -> Result<Option<Span<'a>>, MissingFieldName> {
     loop {
         let start = lines.pos();
@@ -314,12 +302,12 @@ fn record_in<'a, const VALUE: bool>(
             continue;
         }
         let Some(rest) = header.strip_prefix(b"> ") else {
-            skip_run(lines, trim);
+            skip_run(lines);
             continue;
         };
         let name = record_name(rest)?;
         if !VALUE {
-            skip_run(lines, trim);
+            skip_run(lines);
             return Ok(Some(Span {
                 name,
                 start,
@@ -333,7 +321,7 @@ fn record_in<'a, const VALUE: bool>(
         // value drops.
         let (mut crlf, mut ended_crlf) = (false, false);
         for line in lines.by_ref() {
-            if is_blank(line, trim) {
+            if is_blank(line) {
                 break;
             }
             let ending = line.len() - without_ending(line).len();
@@ -374,20 +362,20 @@ fn crlf_to_lf(value: &[u8]) -> Vec<u8> {
 
 /// Consume lines through the next blank one.
 #[inline(always)]
-fn skip_run(lines: &mut Lines<'_>, trim: &impl Fn(&[u8]) -> &[u8]) {
+fn skip_run(lines: &mut Lines<'_>) {
     for line in lines {
-        if is_blank(line, trim) {
+        if is_blank(line) {
             break;
         }
     }
 }
 
 /// Whether `line` strips to nothing, deciding most lines by their first
-/// byte: printable ASCII is whitespace for neither `str` nor `bytes`.
+/// byte: no byte above the space is whitespace.
 #[inline(always)]
-fn is_blank(line: &[u8], trim: &impl Fn(&[u8]) -> &[u8]) -> bool {
+fn is_blank(line: &[u8]) -> bool {
     match line.first() {
-        Some(&byte) if byte > b' ' && byte < 0x80 => false,
+        Some(&byte) if byte > b' ' => false,
         _ => trim(line).is_empty(),
     }
 }
@@ -416,7 +404,7 @@ mod tests {
     use super::*;
 
     fn names(metadata: &str) -> Result<Vec<String>, MissingFieldName> {
-        Records::new(metadata.as_bytes(), 0, Strip::Bytes)
+        Records::new(metadata.as_bytes(), 0)
             .map(|record| Ok(String::from_utf8(record?.name.to_vec()).unwrap()))
             .collect()
     }
@@ -430,8 +418,8 @@ mod tests {
         assert_eq!(names("> missing\nv\n"), Err(MissingFieldName));
     }
 
-    fn values(metadata: &str, strip: Strip) -> Vec<(String, bool)> {
-        Records::new(metadata.as_bytes(), 0, strip)
+    fn values(metadata: &str) -> Vec<(String, bool)> {
+        Records::new(metadata.as_bytes(), 0)
             .map(|record| {
                 let value = record.unwrap().value;
                 let borrowed = matches!(value, Cow::Borrowed(_));
@@ -449,18 +437,11 @@ mod tests {
             ("c", true),
             ("", true),
         ];
-        assert_eq!(
-            values(metadata, Strip::Bytes),
-            expected.map(|(v, b)| (v.into(), b))
-        );
-        // Lines that strip to nothing still end values, by the block's rules.
+        assert_eq!(values(metadata), expected.map(|(v, b)| (v.into(), b)));
+        // Only lines of ASCII whitespace end values.
         let wide = "> <A>\nx\u{3000}\n\u{3000}\ny\n";
-        assert_eq!(values(wide, Strip::Str), [("x\u{3000}".into(), true)]);
-        assert_eq!(
-            values(wide, Strip::Bytes),
-            [("x\u{3000}\n\u{3000}\ny".into(), true)]
-        );
-        assert_eq!(values("> <A>\na\r", Strip::Bytes), [("a".into(), true)]);
+        assert_eq!(values(wide), [("x\u{3000}\n\u{3000}\ny".into(), true)]);
+        assert_eq!(values("> <A>\na\r"), [("a".into(), true)]);
     }
 
     #[test]
@@ -470,26 +451,24 @@ mod tests {
             "\n\n> <A> (1)\n\u{3000}\n> <B>\n",
             "",
         ] {
-            for strip in [Strip::Bytes, Strip::Str] {
-                let metadata = metadata.as_bytes();
-                let headers: Vec<_> = Records::new(metadata, 0, strip)
-                    .headers()
-                    .map(|header| header.unwrap())
-                    .collect();
-                let mut records = Records::new(metadata, 0, strip);
-                let mut expected = Vec::new();
-                while let Some(record) = records.next() {
-                    let record = record.unwrap();
-                    expected.push(Header {
-                        name: record.name,
-                        start: record.start,
-                        end: records.pos(),
-                    });
-                }
-                assert_eq!(headers, expected);
+            let metadata = metadata.as_bytes();
+            let headers: Vec<_> = Records::new(metadata, 0)
+                .headers()
+                .map(|header| header.unwrap())
+                .collect();
+            let mut records = Records::new(metadata, 0);
+            let mut expected = Vec::new();
+            while let Some(record) = records.next() {
+                let record = record.unwrap();
+                expected.push(Header {
+                    name: record.name,
+                    start: record.start,
+                    end: records.pos(),
+                });
             }
+            assert_eq!(headers, expected);
         }
-        let mut headers = Records::new(b"> A\n> <1>\n\n> <B>\n", 0, Strip::Bytes).headers();
+        let mut headers = Records::new(b"> A\n> <1>\n\n> <B>\n", 0).headers();
         assert_eq!(headers.next(), Some(Err(MissingFieldName)));
         assert_eq!(headers.next().unwrap().unwrap().name, b"B");
         assert_eq!(headers.next(), None);
@@ -498,7 +477,7 @@ mod tests {
     #[test]
     fn header_pool_gives_each_name_its_lines_in_order() {
         let metadata = b"> bad\n> <A>\n\n>  <A> (1) \na\n\n> 7 <B>\r\nb\n\n> <A>\na\n\n";
-        let mut pool = HeaderPool::new(metadata, Strip::Bytes, HeaderStyle::Copy);
+        let mut pool = HeaderPool::new(metadata, HeaderStyle::Copy);
         assert_eq!(pool.template, (&b">  <"[..], &b"> (1) "[..]));
         assert_eq!(pool.take(b"A"), Some(&b">  <A> (1) \n"[..]));
         assert_eq!(pool.take(b"A"), Some(&b"> <A>\n"[..]));
@@ -506,16 +485,16 @@ mod tests {
         assert_eq!(pool.take(b"A"), None);
         assert_eq!(pool.take(b"C"), None);
 
-        let mut pool = HeaderPool::new(metadata, Strip::Bytes, HeaderStyle::Plain);
+        let mut pool = HeaderPool::new(metadata, HeaderStyle::Plain);
         assert_eq!(pool.template, (&b"> <"[..], &b">"[..]));
         for name in [&b"A"[..], b"B", b"A"] {
             assert!(pool.take(name).is_some());
         }
         assert_eq!(pool.take(b"A"), None);
-        let pool = HeaderPool::new(metadata, Strip::Bytes, HeaderStyle::Padded);
+        let pool = HeaderPool::new(metadata, HeaderStyle::Padded);
         assert_eq!(pool.template, (&b">  <"[..], &b">"[..]));
 
-        let mut empty = HeaderPool::new(b"x\n", Strip::Bytes, HeaderStyle::Copy);
+        let mut empty = HeaderPool::new(b"x\n", HeaderStyle::Copy);
         assert_eq!(empty.template, HeaderStyle::Plain.fixed());
         assert_eq!(empty.take(b"A"), None);
     }

@@ -12,7 +12,6 @@ use pyo3::exceptions::PyBufferError;
 use crate::core::block::Block;
 use crate::core::index::Index;
 use crate::core::record::MissingFieldName;
-use crate::core::strip::Strip;
 
 /// A block whose bytes buffers may export, so edits, which may move or free
 /// them, raise until every export is released. Edits also drop the index
@@ -46,7 +45,7 @@ impl Exported {
     /// # Errors
     ///
     /// `MissingFieldName` if a record header has no `<name>`.
-    pub(crate) fn index(&self, strip: Strip) -> Result<Option<&Index>, MissingFieldName> {
+    pub(crate) fn index(&self) -> Result<Option<&Index>, MissingFieldName> {
         if let Some(index) = self.index.get() {
             return Ok(index.as_ref());
         }
@@ -54,7 +53,7 @@ impl Exported {
             self.looked_up.store(true, Ordering::Relaxed);
             return Ok(None);
         }
-        let index = Index::build(self.block.metadata(), strip)?;
+        let index = Index::build(self.block.metadata())?;
         Ok(self.index.get_or_init(|| index).as_ref())
     }
 

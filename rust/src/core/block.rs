@@ -22,7 +22,7 @@ use crate::core::newline::{
 use crate::core::record::{
     HeaderPool, HeaderStyle, Headers, MissingFieldName, Records, push_header, push_value,
 };
-use crate::core::strip::Strip;
+use crate::core::strip::{trim, trim_end};
 
 static MEND: LazyLock<memmem::Finder<'static>> = LazyLock::new(|| memmem::Finder::new(b"\nM  END"));
 
@@ -292,8 +292,8 @@ impl Block {
     }
 
     /// The title line without trailing whitespace.
-    pub fn title(&self, strip: Strip) -> &[u8] {
-        strip.trim_end(&self.data[..self.title_end])
+    pub fn title(&self) -> &[u8] {
+        trim_end(&self.data[..self.title_end])
     }
 
     /// The MDL lines after the title, through `M  END`, each ending in `\n`.
@@ -318,16 +318,16 @@ impl Block {
 
     /// Append a record with a single value line, after a blank line unless
     /// the SD data is empty or already ends with one, its header in `style`.
-    pub fn append_record(&mut self, name: &[u8], value: &[u8], strip: Strip, style: HeaderStyle) {
+    pub fn append_record(&mut self, name: &[u8], value: &[u8], style: HeaderStyle) {
         self.ensure_title_line();
         // Appended lines must not read as the MDL's end.
         self.mdl_end();
         let template = match style {
-            HeaderStyle::Copy => self.template(strip),
+            HeaderStyle::Copy => self.template(),
             HeaderStyle::Plain | HeaderStyle::Padded => None,
         };
         let (newline, trailer) = (self.newline(), self.trailer());
-        let needs_separator = self.ends_in_text(strip);
+        let needs_separator = self.ends_in_text();
         let body_end = self.body_end();
         let data = self.data.to_mut();
         data.truncate(body_end);
@@ -353,8 +353,8 @@ impl Block {
     /// the default styles do not carry a header parser.
     #[cold]
     #[inline(never)]
-    fn template(&self, strip: Strip) -> Option<(Range<usize>, Range<usize>)> {
-        let header = self.headers(strip).find_map(Result::ok)?;
+    fn template(&self) -> Option<(Range<usize>, Range<usize>)> {
+        let header = self.headers().find_map(Result::ok)?;
         let (before, after) = header.around_name(self.metadata())?;
         let mdl_end = self.mdl_end();
         let shift = |range: Range<usize>| range.start + mdl_end..range.end + mdl_end;
@@ -363,11 +363,11 @@ impl Block {
 
     /// Whether the last SD data line is not blank, so that a header
     /// written after it would read as part of its run.
-    fn ends_in_text(&self, strip: Strip) -> bool {
+    fn ends_in_text(&self) -> bool {
         let metadata = self.metadata();
         let body = metadata.strip_suffix(b"\n").unwrap_or(metadata);
         let start = memrchr(b'\n', body).map_or(0, |index| index + 1);
-        !strip.trim(&body[start..]).is_empty()
+        !trim(&body[start..]).is_empty()
     }
 
     /// Replace the title line with `title`, keeping the line's ending.
@@ -428,18 +428,17 @@ impl Block {
         &mut self,
         name: &[u8],
         value: &[u8],
-        strip: Strip,
         style: HeaderStyle,
     ) -> Result<(), MissingFieldName> {
-        if self.rewrite_records(name, Some(value), strip)? == 0 {
-            self.append_record(name, value, strip, style);
+        if self.rewrite_records(name, Some(value))? == 0 {
+            self.append_record(name, value, style);
         }
         Ok(())
     }
 
     /// Remove every record named `name`, returning how many there were.
-    pub fn remove_records(&mut self, name: &[u8], strip: Strip) -> Result<usize, MissingFieldName> {
-        self.rewrite_records(name, None, strip)
+    pub fn remove_records(&mut self, name: &[u8]) -> Result<usize, MissingFieldName> {
+        self.rewrite_records(name, None)
     }
 
     /// Replace the whole SD data with `records`. The k-th record with a name
@@ -448,7 +447,6 @@ impl Block {
     pub fn replace_records<'a>(
         &mut self,
         records: impl IntoIterator<Item = (&'a [u8], &'a [u8])>,
-        strip: Strip,
         style: HeaderStyle,
     ) {
         let mut records = records.into_iter().peekable();
@@ -459,7 +457,7 @@ impl Block {
         let mdl_end = self.mdl_end();
         let data = self.data.to_mut();
         let old = data.split_off(mdl_end);
-        let mut headers = HeaderPool::new(&old[..old.len() - trailer.len()], strip, style);
+        let mut headers = HeaderPool::new(&old[..old.len() - trailer.len()], style);
         for (name, value) in records {
             match headers.take(name) {
                 Some(line) => data.extend_from_slice(line),
@@ -476,11 +474,10 @@ impl Block {
         &mut self,
         name: &[u8],
         value: Option<&[u8]>,
-        strip: Strip,
     ) -> Result<usize, MissingFieldName> {
         let metadata = self.metadata();
         let mut spans = Vec::new();
-        for header in self.headers(strip) {
+        for header in self.headers() {
             let header = header?;
             if header.name == name {
                 spans.push((header.start, header.end));
@@ -530,18 +527,18 @@ impl Block {
     }
 
     /// The records of the SD data at or after `pos`.
-    pub fn records_at(&self, pos: usize, strip: Strip) -> Records<'_> {
-        Records::new(self.metadata(), pos, strip)
+    pub fn records_at(&self, pos: usize) -> Records<'_> {
+        Records::new(self.metadata(), pos)
     }
 
     /// The records of the SD data.
-    pub fn records(&self, strip: Strip) -> Records<'_> {
-        self.records_at(0, strip)
+    pub fn records(&self) -> Records<'_> {
+        self.records_at(0)
     }
 
     /// The record headers of the SD data, skipping the values.
-    pub fn headers(&self, strip: Strip) -> Headers<'_> {
-        self.records(strip).headers()
+    pub fn headers(&self) -> Headers<'_> {
+        self.records().headers()
     }
 
     /// The format and atom and bond counts declared by the MDL header.
@@ -581,7 +578,7 @@ mod tests {
 
     fn records(block: &Block) -> Result<Vec<(String, String)>, MissingFieldName> {
         block
-            .records(Strip::Bytes)
+            .records()
             .map(|record| {
                 let record = record?;
                 Ok((
@@ -595,7 +592,7 @@ mod tests {
     #[test]
     fn splits_title_mdl_and_metadata() {
         let block = block(" t \r\nsrc\nM  END\n> <A>\n a \nb\n\n> <B>\n\n$$$$\n", true);
-        assert_eq!(block.title(Strip::Bytes), b" t");
+        assert_eq!(block.title(), b" t");
         assert_eq!(block.mdl(), b"src\nM  END\n");
         assert_eq!(block.metadata(), b"> <A>\n a \nb\n\n> <B>\n\n");
         assert_eq!(
@@ -624,7 +621,7 @@ mod tests {
     #[test]
     fn a_leading_delimiter_is_an_empty_record() {
         let block = block("$$$$ x\n", true);
-        assert_eq!(block.title(Strip::Bytes), b"");
+        assert_eq!(block.title(), b"");
         assert_eq!(block.mdl(), b"");
         assert_eq!(block.molblock(), b"");
         assert_eq!(records(&block).unwrap(), []);
@@ -648,17 +645,16 @@ mod tests {
     fn lines_added_to_an_empty_record_follow_an_empty_title() {
         let empty = block("$$$$\r\n", true);
         let mut appended = empty.clone();
-        appended.append_record(b"A", b"1", Strip::Bytes, HeaderStyle::Plain);
+        appended.append_record(b"A", b"1", HeaderStyle::Plain);
         assert_eq!(written(&appended), "\r\n> <A>\r\n1\r\n\r\n$$$$\r\n");
         let mut set = empty.clone();
-        set.set_record(b"A", b"1", Strip::Bytes, HeaderStyle::Plain)
-            .unwrap();
+        set.set_record(b"A", b"1", HeaderStyle::Plain).unwrap();
         assert_eq!(set, appended);
         let mut replaced = empty.clone();
-        replaced.replace_records([(&b"A"[..], &b"1"[..])], Strip::Bytes, HeaderStyle::Plain);
+        replaced.replace_records([(&b"A"[..], &b"1"[..])], HeaderStyle::Plain);
         assert_eq!(replaced, appended);
         let mut cleared = empty.clone();
-        cleared.replace_records([], Strip::Bytes, HeaderStyle::Plain);
+        cleared.replace_records([], HeaderStyle::Plain);
         cleared.replace_mdl([]);
         assert_eq!(cleared, empty);
         let mut mdl = empty.clone();
@@ -677,7 +673,7 @@ mod tests {
 
         // Lines the block writes itself end like the title line.
         let mut block = block(" t \r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$ x\r\n", true);
-        assert_eq!(block.title(Strip::Bytes), b" t");
+        assert_eq!(block.title(), b" t");
         assert_eq!(
             written(&block),
             " t \r\nM  END\r\n> <A>\r\n1\r\n\r\n$$$$\r\n"
@@ -696,11 +692,9 @@ mod tests {
         );
         assert_eq!(written(&self::block("t\r", false)), "t\r\n$$$$\r\n");
         assert_eq!(written(&self::block("t", false)), "t\n$$$$\n");
-        block.append_record(b"B", b"2", Strip::Bytes, HeaderStyle::Plain);
+        block.append_record(b"B", b"2", HeaderStyle::Plain);
         block.set_title(b"new").unwrap();
-        block
-            .set_record(b"A", b"3", Strip::Bytes, HeaderStyle::Plain)
-            .unwrap();
+        block.set_record(b"A", b"3", HeaderStyle::Plain).unwrap();
         let edited = "new\r\nM  END\r\n> <A>\r\n3\r\n\r\n> <B>\r\n2\r\n\r\n$$$$\r\n";
         assert_eq!(written(&block), edited);
         let Parts {
@@ -712,7 +706,7 @@ mod tests {
             Block::from_parts(data.to_vec(), title_end, mdl_end),
             Some(block.clone())
         );
-        block.replace_records([(&b"C"[..], &b"c"[..])], Strip::Bytes, HeaderStyle::Plain);
+        block.replace_records([(&b"C"[..], &b"c"[..])], HeaderStyle::Plain);
         assert_eq!(
             written(&block),
             "new\r\nM  END\r\n> <C>\r\nc\r\n\r\n$$$$\r\n"
@@ -720,7 +714,7 @@ mod tests {
 
         // A delimiter line is kept as read, even if the title's ending differs.
         let mut mixed = self::block("t\nM  END\n$$$$\r\n", true);
-        mixed.append_record(b"A", b"1", Strip::Bytes, HeaderStyle::Plain);
+        mixed.append_record(b"A", b"1", HeaderStyle::Plain);
         assert_eq!(written(&mixed), "t\nM  END\n> <A>\n1\n\n$$$$\r\n");
         assert_eq!(Block::from_parts(b"t\r\n$$$$\r".to_vec(), 3, 3), None);
         assert_eq!(Block::from_parts(b"\r\n".to_vec(), 2, 2), None);
@@ -736,7 +730,7 @@ mod tests {
     #[test]
     fn appended_records_follow_existing_metadata() {
         let mut block = block("t\nM  END\n> <A>\na\n\n$$$$\n", true);
-        block.append_record(b"B", b"b", Strip::Bytes, HeaderStyle::Plain);
+        block.append_record(b"B", b"b", HeaderStyle::Plain);
         assert_eq!(
             records(&block).unwrap(),
             [("A".into(), "a".into()), ("B".into(), "b".into())]
@@ -749,14 +743,14 @@ mod tests {
             ("t\nM  END\n> <A>\na", false),
         ] {
             let mut block = self::block(text, delimited);
-            block.append_record(b"B", b"b", Strip::Bytes, HeaderStyle::Plain);
+            block.append_record(b"B", b"b", HeaderStyle::Plain);
             assert_eq!(written(&block), "t\nM  END\n> <A>\na\n\n> <B>\nb\n\n$$$$\n");
         }
         let mut stray = self::block("t\r\nM  END\r\nstray\r\n$$$$\r\n", true);
-        stray.append_record(b"B", b"b", Strip::Bytes, HeaderStyle::Plain);
+        stray.append_record(b"B", b"b", HeaderStyle::Plain);
         assert_eq!(records(&stray).unwrap(), [("B".into(), "b".into())]);
         let mut spaced = self::block("t\nM  END\n> <A>\na\n \n$$$$\n", true);
-        spaced.append_record(b"B", b"b", Strip::Bytes, HeaderStyle::Plain);
+        spaced.append_record(b"B", b"b", HeaderStyle::Plain);
         assert_eq!(
             written(&spaced),
             "t\nM  END\n> <A>\na\n \n> <B>\nb\n\n$$$$\n"
@@ -772,7 +766,7 @@ mod tests {
             (HeaderStyle::Copy, ">  <B>  (1) "),
         ] {
             let mut block = block(text, false);
-            block.append_record(b"B", b"b", Strip::Bytes, style);
+            block.append_record(b"B", b"b", style);
             assert_eq!(written(&block), format!("{text}{header}\nb\n\n$$$$\n"));
         }
     }
@@ -798,7 +792,7 @@ mod tests {
             ("t\nM  END\n\nnote\n\n> <A> x\na\n\n", "> <B> x", "\n"),
         ] {
             let mut block = block(text, false);
-            block.append_record(b"B", b"b", Strip::Bytes, HeaderStyle::Copy);
+            block.append_record(b"B", b"b", HeaderStyle::Copy);
             assert_eq!(
                 written(&block),
                 format!("{text}{header}{newline}b{newline}{newline}$$$${newline}")
@@ -810,11 +804,11 @@ mod tests {
     fn set_molblock_replaces_title_and_mdl_only() {
         let mut block = block(" old \nsrc\nM  END\n> <A>\na\n\n$$$$\n", true);
         block.set_molblock(b"new\n  prog\n\nM  END").unwrap();
-        assert_eq!(block.title(Strip::Bytes), b"new");
+        assert_eq!(block.title(), b"new");
         assert_eq!(block.mdl(), b"  prog\n\nM  END\n");
         assert_eq!(written(&block), "new\n  prog\n\nM  END\n> <A>\na\n\n$$$$\n");
         block.set_molblock(b"M  END\nM  END\n \n\t\n").unwrap();
-        assert_eq!(block.title(Strip::Bytes), b"M  END");
+        assert_eq!(block.title(), b"M  END");
         assert_eq!(block.mdl(), b"M  END\n");
         assert_eq!(records(&block).unwrap(), [("A".into(), "a".into())]);
         for (bad, error) in [
@@ -826,14 +820,14 @@ mod tests {
         ] {
             assert_eq!(block.set_molblock(bad), Err(error));
         }
-        assert_eq!(block.title(Strip::Bytes), b"M  END");
+        assert_eq!(block.title(), b"M  END");
     }
 
     #[test]
     fn set_title_keeps_the_rest() {
         let mut block = block(" old \nsrc\nM  END\n> <A>\na\n\n$$$$\n", true);
         block.set_title(b"a much longer title").unwrap();
-        assert_eq!(block.title(Strip::Bytes), b"a much longer title");
+        assert_eq!(block.title(), b"a much longer title");
         assert_eq!(block.mdl(), b"src\nM  END\n");
         assert_eq!(records(&block).unwrap(), [("A".into(), "a".into())]);
         block.set_title(b" $$$$ ").unwrap();
@@ -861,16 +855,12 @@ mod tests {
     fn set_record_replaces_the_first_and_drops_the_rest() {
         let text = "t\nM  END\n> <A>  (1)\n1\nmore\n\njunk\n\n> <B>\nb\n\n> <A>\n2\n\n";
         let mut block = block(text, false);
-        block
-            .set_record(b"A", b"new", Strip::Bytes, HeaderStyle::Plain)
-            .unwrap();
+        block.set_record(b"A", b"new", HeaderStyle::Plain).unwrap();
         assert_eq!(
             written(&block),
             "t\nM  END\n> <A>  (1)\nnew\n\njunk\n\n> <B>\nb\n\n$$$$\n"
         );
-        block
-            .set_record(b"C", b"c", Strip::Bytes, HeaderStyle::Plain)
-            .unwrap();
+        block.set_record(b"C", b"c", HeaderStyle::Plain).unwrap();
         assert_eq!(
             records(&block).unwrap(),
             [
@@ -879,32 +869,24 @@ mod tests {
                 ("C".into(), "c".into())
             ]
         );
-        assert_eq!(block.remove_records(b"B", Strip::Bytes), Ok(1));
-        assert_eq!(block.remove_records(b"B", Strip::Bytes), Ok(0));
+        assert_eq!(block.remove_records(b"B"), Ok(1));
+        assert_eq!(block.remove_records(b"B"), Ok(0));
         assert_eq!(
             written(&block),
             "t\nM  END\n> <A>  (1)\nnew\n\njunk\n\n> <C>\nc\n\n$$$$\n"
         );
-        block.replace_records([(&b"Z"[..], &b"z"[..])], Strip::Bytes, HeaderStyle::Copy);
+        block.replace_records([(&b"Z"[..], &b"z"[..])], HeaderStyle::Copy);
         assert_eq!(written(&block), "t\nM  END\n> <Z>  (1)\nz\n\n$$$$\n");
         let mut malformed = self::block("t\nM  END\n> bad\n\n", false);
-        assert_eq!(
-            malformed.remove_records(b"A", Strip::Bytes),
-            Err(MissingFieldName)
-        );
+        assert_eq!(malformed.remove_records(b"A"), Err(MissingFieldName));
     }
 
     #[test]
-    fn str_strip_ends_records_at_unicode_blank_lines() {
+    fn only_ascii_whitespace_strips() {
         let text = "\u{3000}t\u{a0}\nM  END\n> <A>\u{2003}\n\u{3000}\n\u{1c}tail\n\n";
         let block = block(text, false);
-        assert_eq!(block.title(Strip::Str), "\u{3000}t".as_bytes());
-        let mut records = block.records(Strip::Str);
-        let record = records.next().unwrap().unwrap();
-        assert_eq!((record.name, &*record.value), (&b"A"[..], &b""[..]));
-        assert_eq!(records.next(), None);
-        assert_eq!(block.title(Strip::Bytes), "\u{3000}t\u{a0}".as_bytes());
-        let record = block.records(Strip::Bytes).next().unwrap().unwrap();
+        assert_eq!(block.title(), "\u{3000}t\u{a0}".as_bytes());
+        let record = block.records().next().unwrap().unwrap();
         assert_eq!(record.name, b"A");
         assert_eq!(&*record.value, "\u{3000}\n\u{1c}tail".as_bytes());
     }

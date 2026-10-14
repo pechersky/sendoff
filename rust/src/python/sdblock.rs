@@ -19,7 +19,6 @@ use crate::core::lines::lines;
 use crate::core::newline::{translated, universal_newlines};
 use crate::core::record::{HeaderStyle, Record};
 use crate::core::split::single_block;
-use crate::core::strip::Strip;
 use crate::python::ctable::PyCTable;
 use crate::python::exports::Exported;
 use crate::python::kind::{Kind, bytes_of, decode};
@@ -70,7 +69,7 @@ impl PySDRecordIterator {
             return Ok(None);
         }
         let block = unchanged(self.block.bind(py), self.edits, &mut self.finished)?;
-        let mut records = block.block.records_at(self.pos, block.kind.strip());
+        let mut records = block.block.records_at(self.pos);
         let result = match records.next() {
             Some(Ok(record)) => Namer::with(block.kind, |names| names.lookup(py, record.name))
                 .and_then(|name| PyTuple::new(py, [name, block.kind.value(py, &record.value)?]))
@@ -107,10 +106,7 @@ impl PySDNameIterator {
             return Ok(None);
         }
         let block = unchanged(self.block.bind(py), self.edits, &mut self.finished)?;
-        let mut headers = block
-            .block
-            .records_at(self.pos, block.kind.strip())
-            .headers();
+        let mut headers = block.block.records_at(self.pos).headers();
         let result = match headers.next() {
             Some(Ok(header)) => {
                 self.pos = header.end;
@@ -227,12 +223,11 @@ impl PySDBlock {
     fn last_value<'py>(&self, name: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
         let py = name.py();
         let name = self.arg_bytes(name, "record names")?;
-        let strip = self.kind.strip();
-        let value = match self.block.index(strip)? {
+        let value = match self.block.index()? {
             Some(index) => index.last(self.block.metadata(), name),
             None => {
                 let mut found = None;
-                for header in self.block.headers(strip) {
+                for header in self.block.headers() {
                     let header = header?;
                     if header.name == name {
                         found = Some(header.start);
@@ -241,7 +236,7 @@ impl PySDBlock {
                 let Some(start) = found else {
                     return Ok(None);
                 };
-                let record = self.block.records_at(start, strip).next();
+                let record = self.block.records_at(start).next();
                 let record = record.and_then(Result::ok).expect("a record starts here");
                 Some(record.value)
             }
@@ -264,9 +259,7 @@ impl PySDBlock {
     ) -> PyResult<()> {
         let name = self.arg_bytes(name, "record names")?;
         let value = self.arg_bytes(value, "values")?;
-        self.block
-            .get_mut()?
-            .set_record(name, value, self.kind.strip(), style)?;
+        self.block.get_mut()?.set_record(name, value, style)?;
         self.edited();
         Ok(())
     }
@@ -292,7 +285,7 @@ impl PySDBlock {
     /// Parse the title and MDL lines as a CTable, decoding a bytes block's
     /// as Latin-1, so every byte round-trips.
     fn parse_ctable(&self, py: Python<'_>) -> PyResult<CTable> {
-        let title = self.block.title(self.kind.strip());
+        let title = self.block.title();
         let decoded = match self.kind {
             Kind::Text => {
                 let noted = |error| self.noted(py, error, || "Reading the CTAB of".into());
@@ -348,7 +341,7 @@ impl PySDBlock {
         action: impl FnOnce() -> String,
     ) -> PyErr {
         if error.is_instance_of::<PyUnicodeDecodeError>(py) {
-            let title = String::from_utf8_lossy(self.block.title(Strip::Bytes));
+            let title = String::from_utf8_lossy(self.block.title());
             let note = format!("{} the SDBlock titled '{title}'. {DECODE_HINT}", action());
             if let Err(error) = error.add_note(py, note) {
                 return error;
@@ -487,9 +480,7 @@ impl PySDBlock {
             for (name, value) in record_pairs(records)? {
                 let name = slf.arg_bytes(&name, "record names")?;
                 let value = slf.arg_bytes(&value, "values")?;
-                slf.block
-                    .get_mut()?
-                    .append_record(name, value, slf.kind.strip(), style);
+                slf.block.get_mut()?.append_record(name, value, style);
             }
         }
         Ok(slf)
@@ -536,7 +527,7 @@ impl PySDBlock {
     #[getter]
     fn title<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.kind
-            .value(py, self.block.title(self.kind.strip()))
+            .value(py, self.block.title())
             .map_err(|error| self.noted(py, error, || "Reading the title of".into()))
     }
 
@@ -609,7 +600,7 @@ impl PySDBlock {
     fn records<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let list = PyList::empty(py);
         Namer::with(self.kind, |names| {
-            for record in self.block.records(self.kind.strip()) {
+            for record in self.block.records() {
                 list.append(self.record(py, names, &record?)?)?;
             }
             Ok(list)
@@ -710,7 +701,7 @@ impl PySDBlock {
     fn names<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let list = PyList::empty(py);
         Namer::with(self.kind, |names| {
-            for header in self.block.headers(self.kind.strip()) {
+            for header in self.block.headers() {
                 let header = header?;
                 let name = names.name(py, header.name);
                 list.append(
@@ -723,11 +714,11 @@ impl PySDBlock {
 
     /// The number of records, duplicates included: `len(block.records())`.
     fn __len__(&self) -> PyResult<usize> {
-        if let Some(index) = self.block.index(self.kind.strip())? {
+        if let Some(index) = self.block.index()? {
             return Ok(index.len());
         }
         let mut count = 0;
-        for header in self.block.headers(self.kind.strip()) {
+        for header in self.block.headers() {
             header?;
             count += 1;
         }
@@ -742,7 +733,7 @@ impl PySDBlock {
     /// Show the title; a str block's undecodable title bytes show as U+FFFD
     /// instead of raising.
     fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
-        let title = self.block.title(self.kind.strip());
+        let title = self.block.title();
         let title = match self.kind {
             Kind::Text => PyString::new(py, &String::from_utf8_lossy(title)).into_any(),
             Kind::Bytes => PyBytes::new(py, title).into_any(),
@@ -816,11 +807,11 @@ impl PySDBlock {
     ///     MalformedRecordError: if a record header has no `<name>`
     fn __contains__(&self, name: &Bound<'_, PyAny>) -> PyResult<bool> {
         let name = self.arg_bytes(name, "record names")?;
-        if let Some(index) = self.block.index(self.kind.strip())? {
+        if let Some(index) = self.block.index()? {
             return Ok(index.contains(self.block.metadata(), name));
         }
         let mut seen = false;
-        for header in self.block.headers(self.kind.strip()) {
+        for header in self.block.headers() {
             seen |= header?.name == name;
         }
         Ok(seen)
@@ -833,7 +824,7 @@ impl PySDBlock {
     fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         Namer::with(self.kind, |names| {
-            for record in self.block.records(self.kind.strip()) {
+            for record in self.block.records() {
                 let (name, value) = self.record(py, names, &record?)?;
                 dict.set_item(name, value)?;
             }
@@ -932,9 +923,7 @@ impl PySDBlock {
         let style = header_style(header)?;
         let name = self.arg_bytes(name, "record names")?;
         let value = self.arg_bytes(value, "values")?;
-        self.block
-            .get_mut()?
-            .append_record(name, value, self.kind.strip(), style);
+        self.block.get_mut()?.append_record(name, value, style);
         self.edited();
         Ok(())
     }
@@ -978,10 +967,7 @@ impl PySDBlock {
     #[pyo3(signature = (name: "AnyStr"))]
     fn remove_record(&mut self, name: &Bound<'_, PyAny>) -> PyResult<usize> {
         let name = self.arg_bytes(name, "record names")?;
-        let removed = self
-            .block
-            .get_mut()?
-            .remove_records(name, self.kind.strip())?;
+        let removed = self.block.get_mut()?.remove_records(name)?;
         if removed > 0 {
             self.edited();
         }
@@ -1026,8 +1012,7 @@ impl PySDBlock {
                 ))
             })
             .collect::<PyResult<Vec<_>>>()?;
-        let strip = this.kind.strip();
-        this.block.get_mut()?.replace_records(records, strip, style);
+        this.block.get_mut()?.replace_records(records, style);
         this.edited();
         Ok(())
     }

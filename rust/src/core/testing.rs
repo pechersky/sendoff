@@ -2,7 +2,6 @@
 
 use crate::core::block::Block;
 use crate::core::record::HeaderStyle;
-use crate::core::strip::Strip;
 
 /// A xorshift64 generator of deterministic pseudo-random test input.
 pub fn xorshift(seed: u64) -> impl FnMut() -> u64 {
@@ -20,22 +19,18 @@ pub const EDITS: [fn(&mut Block) -> String; 8] = [
     |block| format!("{:?}", block.set_title(b"M  END")),
     |block| format!("{:?}", block.set_title(b"")),
     |block| {
-        block.append_record(b"A", b"M  END", Strip::Bytes, HeaderStyle::Copy);
+        block.append_record(b"A", b"M  END", HeaderStyle::Copy);
         String::new()
     },
     |block| {
         format!(
             "{:?}",
-            block.set_record(b"B", b"M  END", Strip::Bytes, HeaderStyle::Plain)
+            block.set_record(b"B", b"M  END", HeaderStyle::Plain)
         )
     },
-    |block| format!("{:?}", block.remove_records(b"A", Strip::Bytes)),
+    |block| format!("{:?}", block.remove_records(b"A")),
     |block| {
-        block.replace_records(
-            [(&b"A"[..], &b"M  END"[..])],
-            Strip::Bytes,
-            HeaderStyle::Copy,
-        );
+        block.replace_records([(&b"A"[..], &b"M  END"[..])], HeaderStyle::Copy);
         String::new()
     },
     |block| {

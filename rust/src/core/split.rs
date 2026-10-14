@@ -250,7 +250,6 @@ impl Tail<'_> {
 mod tests {
     use super::*;
     use crate::core::newline::translated;
-    use crate::core::strip::Strip;
     use crate::core::testing::xorshift;
 
     fn scanned(input: &[u8], chunk: usize) -> Vec<Block> {
@@ -276,7 +275,7 @@ mod tests {
             .iter()
             .map(|block| {
                 (
-                    String::from_utf8(block.title(Strip::Bytes).to_vec()).unwrap(),
+                    String::from_utf8(block.title().to_vec()).unwrap(),
                     String::from_utf8(block.serialized().to_vec()).unwrap(),
                 )
             })

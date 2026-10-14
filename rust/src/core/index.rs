@@ -3,7 +3,6 @@
 use std::borrow::Cow;
 
 use crate::core::record::{MissingFieldName, Records, record_value};
-use crate::core::strip::Strip;
 
 /// Where each record of some SD data lies, so lookups by name need not
 /// parse it again.
@@ -32,13 +31,13 @@ impl Index {
     /// # Errors
     ///
     /// `MissingFieldName` if a record header has no `<name>`.
-    pub fn build(metadata: &[u8], strip: Strip) -> Result<Option<Self>, MissingFieldName> {
+    pub fn build(metadata: &[u8]) -> Result<Option<Self>, MissingFieldName> {
         if u32::try_from(metadata.len()).is_err() {
             return Ok(None);
         }
         // The length fits in u32, so do the offsets.
         let offset = |at: usize| at as u32;
-        let entries = Records::new(metadata, 0, strip).spans().map(|span| {
+        let entries = Records::new(metadata, 0).spans().map(|span| {
             let span = span?;
             let name = span.name.as_ptr().addr() - metadata.as_ptr().addr();
             Ok(Entry {
@@ -92,32 +91,27 @@ mod tests {
             "> <a<b>c>\nv\n>  < x > (1)\nw\n\n> <>\n\n",
             "",
         ] {
-            for strip in [Strip::Bytes, Strip::Str] {
-                let data = metadata.as_bytes();
-                let index = Index::build(data, strip).unwrap().unwrap();
-                let records: Vec<_> = Records::new(data, 0, strip).map(Result::unwrap).collect();
-                assert_eq!(index.len(), records.len());
-                assert_eq!(index.is_empty(), records.is_empty());
-                let mut last = HashMap::new();
-                for record in &records {
-                    last.insert(record.name, record.value.clone());
-                }
-                for (name, value) in &last {
-                    assert!(index.contains(data, name));
-                    assert_eq!(index.last(data, name).as_ref(), Some(value));
-                }
-                assert!(!index.contains(data, b"missing"));
-                assert_eq!(index.last(data, b"missing"), None);
+            let data = metadata.as_bytes();
+            let index = Index::build(data).unwrap().unwrap();
+            let records: Vec<_> = Records::new(data, 0).map(Result::unwrap).collect();
+            assert_eq!(index.len(), records.len());
+            assert_eq!(index.is_empty(), records.is_empty());
+            let mut last = HashMap::new();
+            for record in &records {
+                last.insert(record.name, record.value.clone());
             }
+            for (name, value) in &last {
+                assert!(index.contains(data, name));
+                assert_eq!(index.last(data, name).as_ref(), Some(value));
+            }
+            assert!(!index.contains(data, b"missing"));
+            assert_eq!(index.last(data, b"missing"), None);
         }
     }
 
     #[test]
     fn a_header_without_a_name_fails_the_index() {
         let metadata = b"> <A>\n1\n\n> missing\nv\n\n> <B>\n2\n";
-        assert_eq!(
-            Index::build(metadata, Strip::Bytes).err(),
-            Some(MissingFieldName)
-        );
+        assert_eq!(Index::build(metadata).err(), Some(MissingFieldName));
     }
 }

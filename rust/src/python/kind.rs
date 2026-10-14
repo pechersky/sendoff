@@ -4,8 +4,6 @@ use pyo3::exceptions::PyUnicodeDecodeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
 
-use crate::core::strip::Strip;
-
 /// Whether a block was read from str or bytes input, which its names,
 /// values, and lines have.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -29,11 +27,6 @@ impl Kind {
             Kind::Text => PyString::from_bytes(py, bytes).map(Bound::into_any),
             Kind::Bytes => Ok(PyBytes::new(py, bytes).into_any()),
         }
-    }
-
-    /// The Python `strip()` that values of this kind follow.
-    pub(super) fn strip(self) -> Strip {
-        Strip::Bytes
     }
 }
 
