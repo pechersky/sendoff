@@ -32,6 +32,7 @@ jobs:
       run: |
         rustup toolchain install stable --profile minimal --component clippy
         rustup default stable
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - name: Check Clippy
       run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
@@ -77,6 +78,9 @@ jobs:
         rustup toolchain install stable --profile minimal
         rustup default stable
         rustup component add llvm-tools-preview
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        cache-directories: .cache/rust-coverage/target
     - name: Test with tox
       run: |
         uv pip install --system 'tox>=4.24,<5' 'tox-uv>=1.16,<2'
