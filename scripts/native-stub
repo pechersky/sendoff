@@ -14,6 +14,7 @@ getters and iterators, and the file-object Protocols.
 Change docstrings and simple types in Rust. For typing that needs the patch,
 edit sendoff/native.pyi and run --update-patch.
 """
+
 from __future__ import annotations
 
 import argparse

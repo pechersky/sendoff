@@ -1,5 +1,6 @@
 # mypy: allow-untyped-decorators
 """Test CTAB operations: counts, index checks, renumbering, and CTable."""
+
 import typing
 from pathlib import Path
 

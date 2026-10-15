@@ -1,5 +1,6 @@
 # mypy: allow-untyped-decorators
 """Test the SDBlock record, setter, comparison, copy, and pickle API."""
+
 import copy
 import io
 import pickle

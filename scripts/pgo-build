@@ -32,6 +32,7 @@ profiling only, under a Python that has frame pointers too (3.15+, or a recent
 python-build-standalone): they cost a few percent, so do not compare its
 timings against release wheels.
 """
+
 from __future__ import annotations
 
 import argparse

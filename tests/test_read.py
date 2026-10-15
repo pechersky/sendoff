@@ -1,5 +1,6 @@
 # mypy: allow-untyped-decorators
 """Test reading SDFs into blocks: parse_sdf, from_lines, from_sdf, decoding."""
+
 import copy
 import errno
 import gc

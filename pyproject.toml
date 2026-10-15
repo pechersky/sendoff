@@ -52,12 +52,12 @@ dev = [
     "flake8>=6.1.0,<8",
     "flake8-docstrings>=1.7.0,<2",
     "pydocstyle>=6.3.0,<7",
-    "black>=25.1,<26",
+    "black>=26.1,<27",
     "pre-commit>=3.5.0,<5",
     "darglint>=1.8.1,<2",
     "tbump>=6.11.0,<7",
     "mypy==2.4.0",
-    "isort>=5.12.0,<8",
+    "isort>=5.12.0,<10",
 ]
 
 [tool.maturin]
@@ -120,8 +120,6 @@ before-build = ""
 environment = {}
 
 [tool.black]
-# Match the black pre-commit hook; scripts/native-stub formats with it too.
-required-version = "25"
 line-length = 88
 include = '\.pyi?$'
 exclude = '''

@@ -1,5 +1,6 @@
 # mypy: allow-untyped-decorators
 """Test the python -m sendoff.cli.<command> shell helpers."""
+
 import errno
 import importlib
 import io
