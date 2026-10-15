@@ -243,8 +243,7 @@ def test_malformed_block(
     assert cli(capsysbinary, monkeypatch, "get", "ID", stdin=bad) == (
         1,
         b"A-1\n",
-        b"python -m sendoff.cli.get: block 2: "
-        b"SD data field header is missing a name\n",
+        b"python -m sendoff.cli.get: block 2: SD data field header is missing a name\n",
     )
 
 

@@ -477,8 +477,7 @@ def ambiguous_bond(bond: str) -> tuple[dict[str, str], CTableErrors]:
             {
                 "renumber_indices": (
                     NotImplementedError,
-                    "renumbering does not support continued (-) atom or bond "
-                    "lines yet",
+                    "renumbering does not support continued (-) atom or bond lines yet",
                 )
             },
         ),

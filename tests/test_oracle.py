@@ -141,9 +141,9 @@ def assert_blocks_match(
     for index, (block, expected) in enumerate(zip(native, reference)):
         context = f"block {index}"
         assert block.title == expected.title, context
-        assert outcome(lambda: list(block.records())) == outcome(
-            expected.records
-        ), context
+        assert outcome(lambda: list(block.records())) == outcome(expected.records), (
+            context
+        )
         assert outcome(lambda: list(block.iter_records())) == outcome(
             expected.records
         ), context
@@ -178,9 +178,9 @@ def assert_blocks_match(
         block.append_record(name, value)
         expected.append_record(name, value)
         assert serialized(block, text) == expected.serialize(), context
-        assert outcome(lambda: list(block.records())) == outcome(
-            expected.records
-        ), context
+        assert outcome(lambda: list(block.records())) == outcome(expected.records), (
+            context
+        )
         assert_mutations_match(block, text)
 
 

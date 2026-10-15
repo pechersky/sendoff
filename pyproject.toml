@@ -49,15 +49,10 @@ dev = [
     "sendoff[test]",
     "maturin==1.15.0",
     "tox>=4.24,<5",
-    "flake8>=6.1.0,<8",
-    "flake8-docstrings>=1.7.0,<2",
-    "pydocstyle>=6.3.0,<7",
-    "black>=26.1,<27",
+    "ruff>=0.17,<1",
     "pre-commit>=3.5.0,<5",
-    "darglint>=1.8.1,<2",
     "tbump>=6.11.0,<7",
     "mypy==2.4.0",
-    "isort>=5.12.0,<10",
 ]
 
 [tool.maturin]
@@ -69,8 +64,6 @@ include = [
     {path = "setup.cfg", format = "sdist"},
     {path = "tox.ini", format = "sdist"},
     {path = ".pre-commit-config.yaml", format = "sdist"},
-    {path = ".isort.cfg", format = "sdist"},
-    {path = ".flake8", format = "sdist"},
 ]
 exclude = ["sendoff/*.so", "sendoff/*.pyd", "sendoff/__pycache__/**"]
 
@@ -119,21 +112,25 @@ select = "*-win_arm64"
 before-build = ""
 environment = {}
 
-[tool.black]
+[tool.ruff]
 line-length = 88
-include = '\.pyi?$'
-exclude = '''
-/(
-    \.git
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | _build
-  | buck-out
-  | build
-  | dist
-)/
-'''
+extend-include = ["scripts/native-stub", "scripts/pgo-build"]
+
+[tool.ruff.lint]
+select = ["C90", "D", "E", "F", "I", "W"]
+ignore = [
+    "D107", # Missing docstring in __init__
+    "D301", # Use r""" if any backslashes in a docstring
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.ruff.lint.per-file-ignores]
+"sendoff/native.pyi" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 # Release: `tbump X.Y.Z` bumps Cargo.toml and Cargo.lock, commits, tags vX.Y.Z
 # and pushes. The tag runs tox.yml: tests, PGO wheels and sdist (wheels.yml),

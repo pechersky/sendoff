@@ -106,8 +106,8 @@ def normalize(text: str) -> str:
     return str.join("", lines)
 
 
-def black(text: str) -> str:
-    """Format stub text as the black pre-commit hook would.
+def format_stub(text: str) -> str:
+    """Format stub text as the ruff-format pre-commit hook would.
 
     Args:
         text: stub text
@@ -117,7 +117,7 @@ def black(text: str) -> str:
     """
     return subprocess.run(
         [
-            *(sys.executable, "-m", "black", "--quiet", "--pyi"),
+            *(sys.executable, "-m", "ruff", "format", "--quiet"),
             *("--stdin-filename", str(STUB), "-"),
         ],
         capture_output=True,
@@ -134,7 +134,7 @@ def generate() -> str:
     Returns:
         The stub text before the patch
     """
-    return black(normalize(introspect()))
+    return format_stub(normalize(introspect()))
 
 
 def diff(old: str, new: str) -> str:
@@ -245,13 +245,13 @@ def main() -> int:
     generated = generate()
     current = STUB.read_text() if STUB.exists() else ""
     if args.update_patch:
-        stub = black(current)
+        stub = format_stub(current)
         patch = diff(generated, stub)
-        assert black(apply(generated, patch)) == stub
+        assert format_stub(apply(generated, patch)) == stub
         PATCH.write_text(patch)
         STUB.write_text(stub)
         return 0
-    stub = black(apply(generated, PATCH.read_text()))
+    stub = format_stub(apply(generated, PATCH.read_text()))
     if stub == current:
         return 0
     if args.check:

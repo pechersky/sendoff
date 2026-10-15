@@ -26,11 +26,10 @@
 
  DEBUG_BUILD: Final[bool]
  """
-@@ -7,6 +25,21 @@
- """
+@@ -8,6 +26,21 @@
 
  __version__: Final[str]
-+
+
 +class _SupportsRead(Protocol[_AnyStr_co]):
 +    """A text or binary file-like handle read in chunks."""
 +
@@ -45,10 +44,69 @@
 +    """A text or binary file-like handle accepting str or bytes payloads."""
 +
 +    def write(self, data: _AnyStr_contra, /) -> object: ...
-
++
  @final
  class CTable:
-@@ -155,8 +188,11 @@
+     """
+@@ -23,6 +56,7 @@
+     line 1). Operations a table's format or constructs do not support raise
+     NotImplementedError.
+     """
++
+     def __new__(cls, /, lines: Iterable[str]) -> CTable:
+         """
+         Parse in lines representing the CTAB, including the title line.
+@@ -36,6 +70,7 @@
+             MalformedCTableError: if the table is shorter than its header,
+                 or its format or counts cannot be read
+         """
++
+     def fix_counts(self, /) -> None:
+         """
+         Set the counts line to the number of atom and bond lines.
+@@ -52,21 +87,25 @@
+             NotImplementedError: for a V2000 format table, or CTABs nested in
+                 RGROUP or TEMPLATE blocks
+         """
++
+     @property
+     def lines(self, /) -> list[str]:
+         """
+         Return a copy of the original connection-table lines.
+         """
++
+     @property
+     def num_atoms(self, /) -> int:
+         """
+         Return the atom count from the counts line.
+         """
++
+     @property
+     def num_bonds(self, /) -> int:
+         """
+         Return the bond count from the counts line.
+         """
++
+     def renumber_indices(self, /) -> None:
+         """
+         Renumber the atom and bond indices in the block.
+@@ -100,6 +139,7 @@
+             NotImplementedError: if trying to renumber in a V2000 format table,
+                 or a table that renumbering would corrupt, as above
+         """
++
+     def valid_atom_indices(self, /, strict: bool = False) -> bool:
+         """
+         Validate that the atom lines match the counts line.
+@@ -123,6 +163,7 @@
+         Returns:
+             If all the checks pass, return True.
+         """
++
+     def valid_bond_indices(self, /, strict: bool = False) -> bool:
+         """
+         Validate that the bond lines match the counts line.
+@@ -147,8 +188,11 @@
              If all the checks pass, return True.
          """
 
@@ -61,17 +119,22 @@
      """
      Handle a single molecule block from an SD file.
 
-@@ -181,13 +217,18 @@
+@@ -169,16 +213,24 @@
+     line with no `<name>`. Values are written unchecked too: a value with a
+     blank line or a `$$$$` line reads back as more records or blocks.
+     """
++
+     def __bool__(self, /) -> bool:
+         """
          A block is true even without records, as before it had a length.
          """
-
 -    @classmethod
 -    def __class_getitem__(cls, /, item: Any) -> GenericAlias:
 -        """
 -        Allow `SDBlock[str]` and `SDBlock[bytes]` in runtime annotations.
 -        """
--
 -    def __contains__(self, name: Any, /) -> bool:
++
 +    def __buffer__(self: SDBlock[bytes], flags: int, /) -> memoryview:
 +        """
 +        Export a bytes block's SDF without copying.
@@ -87,56 +150,140 @@
          """
          Whether any record is named `name`: `name in block.names()`.
 
-@@ -206,7 +247,7 @@
+@@ -189,13 +241,15 @@
+             TypeError: if `name` is not the block's type
+             MalformedRecordError: if a record header has no `<name>`
          """
-
++
+     def __copy__(self, /) -> SDBlock[AnyStr]:
+         """
+         Return an independent copy; a block holds no other objects, so
+         `copy.copy` and `copy.deepcopy` are the same.
+         """
++
      def __deepcopy__(self, memo: dict[int, Any], /) -> SDBlock[AnyStr]: ...
 -    def __delitem__(self, name: Any, /) -> None:
 +    def __delitem__(self, name: AnyStr, /) -> None:
          """
          Remove every record named `name`, as `remove_record(name)` does.
 
-@@ -216,7 +257,7 @@
+@@ -203,8 +257,9 @@
+             KeyError: if no record has that name
+             TypeError: if `name` is not the block's type
          """
-
++
      def __eq__(self, value: object, /) -> bool: ...
 -    def __getitem__(self, name: Any, /) -> Any:
 +    def __getitem__(self, name: AnyStr, /) -> AnyStr:
          """
          Return the value of the last record named `name`, like a dict.
 
-@@ -225,7 +266,7 @@
+@@ -212,24 +267,27 @@
+             KeyError: if no record has that name
              TypeError: if `name` is not the block's type
          """
-
 -    def __iter__(self, /) -> _SDNameIterator:
++
 +    def __iter__(self, /) -> _SDNameIterator[AnyStr]:
          """
          Lazily iterate over the record names in input order, duplicates
          included, as `names()` lists them. Like a dict, the iterator raises
-@@ -273,13 +314,14 @@
+         RuntimeError if the records change.
+         """
++
+     def __len__(self, /) -> int:
+         """
+         The number of records, duplicates included: `len(block.records())`.
+         """
++
+     def __ne__(self, value: object, /) -> bool: ...
+     def __new__(
+         cls,
+         /,
+         sdf: AnyStr,
+-        records: Mapping[AnyStr, AnyStr]
+-        | Iterable[tuple[AnyStr, AnyStr]]
+-        | None = None,
++        records: (
++            Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]] | None
++        ) = None,
+         *,
+         header: Literal["plain", "padded", "copy"] = "plain",
+     ) -> SDBlock[AnyStr]:
+@@ -251,23 +309,28 @@
+                 `header`
+             TypeError: if `sdf` is not str or bytes, or a record is not its type
+         """
++
+     def __reduce__(self, /) -> tuple[Any, ...]:
+         """
+         Pickle the block's exact state rather than its SDF text, which
          does not always parse back to the same block.
          """
-
++
 +    def __release_buffer__(self, buffer: memoryview, /) -> None: ...
      def __repr__(self, /) -> str:
          """
          Show the title; a str block's undecodable title bytes show as U+FFFD
          instead of raising.
          """
-
 -    def __setitem__(self, name: Any, value: Any, /) -> None:
++
 +    def __setitem__(self, name: AnyStr, value: AnyStr, /) -> None:
          """
          Set a record as `set_record(name, value)` does.
 
-@@ -364,10 +406,26 @@
+         Raises:
+             TypeError: if `name` or `value` is not the block's type
+         """
++
+     def __str__(self, /) -> str:
+         """
+         A str block's SDF, ending with $$$$: the inverse of `SDBlock(sdf)`.
+@@ -281,6 +344,7 @@
+         Raises:
+             UnicodeDecodeError: for a block from a str path that is not UTF-8
+         """
++
+     @classmethod
+     def _from_state(
+         cls, /, data: bytes, title_end: int, mdl_end: int, text: bool
+@@ -291,6 +355,7 @@
+         Raises:
+             ValueError: if the state cannot come from a block
+         """
++
+     def append_record(
+         self,
+         /,
+@@ -315,6 +380,7 @@
+             TypeError: if `name` or `value` is not the block's type
+             ValueError: for another `header`
+         """
++
+     def ctable(self, /) -> CTable:
+         """
+         Parse out the underlying CTable object.
+@@ -330,6 +396,7 @@
+             MalformedCTableError: if the table is shorter than its header,
+                 or its format or counts cannot be read
+         """
++
+     def fix_counts(self, /) -> None:
+         """
+         Set the counts line to the number of atom and bond lines.
+@@ -340,12 +407,28 @@
+             MalformedCTableError: as ctable and CTable.fix_counts raise
              NotImplementedError: as CTable.fix_counts raises
          """
-
++
 +    @overload
-+    @staticmethod
-+    def from_lines(
+     @staticmethod
+     def from_lines(
+-        lines: Iterable[str]
+-        | Iterable[bytes]
+-        | _SupportsRead[str]
+-        | _SupportsRead[bytes],
 +        lines: Iterable[str] | _SupportsRead[str] | _SupportsRead1[str],
 +    ) -> _SDBlockIterator[str]: ...
 +    @overload
@@ -145,23 +292,24 @@
 +        lines: Iterable[bytes] | _SupportsRead[bytes] | _SupportsRead1[bytes],
 +    ) -> _SDBlockIterator[bytes]: ...
 +    @overload
-     @staticmethod
-     def from_lines(
-         lines: (
--            Iterable[str] | Iterable[bytes] | _SupportsRead[str] | _SupportsRead[bytes]
++    @staticmethod
++    def from_lines(
++        lines: (
 +            Iterable[str]
 +            | Iterable[bytes]
 +            | _SupportsRead[str]
 +            | _SupportsRead[bytes]
 +            | _SupportsRead1[str]
 +            | _SupportsRead1[bytes]
-         ),
++        ),
      ) -> _SDBlockIterator[Any]:
          """
-@@ -404,6 +462,13 @@
+         Parse SDBlocks from homogeneous str or bytes lines or a file object.
+@@ -380,6 +463,14 @@
+                 or a non-iterable; and, as blocks are produced, for items or
                  reads that are not str or bytes or that mix the two
          """
-
++
 +    @overload
 +    @staticmethod
 +    def from_sdf(sdf: str) -> _SDBlockIterator[str]: ...
@@ -172,11 +320,12 @@
      @staticmethod
      def from_sdf(sdf: str | bytes) -> _SDBlockIterator[Any]:
          """
-@@ -424,7 +489,10 @@
+@@ -399,7 +490,11 @@
+         Raises:
              TypeError: if `sdf` is not str or bytes
          """
-
 -    def get(self, /, name: AnyStr, default: _T | None = None) -> AnyStr | _T | None:
++
 +    @overload
 +    def get(self, /, name: AnyStr, default: None = None) -> AnyStr | None: ...
 +    @overload
@@ -184,52 +333,140 @@
          """
          Return the value of the last record named `name`, or `default`.
 
-@@ -452,7 +520,7 @@
+@@ -416,6 +511,7 @@
+         Raises:
+             TypeError: if `name` is not the block's type
          """
-
++
+     def iter_records(self, /) -> _SDRecordIterator[AnyStr]:
+         """
+         Lazily iterate over SD data records in input order.
+@@ -424,8 +520,9 @@
+         the iterator raises RuntimeError if the records change; to edit them
+         in a loop, loop over `records()`.
+         """
++
      @property
 -    def mdl(self, /) -> Any:
 +    def mdl(self, /) -> AnyStr:
          """
          Return the CTAB after the title, through `M  END`, as one value.
 
-@@ -462,7 +530,7 @@
+@@ -433,16 +530,18 @@
+         CTAB and `block.mdl.splitlines()` gives its lines. `block.molblock`
+         is `block.title`, the title line's ending, then `block.mdl`.
          """
-
++
      @property
 -    def molblock(self, /) -> Any:
 +    def molblock(self, /) -> AnyStr:
          """
          Return the title line and CTAB through `M  END` as one value.
 
-@@ -471,7 +539,7 @@
+         Suitable for RDKit's `Chem.MolFromMolBlock` or OpenEye's
+         `OEReadMolFromBytes`.
          """
-
++
      @molblock.setter
 -    def molblock(self, /, molblock: Any) -> None:
 +    def molblock(self, /, molblock: AnyStr) -> None:
          """
          Replace the title line and CTAB, keeping the SD data.
 
-@@ -602,7 +670,7 @@
+@@ -457,6 +556,7 @@
+                 whitespace after it, or has a line starting with `$$$$`
+             TypeError: if the molblock is not the block's type
          """
-
++
+     def names(self, /) -> list[AnyStr]:
+         """
+         Return the record names in input order, duplicates included.
+@@ -465,6 +565,7 @@
+         building the values. Blocks need not share names, so collect them
+         across a file with `Counter(n for b in blocks for n in b.names())`.
+         """
++
+     @property
+     def num_atoms(self, /) -> int:
+         """
+@@ -477,6 +578,7 @@
+         Raises:
+             MalformedCTableError: if the format or counts cannot be read
+         """
++
+     @property
+     def num_bonds(self, /) -> int:
+         """
+@@ -489,6 +591,7 @@
+         Raises:
+             MalformedCTableError: if the format or counts cannot be read
+         """
++
+     def records(self, /) -> list[tuple[AnyStr, AnyStr]]:
+         """
+         Return all SD data records.
+@@ -497,6 +600,7 @@
+             Tuples of record name and value in the input type; multiline
+             values include their inner newlines
+         """
++
+     def remove_record(self, /, name: AnyStr) -> int:
+         """
+         Remove every record named `name`.
+@@ -510,6 +614,7 @@
+         Raises:
+             TypeError: if `name` is not the block's type
+         """
++
+     def renumber_indices(self, /) -> None:
+         """
+         Renumber atom and bond indices to be 1-indexed and in order.
+@@ -522,6 +627,7 @@
+             IndicesDuplicateError: as CTable.renumber_indices raises
+             NotImplementedError: as CTable.renumber_indices raises
+         """
++
+     def replace_records(
+         self,
+         /,
+@@ -545,6 +651,7 @@
+             TypeError: if a name or value is not the block's type
+             ValueError: for another `header`
+         """
++
+     def set_record(
+         self,
+         /,
+@@ -571,16 +678,18 @@
+             TypeError: if `name` or `value` is not the block's type
+             ValueError: for another `header`
+         """
++
      @property
 -    def title(self, /) -> Any:
 +    def title(self, /) -> AnyStr:
          """
          Return the title line without trailing whitespace, in the input type.
 
-@@ -612,7 +680,7 @@
+         Only ASCII whitespace is stripped, as `bytes.rstrip()` does, in str
+         blocks too; `molblock` and writes keep the whole title line.
          """
-
++
      @title.setter
 -    def title(self, /, title: Any) -> None:
 +    def title(self, /, title: AnyStr) -> None:
          """
          Replace the title line.
 
-@@ -630,13 +698,13 @@
+@@ -589,6 +698,7 @@
+                 `$$$$`, which would end the block
+             TypeError: if the title is not the block's type
+         """
++
+     def to_dict(self, /) -> dict[AnyStr, AnyStr]:
+         """
+         Return the records as a dict, later duplicates winning.
+@@ -597,12 +707,13 @@
          """
 
  @final
@@ -238,15 +475,15 @@
      """
      Lazily parse SDBlocks from an input source.
      """
-
 -    def __iter__(self, /) -> _SDBlockIterator: ...
 -    def __next__(self, /) -> SDBlock: ...
++
 +    def __iter__(self, /) -> _SDBlockIterator[AnyStr]: ...
 +    def __next__(self, /) -> SDBlock[AnyStr]: ...
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -644,7 +712,7 @@
+@@ -610,7 +721,7 @@
          """
 
  @final
@@ -255,18 +492,27 @@
      """
      Write SDBlocks one at a time, buffered as `write_sdf` writes them.
 
-@@ -653,8 +721,8 @@
+@@ -618,8 +729,9 @@
+     object is left open. Leaving a `with` block closes the writer, also on
      an error. Writing to a closed writer raises ValueError.
      """
-
 -    def __enter__(self, /) -> _SDFWriter: ...
 -    def __exit__(self, /, *_exc_info) -> None: ...
++
 +    def __enter__(self, /) -> Self: ...
 +    def __exit__(self, /, *_exc_info: object) -> None: ...
      def close(self, /) -> None:
          """
          Write the buffered blocks and close a path. Closing twice does nothing.
-@@ -677,25 +745,49 @@
+@@ -628,6 +740,7 @@
+             OSError: if the buffered blocks cannot be written; the writer is
+                 closed anyway
+         """
++
+     def write(self, block: SDBlock[AnyStr], /) -> None:
+         """
+         Write a block, ending with $$$$, as `str(block)` or `bytes(block)`.
+@@ -641,23 +754,49 @@
          """
 
  @final
@@ -275,9 +521,9 @@
      """
      Lazily iterate over one block's record names.
      """
-
 -    def __iter__(self, /) -> _SDNameIterator: ...
 -    def __next__(self, /) -> Any: ...
++
 +    def __iter__(self, /) -> _SDNameIterator[AnyStr]: ...
 +    def __next__(self, /) -> AnyStr: ...
 
@@ -287,10 +533,10 @@
      """
      Lazily iterate over one block's SD data records.
      """
-
 -    def __iter__(self, /) -> _SDRecordIterator: ...
 -    def __next__(self, /) -> tuple: ...
 -
++
 +    def __iter__(self, /) -> _SDRecordIterator[AnyStr]: ...
 +    def __next__(self, /) -> tuple[AnyStr, AnyStr]: ...
 +
@@ -324,7 +570,7 @@
  ) -> _SDBlockIterator[Any]:
      """
      Lazily parse SDBlocks from an SDF path or file object.
-@@ -737,9 +829,12 @@
+@@ -699,9 +838,12 @@
          TypeError: if `source` is neither a path nor a file object
      """
 
@@ -339,7 +585,7 @@
      """
      Write SDBlocks one at a time to a path or a file object, buffered.
 
-@@ -759,10 +854,13 @@
+@@ -721,10 +863,13 @@
          OSError: if `dest` cannot be created
      """
 
@@ -355,7 +601,7 @@
      """
      Write SDBlocks to a path or a file object, and return how many.
 
-@@ -795,5 +893,3 @@
+@@ -757,5 +902,3 @@
          UnicodeDecodeError: for a str block that is not UTF-8
          OSError: if `dest` cannot be created or written
      """
