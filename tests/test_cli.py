@@ -494,8 +494,106 @@ def test_filter_unique(
     ) == (0, first + third, b"")
 
 
+def test_head(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    sdf: Path,
+) -> None:
+    """Head keeps the first N blocks (default 10), or with -K drops the last K.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        sdf: pytest fixture of a Path to the sdf
+    """
+    first, second, _ = (block + b"$$$$\n" for block in SDF.split(b"$$$$\n")[:3])
+    assert cli(capsysbinary, monkeypatch, "head", sdf) == (0, SDF, b"")
+    assert cli(capsysbinary, monkeypatch, "head", "-n", "2", sdf) == (
+        0,
+        first + second,
+        b"",
+    )
+    assert cli(capsysbinary, monkeypatch, "head", "-n", "+1", stdin=SDF) == (
+        0,
+        first,
+        b"",
+    )
+    assert cli(capsysbinary, monkeypatch, "head", "-n", "0", sdf) == (0, b"", b"")
+    assert cli(capsysbinary, monkeypatch, "head", "-n", "-1", sdf) == (
+        0,
+        first + second,
+        b"",
+    )
+    assert cli(capsysbinary, monkeypatch, "head", "-n", "-0", sdf) == (0, SDF, b"")
+    assert cli(capsysbinary, monkeypatch, "head", "-n", "-5", sdf) == (0, b"", b"")
+
+
+def test_tail(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    sdf: Path,
+) -> None:
+    """Tail keeps the last N blocks (default 10), or with +K from block K on.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        sdf: pytest fixture of a Path to the sdf
+    """
+    _, second, third = (block + b"$$$$\n" for block in SDF.split(b"$$$$\n")[:3])
+    assert cli(capsysbinary, monkeypatch, "tail", sdf) == (0, SDF, b"")
+    assert cli(capsysbinary, monkeypatch, "tail", "-n", "2", sdf) == (
+        0,
+        second + third,
+        b"",
+    )
+    assert cli(capsysbinary, monkeypatch, "tail", "-n", "-1", stdin=SDF) == (
+        0,
+        third,
+        b"",
+    )
+    assert cli(capsysbinary, monkeypatch, "tail", "-n", "0", sdf) == (0, b"", b"")
+    assert cli(capsysbinary, monkeypatch, "tail", "-n", "+2", sdf) == (
+        0,
+        second + third,
+        b"",
+    )
+    assert cli(capsysbinary, monkeypatch, "tail", "-n", "+1", sdf) == (0, SDF, b"")
+    assert cli(capsysbinary, monkeypatch, "tail", "-n", "+0", sdf) == (0, SDF, b"")
+    assert cli(capsysbinary, monkeypatch, "tail", "-n", "+5", sdf) == (0, b"", b"")
+
+
+@pytest.mark.parametrize(
+    "command, argv",
+    [
+        ("head", ("-n",)),
+        ("head", ("-n", "abc")),
+        ("tail", ("--lines", "--", "abc")),
+    ],
+)
+def test_slice_usage(
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    argv: tuple[str, ...],
+) -> None:
+    """Head and tail reject missing or non-numeric -n arguments.
+
+    Args:
+        capsysbinary: pytest fixture capturing binary output
+        monkeypatch: pytest fixture to replace stdin
+        command: head or tail
+        argv: bad arguments
+    """
+    status, out, err = cli(capsysbinary, monkeypatch, command, *argv)
+    assert (status, out) == (2, b"")
+    assert f"usage: python -m sendoff.cli.{command}".encode() in err
+
+
 COMMANDS = [
     ("count",),
+    ("head", "-n", "2"),
+    ("tail", "-n", "2"),
     ("get", "ID"),
     ("get", "-t"),
     ("set", "ID", "--value", "X"),
@@ -558,3 +656,21 @@ def test_count_repeats_input(
     """
     _, out, _ = cli(capsysbinary, monkeypatch, "count", sdf, "-i", sdf, "-i", sdf)
     assert out == b"3\t%s\n" % bytes(sdf) * 3 + b"9\ttotal\n"
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["count", "filter", "get", "head", "set", "tail", "title"],
+)
+def test_module_help(module: str) -> None:
+    """Every CLI module runs with python -m ... -h.
+
+    Args:
+        module: module name under sendoff.cli
+    """
+    res = subprocess.run(
+        [sys.executable, "-m", f"sendoff.cli.{module}", "-h"],
+        capture_output=True,
+        check=True,
+    )
+    assert res.stdout.startswith(f"usage: python -m sendoff.cli.{module}".encode())

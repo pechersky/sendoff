@@ -60,6 +60,43 @@ def add_io(p: argparse.ArgumentParser, *, many: bool = False) -> None:
     )
 
 
+def slice_spec(
+    p: argparse.ArgumentParser,
+    argv: Sequence[str] | None,
+    *,
+    sign: str = "-",
+) -> tuple[argparse.Namespace, int, bool]:
+    """Parse arguments with ``-n``/``--lines``, accepting ``-n -K`` and ``-n +K``.
+
+    Args:
+        p: the command's parser
+        argv: arguments, or None for ``sys.argv[1:]``
+        sign: ``-`` for ``head`` (`all but last K`) or ``+`` for ``tail``
+            (`from 1-based block K`)
+
+    Returns:
+        Parsed namespace, nonnegative block count, and whether `sign` was given
+    """
+    raw = list(sys.argv[1:] if argv is None else argv)
+    normalized: list[str] = []
+    it = iter(raw)
+    for token in it:
+        if token in ("-n", "--lines"):
+            val = next(it, None)
+            if val is None:
+                normalized.append(token)
+            else:
+                normalized.append(f"--lines={val}")
+        else:
+            normalized.append(token)
+    args = p.parse_intermixed_args(normalized)
+    spec: str = args.lines
+    digits = spec[1:] if spec[:1] in "+-" else spec
+    if not digits.isascii() or not digits.isdigit():
+        p.error(f"invalid number of blocks: {spec!r}")
+    return args, int(digits), spec.startswith(sign)
+
+
 def input_path(
     p: argparse.ArgumentParser, operand: str | None, option: str | None
 ) -> str:

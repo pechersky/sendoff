@@ -100,6 +100,8 @@ Shell pipelines
 
    python -m sendoff.cli.count my.sdf
    zcat chembl.sdf.gz | python -m sendoff.cli.count
+   python -m sendoff.cli.head -n 100 my.sdf > sample.sdf
+   python -m sendoff.cli.tail -n +2 my.sdf > without-first.sdf
    python -m sendoff.cli.get Supplier my.sdf | sort | uniq -c
    paste <(python -m sendoff.cli.get -t my.sdf) <(python -m sendoff.cli.get CAS my.sdf)
    python -m sendoff.cli.get ID my.sdf | sed 's/^/TL-/' |
@@ -108,11 +110,11 @@ Shell pipelines
        python -m sendoff.cli.set Batch --value B7 -o batch.sdf
    python -m sendoff.cli.filter --unique InChIKey my.sdf > unique.sdf
 
-The ``count``, ``get``, ``set``, ``title``, and ``filter`` commands read
-``FILE`` or ``-i FILE``, else stdin, as bytes and write ``-o FILE``, else
-stdout; ``-o`` cannot name an input. ``get`` prints one line per block, empty
-where a record is missing, and ``--from`` reads one line per block; ``-z`` uses
-NUL instead. Run any with ``-h``.
+The ``count``, ``head``, ``tail``, ``get``, ``set``, ``title``, and ``filter``
+commands read ``FILE`` or ``-i FILE``, else stdin, as bytes and write
+``-o FILE``, else stdout; ``-o`` cannot name an input. ``get`` prints one line
+per block, empty where a record is missing, and ``--from`` reads one line per
+block; ``-z`` uses NUL instead. Run any with ``-h``.
 
 In Python, read compressed files with ``parse_sdf(gzip.open(path))``, and
 write a pipe with ``write_sdf(sys.stdout, blocks)``, or ``sys.stdout.buffer``
