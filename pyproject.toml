@@ -34,6 +34,7 @@ test-core = [
     "pytest-mock>=3.12.0,<4",
     "coverage>=7.3.2,<8",
     "hypothesis>=6.100,<7",
+    "mypy>=2.4,<3",
 ]
 # RDKit has no Windows ARM64 or musllinux wheels.
 test = [
@@ -52,7 +53,6 @@ dev = [
     "ruff>=0.17,<1",
     "pre-commit>=3.5.0,<5",
     "tbump>=6.11.0,<7",
-    "mypy==2.4.0",
 ]
 
 [tool.maturin]
@@ -79,7 +79,6 @@ before-build = "python -m pip install maturin==1.15.0 && python scripts/pgo-buil
 # Without the package sources, the tests import the installed wheel.
 test-sources = ["tests", "setup.cfg"]
 test-extras = ["test"]
-test-requires = ["mypy==2.4.0"]
 test-command = "python -m pytest tests -p no:cacheprovider --no-cov --no-rust-coverage"
 
 # The profile path must be absolute, as pgo-build writes it: /project in the

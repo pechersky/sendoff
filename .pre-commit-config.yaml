@@ -69,6 +69,6 @@ repos:
         name: regenerate sendoff/native.pyi
         entry: python scripts/native-stub
         language: python
-        additional_dependencies: [maturin==1.15.0, ruff==0.17.1]
+        additional_dependencies: [maturin==1.15.0, ruff]
         files: '(^Cargo\.(toml|lock)$|^rust/.*\.rs$|^sendoff/native\.pyi$|^scripts/native-stub(\.patch)?$)'
         pass_filenames: false

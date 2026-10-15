@@ -78,7 +78,7 @@ jobs:
           sdist=$(echo dist/sendoff-*.tar.gz)
           python -m venv .cache/sdist
           .cache/sdist/bin/python -m pip install --disable-pip-version-check \
-            "$sdist[test]" mypy==2.4.0
+            "$sdist[test]"
           mkdir .cache/sdist-test
           tar -xzf "$sdist" -C .cache/sdist-test --strip-components=1 \
             --wildcards '*/tests/*' '*/setup.cfg'
