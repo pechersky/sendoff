@@ -27,7 +27,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
-        python-version: "3.11"
+        python-version: "3.12"
     - name: Set up Rust
       run: |
         rustup toolchain install stable --profile minimal --component clippy
@@ -66,6 +66,12 @@ jobs:
         version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
         assert os.environ["RELEASE_TAG"] == f"v{version}", "tag/Cargo version mismatch"
         PY
+    - name: Set up uv
+      uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      with:
+        cache-dependency-glob: |
+          pyproject.toml
+          tox.ini
     - name: Set up Rust
       run: |
         rustup toolchain install stable --profile minimal
@@ -73,7 +79,7 @@ jobs:
         rustup component add llvm-tools-preview
     - name: Test with tox
       run: |
-        python -m pip install --disable-pip-version-check 'tox>=4.24,<5'
+        uv pip install --system 'tox>=4.24,<5' 'tox-uv>=1.16,<2'
         python -m tox -e py
 
   wheels:
