@@ -1,30 +1,6 @@
 name: Build wheels
 
 on:
-  push:
-    branches-ignore: [main]
-    tags-ignore: ["**"]
-    paths:
-      - Cargo.lock
-      - Cargo.toml
-      - pyproject.toml
-      - rust/**
-      - sendoff/**
-      - scripts/pgo-build
-      - setup.cfg
-      - tests/**
-      - .github/workflows/wheels.yml
-  pull_request:
-    paths:
-      - Cargo.lock
-      - Cargo.toml
-      - pyproject.toml
-      - rust/**
-      - sendoff/**
-      - scripts/pgo-build
-      - setup.cfg
-      - tests/**
-      - .github/workflows/wheels.yml
   workflow_dispatch:
   workflow_call:
 
