@@ -12,6 +12,7 @@ line follow, every line ending as the block's title line does.
 with that name. Edits copy every line they do not rewrite byte for byte,
 including lines between records, which ``replace_records`` drops.
 """
+
 from functools import partial
 from textwrap import dedent
 from typing import Any, Callable

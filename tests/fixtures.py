@@ -1,5 +1,6 @@
 # mypy: allow-untyped-decorators
 """Provide fixtures of SDFs with well- or misbehaved metadata."""
+
 from __future__ import annotations
 
 import importlib.util

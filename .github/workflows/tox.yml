@@ -7,6 +7,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -91,6 +95,64 @@ jobs:
         else
           python -m tox -e py -- --no-rust-coverage
         fi
+
+  automerge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: [clippy, test]
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.user.login == 'pre-commit-ci[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'pre-commit-ci-update-config'
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+    - name: Wait for pre-commit.ci and merge
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        python3 - <<'PY'
+        import json
+        import os
+        import subprocess
+        import time
+
+        repo = os.environ["GITHUB_REPOSITORY"]
+        sha = os.environ["HEAD_SHA"]
+        pr = os.environ["PR_NUMBER"]
+        state = "pending"
+        for attempt in range(30):
+            out = subprocess.check_output(
+                ["gh", "api", f"repos/{repo}/commits/{sha}/status"], text=True
+            )
+            statuses = {
+                s["context"]: s["state"] for s in json.loads(out)["statuses"]
+            }
+            state = statuses.get("pre-commit.ci - pr", "pending")
+            if state != "pending":
+                break
+            time.sleep(5)
+        assert state == "success", f"pre-commit.ci - pr state is {state!r}"
+        subprocess.run(
+            [
+                "gh",
+                "pr",
+                "merge",
+                pr,
+                "--repo",
+                repo,
+                "--squash",
+                "--delete-branch",
+                "--match-head-commit",
+                sha,
+            ],
+            check=True,
+        )
+        PY
 
   wheels:
     needs: [clippy, test]

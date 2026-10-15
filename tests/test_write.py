@@ -1,5 +1,6 @@
 # mypy: allow-untyped-decorators
 """Test writing blocks with write_sdf and sdf_writer."""
+
 import errno
 import io
 import os
