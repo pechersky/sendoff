@@ -93,24 +93,24 @@ environment = { PATH = "$HOME/.cargo/bin:$PATH", CARGO_BUILD_RUSTFLAGS = "-Cprof
 select = "*-musllinux_*"
 test-extras = ["test-core"]
 
-[tool.cibuildwheel.macos]
-environment = { CARGO_BUILD_RUSTFLAGS = "-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/merged.profdata" }
-
-# CPython's x86_64 macOS target is 10.9, below rustc's 10.12 minimum.
 [[tool.cibuildwheel.overrides]]
 select = "*-macosx_x86_64"
 inherit.environment = "append"
 environment = { MACOSX_DEPLOYMENT_TARGET = "10.12" }
 
-[tool.cibuildwheel.windows]
-environment = { CARGO_BUILD_RUSTFLAGS = "-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/merged.profdata" }
-
-# rustc crashes under -Cprofile-generate on aarch64-pc-windows-msvc.
 [[tool.cibuildwheel.overrides]]
 select = "*-win_arm64"
 before-build = ""
 environment = {}
 
+[tool.cibuildwheel.macos]
+environment = { CARGO_BUILD_RUSTFLAGS = "-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/merged.profdata" }
+
+# CPython's x86_64 macOS target is 10.9, below rustc's 10.12 minimum.
+[tool.cibuildwheel.windows]
+environment = { CARGO_BUILD_RUSTFLAGS = "-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/merged.profdata" }
+
+# rustc crashes under -Cprofile-generate on aarch64-pc-windows-msvc.
 [tool.ruff]
 line-length = 88
 extend-include = ["scripts/native-stub", "scripts/pgo-build"]
@@ -136,7 +136,7 @@ convention = "google"
 # PyPI, then a GitHub release with generated notes to edit. scripts/pgo-build
 # --out dist makes one wheel locally.
 [tool.tbump.version]
-current = "0.1.6"
+current = "1.0.0"
 
 regex = '''
   (?P<major>\d+)
