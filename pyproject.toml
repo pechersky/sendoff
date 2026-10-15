@@ -1,41 +1,127 @@
-[tool.poetry]
+[project]
 name = "sendoff"
-version = "0.1.6"
+dynamic = ["version"]
 description = "The minimal SDF metadata parser"
-authors = ["Yakov Pechersky <ypechersky@treeline.bio>"]
+authors = [{name = "Yakov Pechersky", email = "ypechersky@treeline.bio"}]
 license = "MIT"
+license-files = ["LICENSE"]
 readme = "README.rst"
-repository = "https://github.com/pechersky/sendoff"
-include = [
-    "README.rst",
-    "pyproject.toml",
-    "LICENSE"
+requires-python = ">=3.11"
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Typing :: Typed",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Programming Language :: Rust",
 ]
 
-[tool.poetry.dependencies]
-python = "^3.8.1"
+[project.urls]
+Repository = "https://github.com/pechersky/sendoff"
+Changelog = "https://github.com/pechersky/sendoff/releases"
+Issues = "https://github.com/pechersky/sendoff/issues"
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^7.4.3"
-tox = "^3.24.3"
-tox-poetry-installer = "^0.10.3"
-flake8 = "^6.1.0"
-xdoctest = "^1.1.2"
-flake8-docstrings = "^1.7.0"
-pydocstyle = "^6.3.0"
-black = "^23.11.0"
-pytest-cov = "^4.1.0"
-pytest-mock = "^3.12.0"
-coverage = "^7.3.2"
-towncrier = "^23.10.0"
-pre-commit = "^3.5.0"
-darglint = "^1.8.1"
-tbump = "^6.11.0"
-mypy = "^1.7.0"
-isort = "^5.12.0"
-rdkit = "^2022.9.2"
+[project.optional-dependencies]
+# Without RDKit, the tests that need it skip.
+test-core = [
+    "pytest>=7.4.3,<10",
+    "xdoctest>=1.1.2,<2",
+    "pytest-cov>=4.1.0,<8",
+    "pytest-mock>=3.12.0,<4",
+    "coverage>=7.3.2,<8",
+    "hypothesis>=6.100,<7",
+]
+# RDKit has no Windows ARM64 or musllinux wheels.
+test = [
+    "sendoff[test-core]",
+    "rdkit==2022.9.5; python_version == '3.11' and platform_machine != 'ARM64'",
+    "numpy==1.23.5; python_version == '3.11' and platform_machine != 'ARM64'",
+    "rdkit==2026.9.1; python_version >= '3.12' and platform_machine != 'ARM64' and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+    # The last RDKit with Intel macOS wheels.
+    "rdkit==2025.9.3; python_version >= '3.12' and python_version < '3.15' and sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "numpy>=1.26.4,<3; python_version >= '3.12' and platform_machine != 'ARM64'",
+]
+dev = [
+    "sendoff[test]",
+    "maturin==1.15.0",
+    "tox>=4.24,<5",
+    "flake8>=6.1.0,<8",
+    "flake8-docstrings>=1.7.0,<2",
+    "pydocstyle>=6.3.0,<7",
+    "black>=25.1,<26",
+    "pre-commit>=3.5.0,<5",
+    "darglint>=1.8.1,<2",
+    "tbump>=6.11.0,<7",
+    "mypy==2.4.0",
+    "isort>=5.12.0,<8",
+]
+
+[tool.maturin]
+python-source = "."
+module-name = "sendoff.native"
+include = [
+    {path = "LICENSE", format = "sdist"},
+    {path = "tests/**/*.py", format = "sdist"},
+    {path = "setup.cfg", format = "sdist"},
+    {path = "tox.ini", format = "sdist"},
+    {path = ".pre-commit-config.yaml", format = "sdist"},
+    {path = ".isort.cfg", format = "sdist"},
+    {path = ".flake8", format = "sdist"},
+]
+exclude = ["sendoff/*.so", "sendoff/*.pyd", "sendoff/__pycache__/**"]
+
+[tool.cibuildwheel]
+# Per-version wheels; .github/workflows/wheels.yml also builds the abi3 one
+# with MATURIN_PEP517_ARGS="--features abi3".
+build = "cp311-* cp312-* cp313-* cp314-* cp315-*"
+archs = "native"
+# Audits the abi3 wheel; the default is unpinned.
+audit-requires = ["abi3audit==0.0.26", "abi3info==2026.9.25"]
+# Profile every build first, for CARGO_BUILD_RUSTFLAGS below to use.
+before-build = "python -m pip install maturin==1.15.0 && python scripts/pgo-build --profile"
+# Without the package sources, the tests import the installed wheel.
+test-sources = ["tests", "setup.cfg"]
+test-extras = ["test"]
+test-requires = ["mypy==2.4.0"]
+test-command = "python -m pytest tests -p no:cacheprovider --no-cov --no-rust-coverage"
+
+# The profile path must be absolute, as pgo-build writes it: /project in the
+# Linux container, and the checkout on GitHub's macOS and Windows runners.
+[tool.cibuildwheel.linux]
+before-all = "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component llvm-tools"
+environment-pass = ["MATURIN_PEP517_ARGS"]
+environment = { PATH = "$HOME/.cargo/bin:$PATH", CARGO_BUILD_RUSTFLAGS = "-Cprofile-use=/project/target/pgo/merged.profdata" }
+
+# PEP 508 markers can't tell musl, and RDKit has no musllinux wheels.
+[[tool.cibuildwheel.overrides]]
+select = "*-musllinux_*"
+test-extras = ["test-core"]
+
+[tool.cibuildwheel.macos]
+environment = { CARGO_BUILD_RUSTFLAGS = "-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/merged.profdata" }
+
+# CPython's x86_64 macOS target is 10.9, below rustc's 10.12 minimum.
+[[tool.cibuildwheel.overrides]]
+select = "*-macosx_x86_64"
+inherit.environment = "append"
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.12" }
+
+[tool.cibuildwheel.windows]
+environment = { CARGO_BUILD_RUSTFLAGS = "-Cprofile-use=$GITHUB_WORKSPACE/target/pgo/merged.profdata" }
+
+# rustc crashes under -Cprofile-generate on aarch64-pc-windows-msvc.
+[[tool.cibuildwheel.overrides]]
+select = "*-win_arm64"
+before-build = ""
+environment = {}
 
 [tool.black]
+# Match the black pre-commit hook; scripts/native-stub formats with it too.
+required-version = "25"
 line-length = 88
 include = '\.pyi?$'
 exclude = '''
@@ -51,6 +137,10 @@ exclude = '''
 )/
 '''
 
+# Release: `tbump X.Y.Z` bumps Cargo.toml and Cargo.lock, commits, tags vX.Y.Z
+# and pushes. The tag runs tox.yml: tests, PGO wheels and sdist (wheels.yml),
+# PyPI, then a GitHub release with generated notes to edit. scripts/pgo-build
+# --out dist makes one wheel locally.
 [tool.tbump.version]
 current = "0.1.6"
 
@@ -67,24 +157,13 @@ message_template = "Bump to {new_version}"
 tag_template = "v{new_version}"
 
 [[tool.tbump.file]]
-src = "pyproject.toml"
+src = "Cargo.toml"
+search = 'version = "{current_version}"'
 
-[[tool.tbump.file]]
-src = "sendoff/__init__.py"
-
-[tool.towncrier]
-# Usage: (Source: https://github.com/python-trio/trio/blob/master/pyproject.toml)
-# - PRs should drop a file like "issuenumber.feature" in newsfragments
-#   (or "bugfix", "doc", "removal", "misc")
-# - At release time after bumping version number, run:
-#   poetry run towncrier --draft, then poetry towncrier
-package = "sendoff"
-filename = "doc/changelog.rst"
-directory = "newsfragments"
-
-[tool.poetry.extras]
-test = ["pytest"]
+[[tool.tbump.before_commit]]
+name = "Synchronize the package version in Cargo.lock"
+cmd = "cargo check && git add -- Cargo.lock"
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["maturin==1.15.0"]
+build-backend = "maturin"

@@ -7,7 +7,7 @@ sendoff
 
 .. image:: https://github.com/pechersky/sendoff/actions/workflows/tox.yml/badge.svg
    :target: https://github.com/pechersky/sendoff/actions/workflows/tox.yml
-   :alt: Tox status
+   :alt: Tests
 
 The minimal SDF metadata parser.
 
@@ -19,8 +19,103 @@ opinionated approaches in chemical libraries.
 
 This library strives to be able to handle SDF files even with malformed chemistry or
 metadata. Since much debugging of our files and data deals with such files, having access
-to simple tools to interrogate the files while not modifying the file is crucial.
+to simple fast tools to interrogate the files while not modifying the file is crucial.
 
-This package also tried to document the "canonical" ways metadata is handled by the larger
+This package also tries to document the "canonical" ways metadata is handled by the larger
 packages. To wit, there are tests to monitor how, for example, rdkit deals with molecules
 that have multiline record values, or a "$$$$" molecule title.
+
+In time per operation, sendoff is 31–79× faster than RDKit, 7.1–30× faster
+than OEChem, and 8.8–59× faster than the pure-Python sendoff 0.1.6 (geomeans
+by dataset; see the `benchmarks
+<https://github.com/pechersky/sendoff/blob/main/benchmark-results.md>`_).
+
+
+Usage
+-----
+
+.. code-block:: python
+
+   from collections import Counter
+   from rdkit import Chem
+   from sendoff import SDBlock, parse_sdf, sdf_writer, write_sdf
+
+   for block in parse_sdf("compounds.sdf"):
+       block.title
+       block["ID"]
+       block.get("ID")
+       block.to_dict()
+       block.records()
+       block.iter_records()
+       "ID" in block, len(block), list(block)
+       "V3000" in block.mdl
+       mol = Chem.MolFromMolBlock(block.molblock)
+
+   Counter(name for block in parse_sdf("compounds.sdf") for name in block)
+
+   def tag(block):
+       block["Source"] = "vendor"
+       block.remove_record("Internal note")
+       return block
+
+   write_sdf("out.sdf", (tag(block) for block in parse_sdf("in.sdf")))
+
+   with sdf_writer("active.sdf") as active, sdf_writer("rest.sdf") as rest:
+       for block in parse_sdf("in.sdf"):
+           (active if block.get("Active") == "1" else rest).write(block)
+
+   block = SDBlock(Chem.MolToMolBlock(mol), {"ID": "X-1"})
+   str(block)
+   SDBlock.from_sdf(sdf_text)
+
+``parse_sdf`` memory-maps local files, so write to a new path: truncating a
+file while it is parsed crashes the process. ``parse_sdf(path, borrow=True)``
+also skips copying each block: blocks read the file in place until edited,
+so the same holds for as long as they live.
+
+New headers are ``> <name>``; ``header="padded"`` writes ``>  <name>``, as
+RDKit does, and ``header="copy"`` follows the block's first header.
+
+Non-UTF-8 files
+---------------
+
+str paths decode UTF-8. Open other encodings yourself, or stay in bytes:
+
+.. code-block:: python
+
+   with open("vendor.sdf", encoding="gbk") as f:
+       names = {block["CAS"]: block["Product name"] for block in parse_sdf(f)}
+
+   in_stock = (
+       block
+       for block in parse_sdf(os.fsencode("vendor.sdf"))
+       if block.get(b"Availability") == b"In-stock"
+   )
+   write_sdf("in-stock.sdf", in_stock)
+
+Shell pipelines
+---------------
+
+.. code-block:: bash
+
+   python -m sendoff.cli.count my.sdf
+   zcat chembl.sdf.gz | python -m sendoff.cli.count
+   python -m sendoff.cli.head -n 100 my.sdf > sample.sdf
+   python -m sendoff.cli.tail -n +2 my.sdf > without-first.sdf
+   python -m sendoff.cli.get Supplier my.sdf | sort | uniq -c
+   paste <(python -m sendoff.cli.get -t my.sdf) <(python -m sendoff.cli.get CAS my.sdf)
+   python -m sendoff.cli.get ID my.sdf | sed 's/^/TL-/' |
+       python -m sendoff.cli.title --from - my.sdf > titled.sdf
+   python -m sendoff.cli.filter --eq Availability In-stock vendor.sdf |
+       python -m sendoff.cli.set Batch --value B7 -o batch.sdf
+   python -m sendoff.cli.filter --unique InChIKey my.sdf > unique.sdf
+
+The ``count``, ``head``, ``tail``, ``get``, ``set``, ``title``, and ``filter``
+commands read ``FILE`` or ``-i FILE``, else stdin, as bytes and write
+``-o FILE``, else stdout; ``-o`` cannot name an input. ``get`` prints one line
+per block, empty where a record is missing, and ``--from`` reads one line per
+block; ``-z`` uses NUL instead. Run any with ``-h``.
+
+In Python, read compressed files with ``parse_sdf(gzip.open(path))``, and
+write a pipe with ``write_sdf(sys.stdout, blocks)``, or ``sys.stdout.buffer``
+for bytes blocks.

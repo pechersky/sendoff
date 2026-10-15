@@ -5,6 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
+*.pyd
 
 # Distribution / packaging
 .Python
@@ -30,7 +31,8 @@ MANIFEST
 .secrets
 
 # IDE
-.vscode
+.vscode/*
+!.vscode/settings.json
 
 # Unit test / coverage reports
 htmlcov/
@@ -43,3 +45,22 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+
+# Local development environment and Rust artifacts
+.venv/
+target/
+
+# Release wheel build output
+dist-rel/
+
+# Benchmark harness: tracked on tooling/sdf-benchmark-harness, not here
+/scripts/README.md
+/scripts/sdf-benchmark
+/scripts/sdf-benchmark-ec2
+/scripts/sdf_benchmark/
+/scripts/sdf_benchmark_ec2/
+/tests/test_benchmark.py
+/tests/test_benchmark_ec2.py
+
+# Local release-note drafts
+/.release-notes/

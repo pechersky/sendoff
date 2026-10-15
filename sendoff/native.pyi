@@ -1,0 +1,904 @@
+import os
+from typing import (
+    Any,
+    AnyStr,
+    Final,
+    Generic,
+    Iterable,
+    Iterator,
+    Literal,
+    Mapping,
+    Protocol,
+    Self,
+    TypeVar,
+    final,
+    overload,
+)
+
+_T = TypeVar("_T")
+_AnyStr_co = TypeVar("_AnyStr_co", str, bytes, covariant=True)
+_AnyStr_contra = TypeVar("_AnyStr_contra", str, bytes, contravariant=True)
+
+DEBUG_BUILD: Final[bool]
+"""
+True when compiled without optimizations; never benchmark such a build.
+"""
+
+__version__: Final[str]
+
+class _SupportsRead(Protocol[_AnyStr_co]):
+    """A text or binary file-like handle read in chunks."""
+
+    def read(self, size: int, /) -> _AnyStr_co: ...
+
+class _SupportsRead1(Protocol[_AnyStr_co]):
+    """A binary file-like handle read in chunks with read1."""
+
+    def read1(self, size: int, /) -> _AnyStr_co: ...
+
+class _SupportsWrite(Protocol[_AnyStr_contra]):
+    """A text or binary file-like handle accepting str or bytes payloads."""
+
+    def write(self, data: _AnyStr_contra, /) -> object: ...
+
+@final
+class CTable:
+    """
+    Handle a Connection table (CTAB) from a single molecule block.
+
+    See https://en.wikipedia.org/wiki/Chemical_table_file. Construction
+    parses only the counts line, for the format and the atom and bond
+    counts, which may differ from the number of atom and bond lines; the
+    other lines are kept as written.
+
+    Errors about the table's contents are sendoff.CTableError, a
+    ValueError; MalformedCTableError names the CTable line (the title is
+    line 1). Operations a table's format or constructs do not support raise
+    NotImplementedError.
+    """
+
+    def __new__(cls, /, lines: Iterable[str]) -> CTable:
+        """
+        Parse in lines representing the CTAB, including the title line.
+
+        Args:
+            lines: an Iterable of str that comprises the CTAB
+                The title line is parsed in by the SDBlock, and should
+                be supplied as the first in lines.
+
+        Raises:
+            MalformedCTableError: if the table is shorter than its header,
+                or its format or counts cannot be read
+        """
+
+    def fix_counts(self, /) -> None:
+        """
+        Set the counts line to the number of atom and bond lines.
+
+        Updates num_atoms and num_bonds to match, and keeps the rest of the
+        counts line, such as the Sgroup count, as written. Use it after
+        adding or removing atom or bond lines. A line ending in "-" continues
+        onto the next, and the two count as one.
+
+        Raises:
+            MalformedCTableError: if the counts line has no atom or bond count
+                field, an ATOM or BOND section has no END line or its last
+                line ends in "-", or the root CTAB has more than one of either
+            NotImplementedError: for a V2000 format table, or CTABs nested in
+                RGROUP or TEMPLATE blocks
+        """
+
+    @property
+    def lines(self, /) -> list[str]:
+        """
+        Return a copy of the original connection-table lines.
+        """
+
+    @property
+    def num_atoms(self, /) -> int:
+        """
+        Return the atom count from the counts line.
+        """
+
+    @property
+    def num_bonds(self, /) -> int:
+        """
+        Return the bond count from the counts line.
+        """
+
+    def renumber_indices(self, /) -> None:
+        """
+        Renumber the atom and bond indices in the block.
+
+        Iterating through the atom lines, replace the indexes into a
+        1-indexed order, keeping track of what maps to what.
+        Then, renumber the bond lines, making sure to map the new atom indices
+        properly, and keeping the rest of each line, such as CFG, as written.
+        The counts line, num_atoms, and num_bonds stay as they are; call
+        fix_counts after adding or removing atom or bond lines.
+        This will run regardless of whether the indices are already valid.
+        It cannot fix duplicate atom indices properly if the duplicate one
+        occurs in the bond lines, and will raise an error.
+        The lines are then in-place replaced within the CTable object.
+        Only implemented for V3000 tables.
+
+        Indices that other data refers to (atom ATTCHORD, bond ENDPTS,
+        SGROUP, COLLECTION, OBJ3D, and LINKNODE lines) are not remapped, so
+        renumbering refuses to change them. It also refuses "-" continued
+        atom or bond lines and CTABs nested in RGROUP or TEMPLATE blocks.
+
+        Raises:
+            MalformedCTableError: if an atom or bond line is missing a field
+                or has a non-integer index, a bond refers to an atom index that
+                no atom line has, an ATOM or BOND section has no END line or
+                its last line ends in "-", or the root CTAB has more than one
+                of either
+            IndicesDuplicateError: if there was a duplicate atom index, and it was used
+                somewhere in a bond line. Raised, because it is not clear which of the
+                original indices to use in the remapping.
+            NotImplementedError: if trying to renumber in a V2000 format table,
+                or a table that renumbering would corrupt, as above
+        """
+
+    def valid_atom_indices(self, /, strict: bool = False) -> bool:
+        """
+        Validate that the atom lines match the counts line.
+
+        If strict, make sure they are 1-indexed and in order.
+        A line ending in "-" continues onto the next, and the two are read
+        as one atom line, numbered by its first line in errors.
+
+        Args:
+            strict: the indices start with 1, and increment by one.
+
+        Raises:
+            MalformedCTableError: if an atom line has no integer index, the
+                ATOM section has no END line or its last line ends in "-", or
+                the root CTAB has more than one ATOM section
+            IndicesDuplicateError: if an atom line has an index seen before
+            IndicesMismatchError: if number of atom lines does not match count line
+            IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
+            NotImplementedError: if trying to validate a V2000 format table
+
+        Returns:
+            If all the checks pass, return True.
+        """
+
+    def valid_bond_indices(self, /, strict: bool = False) -> bool:
+        """
+        Validate that the bond lines match the counts line.
+
+        If strict, make sure they are 1-indexed and in order.
+        A line ending in "-" continues onto the next, and the two are read
+        as one bond line, numbered by its first line in errors.
+
+        Args:
+            strict: the indices start with 1, and increment by one.
+
+        Raises:
+            MalformedCTableError: if a bond line has no integer index, the
+                BOND section has no END line or its last line ends in "-", or
+                the root CTAB has more than one BOND section
+            IndicesDuplicateError: if a bond line has an index seen before
+            IndicesMismatchError: if number of bond lines does not match count line
+            IndicesOutOfOrderError: if strict, and indices are not in 1-indexed order
+            NotImplementedError: if trying to validate a V2000 format table
+
+        Returns:
+            If all the checks pass, return True.
+        """
+
+class MalformedRecordError(ValueError):
+    """An SD data header line has no `<name>`."""
+
+@final
+class SDBlock(Generic[AnyStr]):
+    """
+    Handle a single molecule block from an SD file.
+
+    `SDBlock[str]` blocks come from text input and `SDBlock[bytes]` blocks
+    from binary input; names, values, and lines have the block's type.
+
+    Record names are read and written as given, unchecked. The CTfile
+    format reserves `>`, and its field names start with a letter followed by
+    letters, digits, and underscores: no `-`, `.`, `<`, `>`, `=`, `%`, or
+    spaces. Keeping names valid is up to you; other toolkits may read
+    invalid ones differently.
+
+    A record's value is its lines up to a blank one, as read but without
+    their line endings, joined with "\\n". Lines of only ASCII whitespace,
+    which `bytes.strip()` removes, are blank, in str blocks too, as in RDKit
+    and OEChem. Methods that read
+    records raise sendoff.MalformedRecordError, a ValueError, at a header
+    line with no `<name>`. Values are written unchecked too: a value with a
+    blank line or a `$$$$` line reads back as more records or blocks.
+    """
+
+    def __bool__(self, /) -> bool:
+        """
+        A block is true even without records, as before it had a length.
+        """
+
+    def __buffer__(self: SDBlock[bytes], flags: int, /) -> memoryview:
+        """
+        Export a bytes block's SDF without copying.
+
+        Edits raise BufferError until every export is released.
+
+        Raises:
+            TypeError: for a str block
+            BufferError: for a writable buffer
+        """
+
+    def __contains__(self, name: AnyStr, /) -> bool:
+        """
+        Whether any record is named `name`: `name in block.names()`.
+
+        Like `get`, every record header is checked, so a malformed one raises
+        even after a match.
+
+        Raises:
+            TypeError: if `name` is not the block's type
+            MalformedRecordError: if a record header has no `<name>`
+        """
+
+    def __copy__(self, /) -> SDBlock[AnyStr]:
+        """
+        Return an independent copy; a block holds no other objects, so
+        `copy.copy` and `copy.deepcopy` are the same.
+        """
+
+    def __deepcopy__(self, memo: dict[int, Any], /) -> SDBlock[AnyStr]: ...
+    def __delitem__(self, name: AnyStr, /) -> None:
+        """
+        Remove every record named `name`, as `remove_record(name)` does.
+
+        Raises:
+            KeyError: if no record has that name
+            TypeError: if `name` is not the block's type
+        """
+
+    def __eq__(self, value: object, /) -> bool: ...
+    def __getitem__(self, name: AnyStr, /) -> AnyStr:
+        """
+        Return the value of the last record named `name`, like a dict.
+
+        Raises:
+            KeyError: if no record has that name
+            TypeError: if `name` is not the block's type
+        """
+
+    def __iter__(self, /) -> _SDNameIterator[AnyStr]:
+        """
+        Lazily iterate over the record names in input order, duplicates
+        included, as `names()` lists them. Like a dict, the iterator raises
+        RuntimeError if the records change.
+        """
+
+    def __len__(self, /) -> int:
+        """
+        The number of records, duplicates included: `len(block.records())`.
+        """
+
+    def __ne__(self, value: object, /) -> bool: ...
+    def __new__(
+        cls,
+        /,
+        sdf: AnyStr,
+        records: (
+            Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]] | None
+        ) = None,
+        *,
+        header: Literal["plain", "padded", "copy"] = "plain",
+    ) -> SDBlock[AnyStr]:
+        """
+        Parse one block from SDF str or bytes, such as a molblock.
+
+        The block ends at an optional `$$$$` line, after which only
+        whitespace may follow. str input has universal newlines.
+
+        Args:
+            sdf: a molblock or one SDF record, as str or bytes
+            records: SD data to append after any in `sdf`, as a mapping or
+                an iterable of (name, value) tuples of the same type
+            header: how to write the records' header lines, as in
+                `append_record`
+
+        Raises:
+            ValueError: if `sdf` holds more than one block, or for another
+                `header`
+            TypeError: if `sdf` is not str or bytes, or a record is not its type
+        """
+
+    def __reduce__(self, /) -> tuple[Any, ...]:
+        """
+        Pickle the block's exact state rather than its SDF text, which
+        does not always parse back to the same block.
+        """
+
+    def __release_buffer__(self, buffer: memoryview, /) -> None: ...
+    def __repr__(self, /) -> str:
+        """
+        Show the title; a str block's undecodable title bytes show as U+FFFD
+        instead of raising.
+        """
+
+    def __setitem__(self, name: AnyStr, value: AnyStr, /) -> None:
+        """
+        Set a record as `set_record(name, value)` does.
+
+        Raises:
+            TypeError: if `name` or `value` is not the block's type
+        """
+
+    def __str__(self, /) -> str:
+        """
+        A str block's SDF, ending with $$$$: the inverse of `SDBlock(sdf)`.
+
+        `bytes(block)` is a bytes block's SDF; `str` gives its repr, as
+        `str(b"")` does. Lines end as they were read, so blocks from a bytes
+        path keep "\\r\\n"; str paths read universal newlines, so their lines
+        end in "\\n". Lines the block adds or ends (new records, a missing
+        $$$$, a last line without "\\n") end like the title line.
+
+        Raises:
+            UnicodeDecodeError: for a block from a str path that is not UTF-8
+        """
+
+    @classmethod
+    def _from_state(
+        cls, /, data: bytes, title_end: int, mdl_end: int, text: bool
+    ) -> SDBlock[Any]:
+        """
+        Rebuild a block pickled by `__reduce__`.
+
+        Raises:
+            ValueError: if the state cannot come from a block
+        """
+
+    def append_record(
+        self,
+        /,
+        name: AnyStr,
+        value: AnyStr,
+        *,
+        header: Literal["plain", "padded", "copy"] = "plain",
+    ) -> None:
+        """
+        Append a field and value of the same type as the input block.
+
+        Args:
+            name: field name, written as given; see SDBlock
+            value: field value, with no terminating newline
+            header: how to write the header line: "plain" `> <C>`; "padded"
+                `>  <C>`, as RDKit and Open Babel write; or "copy" the text
+                around the name on the first named header line, as
+                `>  <C>  (1)` after RDKit's `>  <A>  (1)`, or `> <C>` without
+                one. "copy" reads that header first, so it is a bit slower.
+
+        Raises:
+            TypeError: if `name` or `value` is not the block's type
+            ValueError: for another `header`
+        """
+
+    def ctable(self, /) -> CTable:
+        """
+        Parse out the underlying CTable object.
+
+        A bytes block's lines are decoded as Latin-1, so
+        `line.encode("latin-1")` gives the bytes back.
+
+        Returns:
+            The CTable titled with this block's title, parsed from its MDL
+            lines without validation
+
+        Raises:
+            MalformedCTableError: if the table is shorter than its header,
+                or its format or counts cannot be read
+        """
+
+    def fix_counts(self, /) -> None:
+        """
+        Set the counts line to the number of atom and bond lines.
+
+        Uses CTable.fix_counts and replaces this block's MDL lines.
+
+        Raises:
+            MalformedCTableError: as ctable and CTable.fix_counts raise
+            NotImplementedError: as CTable.fix_counts raises
+        """
+
+    @overload
+    @staticmethod
+    def from_lines(
+        lines: Iterable[str] | _SupportsRead[str] | _SupportsRead1[str],
+    ) -> _SDBlockIterator[str]: ...
+    @overload
+    @staticmethod
+    def from_lines(
+        lines: Iterable[bytes] | _SupportsRead[bytes] | _SupportsRead1[bytes],
+    ) -> _SDBlockIterator[bytes]: ...
+    @overload
+    @staticmethod
+    def from_lines(
+        lines: (
+            Iterable[str]
+            | Iterable[bytes]
+            | _SupportsRead[str]
+            | _SupportsRead[bytes]
+            | _SupportsRead1[str]
+            | _SupportsRead1[bytes]
+        ),
+    ) -> _SDBlockIterator[Any]:
+        """
+        Parse SDBlocks from homogeneous str or bytes lines or a file object.
+
+        A file object, which has a `read1` or `read` method, is read in
+        128 KiB chunks with `read1`, when available, or `read`, so the
+        handle's position runs ahead of the blocks produced. Any other
+        iterable, such as a list or a generator, gives whole lines: each item
+        ends a line and may hold several. An item that does not end in "\\n"
+        gets its block's title line ending ("\\n" after a "\\r"), so an empty
+        item is an empty line; pass a stream's arbitrary chunks as a file
+        object instead. A block is produced once an item starts with `$$$$`
+        or the iterable ends, so line-by-line input is consumed only up to
+        each block's `$$$$` line; the iterator does not close iterables.
+
+        Lines end at "\\n", and lines keep their endings, so CRLF input
+        writes back as CRLF. `from_lines(f)` gives the blocks
+        `from_lines(list(f))` does, except that a file opened with
+        `newline=""` also ends its lines at a lone "\\r", which chunks do not:
+        open such files in default text mode, which translates "\\r\\n" and
+        "\\r" to "\\n" as `parse_sdf` and `from_sdf` do for str input.
+
+        Args:
+            lines: homogeneous str or bytes lines separated by the `$$$$`
+                delimiter, or a text or binary file object
+
+        Returns:
+            An iterator that produces owned SDBlocks as input is consumed
+
+        Raises:
+            TypeError: for a str or bytes argument (use `from_sdf` for those)
+                or a non-iterable; and, as blocks are produced, for items or
+                reads that are not str or bytes or that mix the two
+        """
+
+    @overload
+    @staticmethod
+    def from_sdf(sdf: str) -> _SDBlockIterator[str]: ...
+    @overload
+    @staticmethod
+    def from_sdf(sdf: bytes) -> _SDBlockIterator[bytes]: ...
+    @overload
+    @staticmethod
+    def from_sdf(sdf: str | bytes) -> _SDBlockIterator[Any]:
+        """
+        Lazily parse SDBlocks from SDF str or bytes held in memory.
+
+        Equivalent to `from_lines(io.StringIO(sdf, newline=None))` or
+        `from_lines(io.BytesIO(sdf))`, without splitting lines: str input
+        has universal newlines, translated to "\\n", and bytes are split on
+        b"\\n" only.
+
+        Args:
+            sdf: SDF content as str or bytes
+
+        Returns:
+            An iterator of SDBlocks of the input type
+
+        Raises:
+            TypeError: if `sdf` is not str or bytes
+        """
+
+    @overload
+    def get(self, /, name: AnyStr, default: None = None) -> AnyStr | None: ...
+    @overload
+    def get(self, /, name: AnyStr, default: _T) -> AnyStr | _T:
+        """
+        Return the value of the last record named `name`, or `default`.
+
+        Equivalent to `dict(block.records()).get(name, default)`, without
+        building the other values.
+
+        Args:
+            name: record name in the block's type
+            default: returned when no record has that name
+
+        Returns:
+            The record value in the block's type, or `default`
+
+        Raises:
+            TypeError: if `name` is not the block's type
+        """
+
+    def iter_records(self, /) -> _SDRecordIterator[AnyStr]:
+        """
+        Lazily iterate over SD data records in input order.
+
+        Names and values are owned and have the block's type. Like a dict,
+        the iterator raises RuntimeError if the records change; to edit them
+        in a loop, loop over `records()`.
+        """
+
+    @property
+    def mdl(self, /) -> AnyStr:
+        """
+        Return the CTAB after the title, through `M  END`, as one value.
+
+        Every line ends in a newline, so `needle in block.mdl` searches the
+        CTAB and `block.mdl.splitlines()` gives its lines. `block.molblock`
+        is `block.title`, the title line's ending, then `block.mdl`.
+        """
+
+    @property
+    def molblock(self, /) -> AnyStr:
+        """
+        Return the title line and CTAB through `M  END` as one value.
+
+        Suitable for RDKit's `Chem.MolFromMolBlock` or OpenEye's
+        `OEReadMolFromBytes`.
+        """
+
+    @molblock.setter
+    def molblock(self, /, molblock: AnyStr) -> None:
+        """
+        Replace the title line and CTAB, keeping the SD data.
+
+        For example, `block.molblock = Chem.MolToMolBlock(mol)`. Text
+        molblocks have CRLF and CR line endings translated to LF, and a
+        molblock without a final newline gets its title line's ending. So
+        `block.molblock = block.molblock` translates a str block's title line
+        and CTAB to LF and changes nothing else.
+
+        Raises:
+            ValueError: if the molblock has no `M  END` line, has more than
+                whitespace after it, or has a line starting with `$$$$`
+            TypeError: if the molblock is not the block's type
+        """
+
+    def names(self, /) -> list[AnyStr]:
+        """
+        Return the record names in input order, duplicates included.
+
+        Equivalent to `[name for name, _ in block.records()]`, without
+        building the values. Blocks need not share names, so collect them
+        across a file with `Counter(n for b in blocks for n in b.names())`.
+        """
+
+    @property
+    def num_atoms(self, /) -> int:
+        """
+        The number of atoms declared by the counts line.
+
+        The count may differ from the number of atom lines. Only the
+        header is read, so unlike ctable a block that doesn't decode is not
+        an error.
+
+        Raises:
+            MalformedCTableError: if the format or counts cannot be read
+        """
+
+    @property
+    def num_bonds(self, /) -> int:
+        """
+        The number of bonds declared by the counts line.
+
+        The count may differ from the number of bond lines. Only the
+        header is read, so unlike ctable a block that doesn't decode is not
+        an error.
+
+        Raises:
+            MalformedCTableError: if the format or counts cannot be read
+        """
+
+    def records(self, /) -> list[tuple[AnyStr, AnyStr]]:
+        """
+        Return all SD data records.
+
+        Returns:
+            Tuples of record name and value in the input type; multiline
+            values include their inner newlines
+        """
+
+    def remove_record(self, /, name: AnyStr) -> int:
+        """
+        Remove every record named `name`.
+
+        Args:
+            name: record name in the block's type
+
+        Returns:
+            How many records were removed
+
+        Raises:
+            TypeError: if `name` is not the block's type
+        """
+
+    def renumber_indices(self, /) -> None:
+        """
+        Renumber atom and bond indices to be 1-indexed and in order.
+
+        Uses the CTable renumbering and replaces this block's MDL lines. The
+        counts line stays as it is; see fix_counts.
+
+        Raises:
+            MalformedCTableError: as ctable and CTable.renumber_indices raise
+            IndicesDuplicateError: as CTable.renumber_indices raises
+            NotImplementedError: as CTable.renumber_indices raises
+        """
+
+    def replace_records(
+        self,
+        /,
+        records: Mapping[AnyStr, AnyStr] | Iterable[tuple[AnyStr, AnyStr]],
+        *,
+        header: Literal["plain", "padded", "copy"] = "plain",
+    ) -> None:
+        """
+        Replace all SD data with the given records.
+
+        The k-th record with a name keeps the k-th old header line with that
+        name.
+
+        Args:
+            records: a mapping, or an iterable of (name, value) tuples, in
+                the block's type; names are written as given, see SDBlock
+            header: how to write other header lines, as in `append_record`;
+                "copy" copies from the old SD data
+
+        Raises:
+            TypeError: if a name or value is not the block's type
+            ValueError: for another `header`
+        """
+
+    def set_record(
+        self,
+        /,
+        name: AnyStr,
+        value: AnyStr,
+        *,
+        header: Literal["plain", "padded", "copy"] = "plain",
+    ) -> None:
+        """
+        Set a record, keeping the header line and position of the first with
+        that name.
+
+        Later records with the same name are removed; if there is none, the
+        record is appended.
+
+        Args:
+            name: record name in the block's type, written as given; see
+                SDBlock
+            value: record value in the block's type
+            header: how to write an appended record's header line, as in
+                `append_record`
+
+        Raises:
+            TypeError: if `name` or `value` is not the block's type
+            ValueError: for another `header`
+        """
+
+    @property
+    def title(self, /) -> AnyStr:
+        """
+        Return the title line without trailing whitespace, in the input type.
+
+        Only ASCII whitespace is stripped, as `bytes.rstrip()` does, in str
+        blocks too; `molblock` and writes keep the whole title line.
+        """
+
+    @title.setter
+    def title(self, /, title: AnyStr) -> None:
+        """
+        Replace the title line.
+
+        Raises:
+            ValueError: if the title contains a line break or starts with
+                `$$$$`, which would end the block
+            TypeError: if the title is not the block's type
+        """
+
+    def to_dict(self, /) -> dict[AnyStr, AnyStr]:
+        """
+        Return the records as a dict, later duplicates winning.
+
+        Equivalent to `dict(block.records())`.
+        """
+
+@final
+class _SDBlockIterator(Iterator[SDBlock[AnyStr]]):
+    """
+    Lazily parse SDBlocks from an input source.
+    """
+
+    def __iter__(self, /) -> _SDBlockIterator[AnyStr]: ...
+    def __next__(self, /) -> SDBlock[AnyStr]: ...
+    def close(self, /) -> None:
+        """
+        Stop iterating and release the input source, closing files that
+        `parse_sdf` opened.
+        """
+
+@final
+class _SDFWriter(Generic[AnyStr]):
+    """
+    Write SDBlocks one at a time, buffered as `write_sdf` writes them.
+
+    `close` writes the blocks still buffered and closes a path; a file
+    object is left open. Leaving a `with` block closes the writer, also on
+    an error. Writing to a closed writer raises ValueError.
+    """
+
+    def __enter__(self, /) -> Self: ...
+    def __exit__(self, /, *_exc_info: object) -> None: ...
+    def close(self, /) -> None:
+        """
+        Write the buffered blocks and close a path. Closing twice does nothing.
+
+        Raises:
+            OSError: if the buffered blocks cannot be written; the writer is
+                closed anyway
+        """
+
+    def write(self, block: SDBlock[AnyStr], /) -> None:
+        """
+        Write a block, ending with $$$$, as `str(block)` or `bytes(block)`.
+
+        Raises:
+            TypeError: for a str block after bytes ones to a file object, or
+                the reverse
+            UnicodeDecodeError: for a str block that is not UTF-8
+            ValueError: if the writer is closed
+            OSError: if a buffered chunk cannot be written
+        """
+
+@final
+class _SDNameIterator(Iterator[AnyStr]):
+    """
+    Lazily iterate over one block's record names.
+    """
+
+    def __iter__(self, /) -> _SDNameIterator[AnyStr]: ...
+    def __next__(self, /) -> AnyStr: ...
+
+@final
+class _SDRecordIterator(Iterator[tuple[AnyStr, AnyStr]]):
+    """
+    Lazily iterate over one block's SD data records.
+    """
+
+    def __iter__(self, /) -> _SDRecordIterator[AnyStr]: ...
+    def __next__(self, /) -> tuple[AnyStr, AnyStr]: ...
+
+@overload
+def parse_sdf(
+    source: str | os.PathLike[str] | _SupportsRead[str] | _SupportsRead1[str],
+    *,
+    borrow: bool = False,
+) -> _SDBlockIterator[str]: ...
+@overload
+def parse_sdf(
+    source: bytes | os.PathLike[bytes] | _SupportsRead[bytes] | _SupportsRead1[bytes],
+    *,
+    borrow: bool = False,
+) -> _SDBlockIterator[bytes]: ...
+@overload
+def parse_sdf(
+    source: (
+        str
+        | bytes
+        | os.PathLike[str]
+        | os.PathLike[bytes]
+        | _SupportsRead[str]
+        | _SupportsRead[bytes]
+        | _SupportsRead1[str]
+        | _SupportsRead1[bytes]
+    ),
+    *,
+    borrow: bool = False,
+) -> _SDBlockIterator[Any]:
+    """
+    Lazily parse SDBlocks from an SDF path or file object.
+
+    A path is opened on the first `next()`. Regular files on local Linux
+    filesystems are memory-mapped and split a batch of blocks at a time
+    without holding the GIL; pipes, network filesystems, and other files are
+    read in chunks. As with any mapped file, truncating the file while
+    iterating can kill the process with SIGBUS, so write results to a new
+    path. str paths give str values decoded as UTF-8 on access, with
+    universal newlines translated to "\\n", as `open(path)` reads; bytes
+    paths give bytes split on b"\\n" only. From a str path, text that is not
+    UTF-8 raises UnicodeDecodeError with a note naming the block and record;
+    read such feeds from a bytes path, or from a file opened with their
+    encoding.
+
+    `borrow=True` skips copying each block out of a mapped file: blocks read
+    the file's pages until their first edit copies them, and keep the
+    mapping open while they live. Writing to or truncating the file then
+    shows through or kills the process with SIGBUS, even after iterating,
+    so never write results over the source path, as
+    `write_sdf(path, kept_blocks)` would. Files that are read rather than
+    mapped, and str-path blocks with "\\r" newlines, are copied as usual.
+
+    A file object, such as `sys.stdin.buffer`, is read as
+    `SDBlock.from_lines` reads one, from its position and through Python;
+    binary ones give bytes blocks and text ones str blocks. It is not
+    closed, and `borrow` is ignored.
+
+    Args:
+        source: a str, bytes, or os.PathLike path, or a file object with a
+            `read1` or `read` method
+        borrow: let blocks borrow a mapped file rather than copy it
+
+    Returns:
+        An iterator of SDBlocks; `close()` releases the file early
+
+    Raises:
+        TypeError: if `source` is neither a path nor a file object
+    """
+
+@overload
+def sdf_writer(
+    dest: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+) -> _SDFWriter[Any]: ...
+@overload
+def sdf_writer(dest: _SupportsWrite[AnyStr]) -> _SDFWriter[AnyStr]:
+    """
+    Write SDBlocks one at a time to a path or a file object, buffered.
+
+    Use it as a context manager: `with sdf_writer(dest) as out:` then
+    `out.write(block)` per block, so one pass can write several files.
+    Blocks are written as `write_sdf` writes them; an error leaves the
+    blocks before it written.
+
+    Args:
+        dest: a str, bytes, or os.PathLike path to create or truncate, or a
+            text or binary file object, which stays open
+
+    Returns:
+        A writer whose `close` writes the blocks it still buffers
+
+    Raises:
+        OSError: if `dest` cannot be created
+    """
+
+@overload
+def write_sdf(
+    dest: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+    blocks: Iterable[SDBlock[Any]],
+) -> int: ...
+@overload
+def write_sdf(dest: _SupportsWrite[AnyStr], blocks: Iterable[SDBlock[AnyStr]]) -> int:
+    """
+    Write SDBlocks to a path or a file object, and return how many.
+
+    Blocks are written as `str(block)` or `bytes(block)`, but 64-256 KiB at
+    a time: to a path without holding the GIL, or to a file object with one
+    `write` call per chunk, as str for text blocks or bytes for byte-backed
+    ones. Text blocks must be valid UTF-8.
+
+    An error stops writing: the blocks before the failing one are written,
+    a path keeps them, and the error propagates. A failed write may leave
+    part of its chunk written.
+
+    A file object's `write` is called once per chunk and its return value
+    is not checked. Buffered and text file objects, such as `sys.stdout` or
+    those `open` returns by default, write everything or raise; an
+    unbuffered (`buffering=0`) or nonblocking one may write part of a chunk.
+
+    Args:
+        dest: a str, bytes, or os.PathLike path to create or truncate, or a
+            text or binary file object
+        blocks: an iterable of SDBlocks, all str or all bytes for a file
+            object
+
+    Returns:
+        The number of blocks written
+
+    Raises:
+        TypeError: if `blocks` is not iterable, produces something other
+            than an SDBlock, or mixes str and bytes blocks for a file object
+        UnicodeDecodeError: for a str block that is not UTF-8
+        OSError: if `dest` cannot be created or written
+    """

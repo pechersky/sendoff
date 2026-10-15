@@ -1,8 +1,12 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
-exclude: '.git'
+exclude: '^\.git/'
 default_stages: [pre-commit]
 fail_fast: true
+
+ci:
+    # pre-commit.ci has no Rust toolchain; Clippy also runs in GitHub Actions.
+    skip: [cargo-fmt, cargo-clippy, cargo-fmt-fuzz, cargo-clippy-fuzz, native-stub]
 
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
@@ -33,8 +37,48 @@ repos:
         additional_dependencies: [darglint, flake8-docstrings]
 
 -   repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.19.0
+    rev: v2.4.0
     hooks:
     -   id: mypy
         args: [--ignore-missing-imports, --strict]
-        additional_dependencies: [pytest]
+        additional_dependencies: [hypothesis, pytest]
+        exclude: '^scripts/'
+
+-   repo: local
+    hooks:
+    -   id: str-join
+        name: write str.join(sep, items), not sep.join(items)
+        entry: '[''"]\.join\('
+        language: pygrep
+        types_or: [python, pyi, rst, markdown]
+    -   id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        files: '(^Cargo\.(toml|lock)$|^rust/.*\.rs$)'
+        pass_filenames: false
+    -   id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --locked --all-targets --all-features -- -D warnings
+        language: system
+        files: '(^Cargo\.(toml|lock)$|^rust/.*\.rs$)'
+        pass_filenames: false
+    -   id: cargo-fmt-fuzz
+        name: cargo fmt (fuzz)
+        entry: cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+        language: system
+        files: '^fuzz/.*\.(rs|toml)$'
+        pass_filenames: false
+    -   id: cargo-clippy-fuzz
+        name: cargo clippy (fuzz)
+        entry: cargo clippy --manifest-path fuzz/Cargo.toml --locked -- -D warnings
+        language: system
+        files: '(^fuzz/(Cargo\.(toml|lock)|.*\.rs)$|^rust/src/core/.*\.rs$)'
+        pass_filenames: false
+    -   id: native-stub
+        name: regenerate sendoff/native.pyi
+        entry: python scripts/native-stub
+        language: python
+        additional_dependencies: [maturin==1.15.0, black==25.11.0]
+        files: '(^Cargo\.(toml|lock)$|^rust/.*\.rs$|^sendoff/native\.pyi$|^scripts/native-stub(\.patch)?$)'
+        pass_filenames: false

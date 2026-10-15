@@ -1,0 +1,363 @@
+--- a/sendoff/native.pyi
++++ b/sendoff/native.pyi
+@@ -1,5 +1,23 @@
+-from _typeshed import Incomplete
+-from typing import Any, Final, final
++import os
++from typing import (
++    Any,
++    AnyStr,
++    Final,
++    Generic,
++    Iterable,
++    Iterator,
++    Literal,
++    Mapping,
++    Protocol,
++    Self,
++    TypeVar,
++    final,
++    overload,
++)
++
++_T = TypeVar("_T")
++_AnyStr_co = TypeVar("_AnyStr_co", str, bytes, covariant=True)
++_AnyStr_contra = TypeVar("_AnyStr_contra", str, bytes, contravariant=True)
+
+ DEBUG_BUILD: Final[bool]
+ """
+@@ -7,6 +25,21 @@
+ """
+
+ __version__: Final[str]
++
++class _SupportsRead(Protocol[_AnyStr_co]):
++    """A text or binary file-like handle read in chunks."""
++
++    def read(self, size: int, /) -> _AnyStr_co: ...
++
++class _SupportsRead1(Protocol[_AnyStr_co]):
++    """A binary file-like handle read in chunks with read1."""
++
++    def read1(self, size: int, /) -> _AnyStr_co: ...
++
++class _SupportsWrite(Protocol[_AnyStr_contra]):
++    """A text or binary file-like handle accepting str or bytes payloads."""
++
++    def write(self, data: _AnyStr_contra, /) -> object: ...
+
+ @final
+ class CTable:
+@@ -155,8 +188,11 @@
+             If all the checks pass, return True.
+         """
+
++class MalformedRecordError(ValueError):
++    """An SD data header line has no `<name>`."""
++
+ @final
+-class SDBlock:
++class SDBlock(Generic[AnyStr]):
+     """
+     Handle a single molecule block from an SD file.
+
+@@ -181,13 +217,18 @@
+         A block is true even without records, as before it had a length.
+         """
+
+-    @classmethod
+-    def __class_getitem__(cls, /, item: Any) -> GenericAlias:
+-        """
+-        Allow `SDBlock[str]` and `SDBlock[bytes]` in runtime annotations.
+-        """
+-
+-    def __contains__(self, name: Any, /) -> bool:
++    def __buffer__(self: SDBlock[bytes], flags: int, /) -> memoryview:
++        """
++        Export a bytes block's SDF without copying.
++
++        Edits raise BufferError until every export is released.
++
++        Raises:
++            TypeError: for a str block
++            BufferError: for a writable buffer
++        """
++
++    def __contains__(self, name: AnyStr, /) -> bool:
+         """
+         Whether any record is named `name`: `name in block.names()`.
+
+@@ -206,7 +247,7 @@
+         """
+
+     def __deepcopy__(self, memo: dict[int, Any], /) -> SDBlock[AnyStr]: ...
+-    def __delitem__(self, name: Any, /) -> None:
++    def __delitem__(self, name: AnyStr, /) -> None:
+         """
+         Remove every record named `name`, as `remove_record(name)` does.
+
+@@ -216,7 +257,7 @@
+         """
+
+     def __eq__(self, value: object, /) -> bool: ...
+-    def __getitem__(self, name: Any, /) -> Any:
++    def __getitem__(self, name: AnyStr, /) -> AnyStr:
+         """
+         Return the value of the last record named `name`, like a dict.
+
+@@ -225,7 +266,7 @@
+             TypeError: if `name` is not the block's type
+         """
+
+-    def __iter__(self, /) -> _SDNameIterator:
++    def __iter__(self, /) -> _SDNameIterator[AnyStr]:
+         """
+         Lazily iterate over the record names in input order, duplicates
+         included, as `names()` lists them. Like a dict, the iterator raises
+@@ -273,13 +314,14 @@
+         does not always parse back to the same block.
+         """
+
++    def __release_buffer__(self, buffer: memoryview, /) -> None: ...
+     def __repr__(self, /) -> str:
+         """
+         Show the title; a str block's undecodable title bytes show as U+FFFD
+         instead of raising.
+         """
+
+-    def __setitem__(self, name: Any, value: Any, /) -> None:
++    def __setitem__(self, name: AnyStr, value: AnyStr, /) -> None:
+         """
+         Set a record as `set_record(name, value)` does.
+
+@@ -364,10 +406,26 @@
+             NotImplementedError: as CTable.fix_counts raises
+         """
+
++    @overload
++    @staticmethod
++    def from_lines(
++        lines: Iterable[str] | _SupportsRead[str] | _SupportsRead1[str],
++    ) -> _SDBlockIterator[str]: ...
++    @overload
++    @staticmethod
++    def from_lines(
++        lines: Iterable[bytes] | _SupportsRead[bytes] | _SupportsRead1[bytes],
++    ) -> _SDBlockIterator[bytes]: ...
++    @overload
+     @staticmethod
+     def from_lines(
+         lines: (
+-            Iterable[str] | Iterable[bytes] | _SupportsRead[str] | _SupportsRead[bytes]
++            Iterable[str]
++            | Iterable[bytes]
++            | _SupportsRead[str]
++            | _SupportsRead[bytes]
++            | _SupportsRead1[str]
++            | _SupportsRead1[bytes]
+         ),
+     ) -> _SDBlockIterator[Any]:
+         """
+@@ -404,6 +462,13 @@
+                 reads that are not str or bytes or that mix the two
+         """
+
++    @overload
++    @staticmethod
++    def from_sdf(sdf: str) -> _SDBlockIterator[str]: ...
++    @overload
++    @staticmethod
++    def from_sdf(sdf: bytes) -> _SDBlockIterator[bytes]: ...
++    @overload
+     @staticmethod
+     def from_sdf(sdf: str | bytes) -> _SDBlockIterator[Any]:
+         """
+@@ -424,7 +489,10 @@
+             TypeError: if `sdf` is not str or bytes
+         """
+
+-    def get(self, /, name: AnyStr, default: _T | None = None) -> AnyStr | _T | None:
++    @overload
++    def get(self, /, name: AnyStr, default: None = None) -> AnyStr | None: ...
++    @overload
++    def get(self, /, name: AnyStr, default: _T) -> AnyStr | _T:
+         """
+         Return the value of the last record named `name`, or `default`.
+
+@@ -452,7 +520,7 @@
+         """
+
+     @property
+-    def mdl(self, /) -> Any:
++    def mdl(self, /) -> AnyStr:
+         """
+         Return the CTAB after the title, through `M  END`, as one value.
+
+@@ -462,7 +530,7 @@
+         """
+
+     @property
+-    def molblock(self, /) -> Any:
++    def molblock(self, /) -> AnyStr:
+         """
+         Return the title line and CTAB through `M  END` as one value.
+
+@@ -471,7 +539,7 @@
+         """
+
+     @molblock.setter
+-    def molblock(self, /, molblock: Any) -> None:
++    def molblock(self, /, molblock: AnyStr) -> None:
+         """
+         Replace the title line and CTAB, keeping the SD data.
+
+@@ -602,7 +670,7 @@
+         """
+
+     @property
+-    def title(self, /) -> Any:
++    def title(self, /) -> AnyStr:
+         """
+         Return the title line without trailing whitespace, in the input type.
+
+@@ -612,7 +680,7 @@
+         """
+
+     @title.setter
+-    def title(self, /, title: Any) -> None:
++    def title(self, /, title: AnyStr) -> None:
+         """
+         Replace the title line.
+
+@@ -630,13 +698,13 @@
+         """
+
+ @final
+-class _SDBlockIterator:
++class _SDBlockIterator(Iterator[SDBlock[AnyStr]]):
+     """
+     Lazily parse SDBlocks from an input source.
+     """
+
+-    def __iter__(self, /) -> _SDBlockIterator: ...
+-    def __next__(self, /) -> SDBlock: ...
++    def __iter__(self, /) -> _SDBlockIterator[AnyStr]: ...
++    def __next__(self, /) -> SDBlock[AnyStr]: ...
+     def close(self, /) -> None:
+         """
+         Stop iterating and release the input source, closing files that
+@@ -644,7 +712,7 @@
+         """
+
+ @final
+-class _SDFWriter:
++class _SDFWriter(Generic[AnyStr]):
+     """
+     Write SDBlocks one at a time, buffered as `write_sdf` writes them.
+
+@@ -653,8 +721,8 @@
+     an error. Writing to a closed writer raises ValueError.
+     """
+
+-    def __enter__(self, /) -> _SDFWriter: ...
+-    def __exit__(self, /, *_exc_info) -> None: ...
++    def __enter__(self, /) -> Self: ...
++    def __exit__(self, /, *_exc_info: object) -> None: ...
+     def close(self, /) -> None:
+         """
+         Write the buffered blocks and close a path. Closing twice does nothing.
+@@ -677,25 +745,49 @@
+         """
+
+ @final
+-class _SDNameIterator:
++class _SDNameIterator(Iterator[AnyStr]):
+     """
+     Lazily iterate over one block's record names.
+     """
+
+-    def __iter__(self, /) -> _SDNameIterator: ...
+-    def __next__(self, /) -> Any: ...
++    def __iter__(self, /) -> _SDNameIterator[AnyStr]: ...
++    def __next__(self, /) -> AnyStr: ...
+
+ @final
+-class _SDRecordIterator:
++class _SDRecordIterator(Iterator[tuple[AnyStr, AnyStr]]):
+     """
+     Lazily iterate over one block's SD data records.
+     """
+
+-    def __iter__(self, /) -> _SDRecordIterator: ...
+-    def __next__(self, /) -> tuple: ...
+-
++    def __iter__(self, /) -> _SDRecordIterator[AnyStr]: ...
++    def __next__(self, /) -> tuple[AnyStr, AnyStr]: ...
++
++@overload
+ def parse_sdf(
+-    source: str | bytes | os.PathLike[str] | os.PathLike[bytes], *, borrow: bool = False
++    source: str | os.PathLike[str] | _SupportsRead[str] | _SupportsRead1[str],
++    *,
++    borrow: bool = False,
++) -> _SDBlockIterator[str]: ...
++@overload
++def parse_sdf(
++    source: bytes | os.PathLike[bytes] | _SupportsRead[bytes] | _SupportsRead1[bytes],
++    *,
++    borrow: bool = False,
++) -> _SDBlockIterator[bytes]: ...
++@overload
++def parse_sdf(
++    source: (
++        str
++        | bytes
++        | os.PathLike[str]
++        | os.PathLike[bytes]
++        | _SupportsRead[str]
++        | _SupportsRead[bytes]
++        | _SupportsRead1[str]
++        | _SupportsRead1[bytes]
++    ),
++    *,
++    borrow: bool = False,
+ ) -> _SDBlockIterator[Any]:
+     """
+     Lazily parse SDBlocks from an SDF path or file object.
+@@ -737,9 +829,12 @@
+         TypeError: if `source` is neither a path nor a file object
+     """
+
++@overload
+ def sdf_writer(
+-    dest: str | bytes | os.PathLike[str] | os.PathLike[bytes] | _SupportsWrite[Any],
+-) -> _SDFWriter:
++    dest: str | bytes | os.PathLike[str] | os.PathLike[bytes],
++) -> _SDFWriter[Any]: ...
++@overload
++def sdf_writer(dest: _SupportsWrite[AnyStr]) -> _SDFWriter[AnyStr]:
+     """
+     Write SDBlocks one at a time to a path or a file object, buffered.
+
+@@ -759,10 +854,13 @@
+         OSError: if `dest` cannot be created
+     """
+
++@overload
+ def write_sdf(
+-    dest: str | bytes | os.PathLike[str] | os.PathLike[bytes] | _SupportsWrite[Any],
++    dest: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+     blocks: Iterable[SDBlock[Any]],
+-) -> int:
++) -> int: ...
++@overload
++def write_sdf(dest: _SupportsWrite[AnyStr], blocks: Iterable[SDBlock[AnyStr]]) -> int:
+     """
+     Write SDBlocks to a path or a file object, and return how many.
+
+@@ -795,5 +893,3 @@
+         UnicodeDecodeError: for a str block that is not UTF-8
+         OSError: if `dest` cannot be created or written
+     """
+-
+-def __getattr__(name: str) -> Incomplete: ...

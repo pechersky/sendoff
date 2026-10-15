@@ -1,8 +1,24 @@
 """Test rdkit parsing of metadata on generated SDFs."""
 
-from rdkit import Chem
+import os
+from pathlib import Path
 
-from sendoff.sdblock import Pathy
+import pytest
+
+from sendoff.sdblock import parse_sdf
+from tests.fixtures import INDEX_DEFECTS, RDKIT, CountedMol, Pathy
+
+if not RDKIT:
+    pytest.skip("RDKit is not installed", allow_module_level=True)
+
+from rdkit import Chem, rdBase  # noqa: E402
+
+# rdkit/rdkit#9047 preserves embedded ">" starting in 2025.09.5.
+RIGHT_ANGLE_BRACKET_FIELD = (
+    "Rec"
+    if tuple(map(int, rdBase.rdkitVersion.split("."))) < (2025, 9, 5)
+    else "Rec>ord"
+)
 
 
 def test_single_mol_read(single_mol_sdf: Pathy) -> None:
@@ -135,257 +151,132 @@ def test_multiline_record_name_mol_read(
     assert not mol.HasProp("Rec\nord")
 
 
-def test_right_angle_bracket_record_name_mol_read_field_name_changed(
+def test_right_angle_bracket_record_name_mol_read_field_name(
     single_right_angle_bracket_record_name_mol_sdf: Pathy,
 ) -> None:
-    """An sdf with a record name with a ">" is not present in the read data.
+    """The RDKit version determines whether it preserves ">" in a field name.
 
     Args:
         single_right_angle_bracket_record_name_mol_sdf: fixture of a Path to the sdf
     """
     mol = next(Chem.SDMolSupplier(str(single_right_angle_bracket_record_name_mol_sdf)))
-    assert not mol.HasProp("Rec>ord")
+    assert mol.HasProp(RIGHT_ANGLE_BRACKET_FIELD)
+    other_field = "Rec>ord" if RIGHT_ANGLE_BRACKET_FIELD == "Rec" else "Rec"
+    assert not mol.HasProp(other_field)
 
 
-def test_right_angle_bracket_record_name_mol_read_data_at_modified_field(
+def test_right_angle_bracket_record_name_mol_read_data(
     single_right_angle_bracket_record_name_mol_sdf: Pathy,
 ) -> None:
-    """An sdf with a record name with a ">" contains data at a modified field name.
+    """The value survives RDKit's version-specific handling of ">" in its name.
 
     Args:
         single_right_angle_bracket_record_name_mol_sdf: fixture of a Path to the sdf
     """
     mol = next(Chem.SDMolSupplier(str(single_right_angle_bracket_record_name_mol_sdf)))
-    assert mol.GetProp("Rec") == "Value"
+    assert mol.GetProp(RIGHT_ANGLE_BRACKET_FIELD) == "Value"
 
 
-def test_0_atoms_mol_num_atoms(single_0_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 0 atoms written parses as 0 atoms.
-
-    Args:
-        single_0_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_0_atoms_mol_sdf)))
-    assert mol.GetNumAtoms() == 0
-
-
-def test_star_atom_mol_num_atoms(single_star_atom_mol_sdf: Pathy) -> None:
-    """An sdf block with a single star atom written parses as 1 atom.
+def test_counts_mol_read(counted_mol_sdf: CountedMol) -> None:
+    """An sdf block parses with its molecule's atom and bond counts.
 
     Args:
-        single_star_atom_mol_sdf: pytest fixture of a Path to the sdf
+        counted_mol_sdf: pytest fixture of a Path to the sdf, and its counts
     """
-    mol = next(Chem.SDMolSupplier(str(single_star_atom_mol_sdf)))
-    assert mol.GetNumAtoms() == 1
+    mol = next(Chem.SDMolSupplier(str(counted_mol_sdf.path)))
+    assert (mol.GetNumAtoms(), mol.GetNumBonds()) == (
+        counted_mol_sdf.atoms,
+        counted_mol_sdf.bonds,
+    )
 
 
-def test_999_atoms_mol_num_atoms(single_999_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 999 atoms written parses as 999 atoms.
+@pytest.mark.parametrize(
+    "defect, readable",
+    [
+        ("large_atom_index", True),
+        ("large_bond_index", True),
+        ("missing_atom_line", False),
+        ("extra_atom_line", False),
+        ("missing_bond_line", False),
+        ("extra_bond_line", False),
+        ("duplicate_atom_index", True),
+        ("duplicate_bond_index", True),
+        ("shuffled_atom_lines", True),
+        ("shuffled_bond_lines", True),
+    ],
+)
+def test_index_defects_mol_read(defect: str, readable: bool) -> None:
+    """Large, duplicate or unordered indices read, but wrong counts do not.
 
     Args:
-        single_999_atoms_mol_sdf: pytest fixture of a Path to the sdf
+        defect: the name of the defect in INDEX_DEFECTS
+        readable: whether RDKit reads the molecule
     """
-    mol = next(Chem.SDMolSupplier(str(single_999_atoms_mol_sdf)))
-    assert mol.GetNumAtoms() == 999
+    supplier = Chem.SDMolSupplier()
+    supplier.SetData(INDEX_DEFECTS[defect].sdf())
+    mol = next(supplier)
+    if readable:
+        assert (mol.GetNumAtoms(), mol.GetNumBonds()) == (9, 9)
+    else:
+        assert mol is None
 
 
-def test_1001_atoms_mol_num_atoms(single_1001_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 1001 atoms written parses as 1001 atoms.
+def test_molblock_round_trips_through_rdkit(double_mol_sdf: Pathy) -> None:
+    """Each block's molblock parses to the molecule RDKit reads from the file.
 
     Args:
-        single_1001_atoms_mol_sdf: pytest fixture of a Path to the sdf
+        double_mol_sdf: pytest fixture of a Path to the sdf
     """
-    mol = next(Chem.SDMolSupplier(str(single_1001_atoms_mol_sdf)))
-    assert mol.GetNumAtoms() == 1001
+    expected = [
+        Chem.MolToSmiles(mol) for mol in Chem.SDMolSupplier(str(double_mol_sdf))
+    ]
+    for path in (str(double_mol_sdf), os.fsencode(double_mol_sdf)):
+        smiles = [
+            Chem.MolToSmiles(Chem.MolFromMolBlock(block.molblock))
+            for block in parse_sdf(path)
+        ]
+        assert smiles == expected
 
 
-def test_0_atoms_mol_num_bonds(single_0_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 0 atoms written parses as 0 bonds.
-
-    Args:
-        single_0_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_0_atoms_mol_sdf)))
-    assert mol.GetNumBonds() == 0
-
-
-def test_star_atom_mol_num_bonds(single_star_atom_mol_sdf: Pathy) -> None:
-    """An sdf block with a single star atom written parses as 0 bonds.
-
-    Args:
-        single_star_atom_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_star_atom_mol_sdf)))
-    assert mol.GetNumBonds() == 0
-
-
-def test_999_atoms_mol_num_bonds(single_999_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 999 atoms written parses as 998 bonds.
-
-    Args:
-        single_999_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_999_atoms_mol_sdf)))
-    assert mol.GetNumBonds() == 998
-
-
-def test_1001_atoms_mol_num_bonds(single_1001_atoms_mol_sdf: Pathy) -> None:
-    """An sdf block with 1001 atoms written parses as 1000 bonds.
-
-    Args:
-        single_1001_atoms_mol_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_1001_atoms_mol_sdf)))
-    assert mol.GetNumBonds() == 1000
-
-
-def test_single_large_atom_index_valid_atom_indices(
-    single_large_atom_index_v3000_sdf: Pathy,
+def test_molblock_setter_swaps_structures_from_rdkit(
+    double_mol_sdf: Pathy, tmp_path: Path
 ) -> None:
-    """An sdf block with large atom indices has valid indices.
-
-    That means that the number of atoms matches the counts line,
-    and each index is unique and integer. That means RDKit does not complain.
-    Does not check that the indices are 1-indexed and in order.
+    """Assigning an RDKit molblock keeps records, and RDKit reads the result.
 
     Args:
-        single_large_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
+        double_mol_sdf: pytest fixture of a Path to the sdf
+        tmp_path: pytest fixture for writing files to a temp directory
     """
-    mol = next(Chem.SDMolSupplier(str(single_large_atom_index_v3000_sdf)))
-    assert mol.GetNumAtoms() == 9
+    outpath = tmp_path / "swapped.sdf"
+    with open(outpath, "w", encoding="utf-8") as handle:
+        for block in parse_sdf(str(double_mol_sdf)):
+            mol = Chem.MolFromSmiles("CCO")
+            mol.SetProp("_Name", f"{block.title!s}-swapped")
+            block.molblock = Chem.MolToMolBlock(mol)
+            block.set_record("Original", block.title)
+            handle.write(str(block))
+    swapped = list(Chem.SDMolSupplier(str(outpath)))
+    assert [Chem.MolToSmiles(mol) for mol in swapped] == ["CCO", "CCO"]
+    assert all(mol.GetProp("_Name").endswith("-swapped") for mol in swapped)
+    assert all(mol.GetProp("Original") == mol.GetProp("_Name") for mol in swapped)
 
 
-def test_single_large_bond_index_valid_bond_indices(
-    single_large_bond_index_v3000_sdf: Pathy,
-) -> None:
-    """An sdf block with large bond indices has valid indices.
-
-    That means that the number of bonds matches the counts line,
-    and each index is unique and integer. That means RDKit does not complain.
-    Does not check that the indices are 1-indexed and in order.
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_padded_values_read_like_rdkit(newline: str, tmp_path: Path) -> None:
+    """Values keep each line's whitespace and drop line endings, as in RDKit.
 
     Args:
-        single_large_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
+        newline: line ending used throughout the file
+        tmp_path: pytest fixture for writing files to a temp directory
     """
-    mol = next(Chem.SDMolSupplier(str(single_large_bond_index_v3000_sdf)))
-    assert mol.GetNumBonds() == 9
-
-
-def test_single_missing_atom_line_invalid_atom_indices(
-    single_missing_atom_line_v3000_sdf: Pathy,
-) -> None:
-    """An sdf block with a missing atom line has invalid indices.
-
-    That means that the number of atoms is fewer than the counts line,
-    and RDKit won't read the molecule.
-
-    Args:
-        single_missing_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_missing_atom_line_v3000_sdf)))
-    assert mol is None
-
-
-def test_single_extra_atom_line_invalid_atom_indices(
-    single_extra_atom_line_v3000_sdf: Pathy,
-) -> None:
-    """An sdf block with a extra atom line has invalid indices.
-
-    That means that the number of atoms is more than the counts line,
-    and RDKit won't read the molecule.
-
-    Args:
-        single_extra_atom_line_v3000_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_extra_atom_line_v3000_sdf)))
-    assert mol is None
-
-
-def test_single_missing_bond_line_invalid_atom_indices(
-    single_missing_bond_line_v3000_sdf: Pathy,
-) -> None:
-    """An sdf block with a missing bond line has invalid indices.
-
-    That means that the number of bonds is fewer than the counts line,
-    and RDKit won't read the molecule.
-
-    Args:
-        single_missing_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_missing_bond_line_v3000_sdf)))
-    assert mol is None
-
-
-def test_single_extra_bond_line_invalid_atom_indices(
-    single_extra_bond_line_v3000_sdf: Pathy,
-) -> None:
-    """An sdf block with a extra bond line has invalid indices.
-
-    That means that the number of bonds is more than the counts line,
-    and RDKit won't read the molecule.
-
-    Args:
-        single_extra_bond_line_v3000_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_extra_bond_line_v3000_sdf)))
-    assert mol is None
-
-
-def test_single_duplicate_atom_index_valid_atom_indices(
-    single_duplicate_atom_index_v3000_sdf: Pathy,
-) -> None:
-    """An sdf block with a duplicate atom index has valid indices.
-
-    That means that the number of atoms is weird,
-    yet RDKit will read the molecule.
-
-    Args:
-        single_duplicate_atom_index_v3000_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_duplicate_atom_index_v3000_sdf)))
-    assert mol.GetNumAtoms() == 9
-
-
-def test_single_duplicate_bond_index_valid_bond_indices(
-    single_duplicate_bond_index_v3000_sdf: Pathy,
-) -> None:
-    """An sdf block with a duplicate bond index has valid indices.
-
-    That means that the number of bonds is weird,
-    yet RDKit will read the molecule.
-
-    Args:
-        single_duplicate_bond_index_v3000_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_duplicate_bond_index_v3000_sdf)))
-    assert mol.GetNumBonds() == 9
-
-
-def test_single_shuffled_atom_lines_valid_atom_indices(
-    single_shuffled_atom_lines_v3000_sdf: Pathy,
-) -> None:
-    """An sdf block with shuffled atom lines has valid indices.
-
-    That means that the number of atoms is weird,
-    yet RDKit will read the molecule.
-
-    Args:
-        single_shuffled_atom_lines_v3000_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_shuffled_atom_lines_v3000_sdf)))
-    assert mol.GetNumAtoms() == 9
-
-
-def test_single_shuffled_bond_lines_valid_bond_indices(
-    single_shuffled_bond_lines_v3000_sdf: Pathy,
-) -> None:
-    """An sdf block with shuffled bond lines has valid indices.
-
-    That means that the number of bonds is weird,
-    yet RDKit will read the molecule.
-
-    Args:
-        single_shuffled_bond_lines_v3000_sdf: pytest fixture of a Path to the sdf
-    """
-    mol = next(Chem.SDMolSupplier(str(single_shuffled_bond_lines_v3000_sdf)))
-    assert mol.GetNumBonds() == 9
+    lines = ["Title", "", "", "  0  0  0  0  0  0  0  0  0  0999 V2000", "M  END"]
+    lines += [">  <Padded>  ", "  a  ", "", "> <Multi>", " x ", "\ty\t", "", "$$$$"]
+    path = tmp_path / "padded.sdf"
+    path.write_bytes(newline.join([*lines, ""]).encode())
+    (mol,) = Chem.SDMolSupplier(str(path), sanitize=False)
+    expected = [(name, mol.GetProp(name)) for name in mol.GetPropNames()]
+    assert expected == [("Padded", "  a  "), ("Multi", " x \n\ty\t")]
+    (text_block,) = parse_sdf(str(path))
+    (byte_block,) = parse_sdf(os.fsencode(path))
+    assert text_block.records() == expected
+    assert byte_block.records() == [(n.encode(), v.encode()) for n, v in expected]

@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""Regenerate sendoff/native.pyi from the Rust extension and a patch.
+
+PyO3 introspection (``maturin generate-stubs`` with the ``stubgen`` feature)
+writes the signatures, the type hints from ``#[pyo3(signature = ...)]``, and
+the Rust doc comments as docstrings. ``scripts/native-stub.patch`` then adds
+what introspection cannot express: ``Generic[AnyStr]``, overloads, typed
+getters and iterators, and the file-object Protocols.
+
+    scripts/native-stub                 rewrite sendoff/native.pyi
+    scripts/native-stub --check         fail if sendoff/native.pyi is stale
+    scripts/native-stub --update-patch  record hand edits of native.pyi
+
+Change docstrings and simple types in Rust. For typing that needs the patch,
+edit sendoff/native.pyi and run --update-patch.
+"""
+from __future__ import annotations
+
+import argparse
+import ast
+import difflib
+import re
+import subprocess
+import sys
+import tempfile
+from itertools import islice
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+STUB = ROOT / "sendoff" / "native.pyi"
+PATCH = ROOT / "scripts" / "native-stub.patch"
+HUNK = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def introspect() -> str:
+    """Build the extension with introspection data and return its stub.
+
+    Returns:
+        The stub text written by maturin
+    """
+    with tempfile.TemporaryDirectory() as out:
+        subprocess.run(
+            [
+                *(sys.executable, "-m", "maturin", "generate-stubs", "--quiet"),
+                *("--features", "stubgen", "--interpreter", sys.executable),
+                *("--target-dir", str(ROOT / "target" / "stubgen"), "--out", out),
+            ],
+            check=True,
+            cwd=ROOT,
+        )
+        return (Path(out) / "sendoff" / "native.pyi").read_text()
+
+
+def normalize(text: str) -> str:
+    """Unquote string annotations and escape backslashes in docstrings.
+
+    Introspection quotes the hints from Rust signatures and copies doc
+    comments verbatim, so a ``"\\n"`` in a doc comment would otherwise read
+    as a newline in the stub.
+
+    Args:
+        text: stub text from introspection
+
+    Returns:
+        The stub text with plain annotations and literal docstrings
+
+    Raises:
+        SystemExit: if a docstring is not triple-double-quoted
+    """
+    lines = text.splitlines(keepends=True)
+    edits: list[tuple[ast.expr, str]] = []
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.FunctionDef):
+            arguments = node.args
+            hints = [
+                arg.annotation
+                for arg in (
+                    *arguments.posonlyargs,
+                    *arguments.args,
+                    *arguments.kwonlyargs,
+                    arguments.vararg,
+                    arguments.kwarg,
+                )
+                if arg is not None
+            ]
+            for hint in (*hints, node.returns):
+                if isinstance(hint, ast.Constant) and isinstance(hint.value, str):
+                    edits.append((hint, hint.value))
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            if isinstance(node.value.value, str):
+                source = ast.get_source_segment(text, node.value)
+                if source is None or not source.startswith('"""'):
+                    raise SystemExit(f"unexpected docstring form: {source!r}")
+                body = source[3:-3].replace("\\", "\\\\")
+                edits.append((node.value, f'"""{body}"""'))
+    # Replace from the end, so earlier positions stay valid.
+    edits.sort(key=lambda edit: (edit[0].lineno, edit[0].col_offset), reverse=True)
+    for node, replacement in edits:
+        assert node.end_lineno is not None and node.end_col_offset is not None
+        first, last = node.lineno - 1, node.end_lineno
+        start, end = node.col_offset, node.end_col_offset
+        head = lines[first].encode()[:start].decode()
+        tail = lines[last - 1].encode()[end:].decode()
+        lines[first:last] = [head + replacement + tail]
+    return str.join("", lines)
+
+
+def black(text: str) -> str:
+    """Format stub text as the black pre-commit hook would.
+
+    Args:
+        text: stub text
+
+    Returns:
+        The formatted stub text
+    """
+    return subprocess.run(
+        [
+            *(sys.executable, "-m", "black", "--quiet", "--pyi"),
+            *("--stdin-filename", str(STUB), "-"),
+        ],
+        capture_output=True,
+        check=True,
+        cwd=ROOT,
+        input=text,
+        text=True,
+    ).stdout
+
+
+def generate() -> str:
+    """Return the formatted stub generated from the Rust extension.
+
+    Returns:
+        The stub text before the patch
+    """
+    return black(normalize(introspect()))
+
+
+def diff(old: str, new: str) -> str:
+    """Return a unified diff of the stub from `old` to `new`.
+
+    Blank context lines are written without their leading space, and
+    trailing ones are dropped, as whitespace hooks would strip them anyway.
+
+    Args:
+        old: original stub text
+        new: changed stub text
+
+    Returns:
+        The unified diff
+    """
+    patch = str.join(
+        "",
+        [
+            "\n" if line == " \n" else line
+            for line in difflib.unified_diff(
+                old.splitlines(keepends=True),
+                new.splitlines(keepends=True),
+                "a/sendoff/native.pyi",
+                "b/sendoff/native.pyi",
+            )
+        ],
+    )
+    return patch.rstrip("\n") + "\n" if patch else ""
+
+
+def apply(text: str, patch: str) -> str:
+    """Apply a unified diff whose hunks match `text` exactly.
+
+    A hunk may have moved, as when generated docstrings grow, so each is
+    applied where its old lines occur nearest to their recorded position.
+
+    Args:
+        text: stub text to patch
+        patch: unified diff of the stub
+
+    Returns:
+        The patched stub text
+
+    Raises:
+        SystemExit: if a hunk's old lines no longer occur in `text`
+    """
+    lines = text.splitlines(keepends=True)
+    patch_lines = patch.splitlines(keepends=True)
+    out: list[str] = []
+    pos = 0
+    i = 0
+    while i < len(patch_lines):
+        header = HUNK.match(patch_lines[i])
+        i += 1
+        if header is None:
+            continue
+        old_count = int(header[2] or 1)
+        new_count = int(header[4] or 1)
+        old: list[str] = []
+        new: list[str] = []
+        while len(old) < old_count or len(new) < new_count:
+            # End-of-file fixers drop the patch's trailing blank context.
+            raw = patch_lines[i] if i < len(patch_lines) else "\n"
+            i += 1
+            tag, line = (" ", raw) if raw == "\n" else (raw[0], raw[1:])
+            if tag in " -":
+                old.append(line)
+            if tag in " +":
+                new.append(line)
+        hint = int(header[1]) - (1 if old_count else 0)
+        starts = [
+            start
+            for start in range(pos, len(lines) - len(old) + 1)
+            if list(islice(lines, start, start + len(old))) == old
+        ]
+        if not starts:
+            raise SystemExit(
+                f"{PATCH.name}: hunk at line {header[1]} no longer applies:\n"
+                + str.join("", old)
+                + "Edit sendoff/native.pyi to match the Rust change, then run "
+                "scripts/native-stub --update-patch."
+            )
+        start = min(starts, key=lambda start: abs(start - hint))
+        out += lines[pos:start] + new
+        pos = start + len(old)
+    return str.join("", out + lines[pos:])
+
+
+def main() -> int:
+    """Regenerate, check, or re-record the native stub.
+
+    Returns:
+        The exit status
+    """
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--check", action="store_true", help="fail if native.pyi is stale"
+    )
+    mode.add_argument(
+        "--update-patch",
+        action="store_true",
+        help="record the difference between generated and current native.pyi",
+    )
+    args = parser.parse_args()
+    generated = generate()
+    current = STUB.read_text() if STUB.exists() else ""
+    if args.update_patch:
+        stub = black(current)
+        patch = diff(generated, stub)
+        assert black(apply(generated, patch)) == stub
+        PATCH.write_text(patch)
+        STUB.write_text(stub)
+        return 0
+    stub = black(apply(generated, PATCH.read_text()))
+    if stub == current:
+        return 0
+    if args.check:
+        sys.stdout.write(diff(current, stub))
+        print("sendoff/native.pyi is stale; run scripts/native-stub", file=sys.stderr)
+        return 1
+    STUB.write_text(stub)
+    print("rewrote sendoff/native.pyi", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
