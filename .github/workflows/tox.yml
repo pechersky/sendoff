@@ -77,14 +77,20 @@ jobs:
       run: |
         rustup toolchain install stable --profile minimal
         rustup default stable
-        rustup component add llvm-tools-preview
+        if [ "${{ matrix.python-version }}" = "3.12" ]; then
+          rustup component add llvm-tools-preview
+        fi
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         cache-directories: .cache/rust-coverage/target
     - name: Test with tox
       run: |
         uv pip install --system 'tox>=4.24,<5' 'tox-uv>=1.16,<2'
-        python -m tox -e py
+        if [ "${{ matrix.python-version }}" = "3.12" ]; then
+          python -m tox -e py
+        else
+          python -m tox -e py -- --no-rust-coverage
+        fi
 
   wheels:
     needs: [clippy, test]
