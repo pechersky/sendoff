@@ -401,9 +401,14 @@ impl Block {
     /// the SD data.
     pub fn set_molblock(&mut self, molblock: &[u8]) {
         let metadata = &self.data[self.mdl_end()..];
-        let mut data = Vec::with_capacity(molblock.len() + 1 + metadata.len());
+        let mut data = Vec::with_capacity(molblock.len() + 2 + metadata.len());
         data.extend_from_slice(molblock);
-        if !data.is_empty() && !data.ends_with(b"\n") {
+        if molblock.is_empty() {
+            // SD data needs a title line before it.
+            if self.body_end() > self.mdl_end() {
+                data.extend_from_slice(self.newline());
+            }
+        } else if !data.ends_with(b"\n") {
             data.extend_from_slice(missing_ending(&data, title_newline(&data)));
         }
         let new_mdl_end = data.len();
@@ -814,6 +819,11 @@ mod tests {
         assert_eq!(written(&block), "new\n  prog\n\nM  END\n> <A>\na\n\n$$$$\n");
         block.set_molblock(b"solo");
         assert_eq!((block.title(), block.mdl()), (&b"solo"[..], &b""[..]));
+        block.set_molblock(b"");
+        assert_eq!(written(&block), "\n> <A>\na\n\n$$$$\n");
+        let parts = block.parts();
+        let rebuilt = Block::from_parts(parts.data.to_vec(), parts.title_end, parts.mdl_end);
+        assert_eq!(rebuilt.as_ref(), Some(&block));
         assert_eq!(records(&block).unwrap(), [("A".into(), "a".into())]);
     }
 
