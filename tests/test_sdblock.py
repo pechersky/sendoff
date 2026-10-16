@@ -690,25 +690,18 @@ def test_str_and_bytes_are_the_sdf_of_their_kind() -> None:
 
 
 def test_molblock_setter_replaces_the_structure_only() -> None:
-    """Setting molblock swaps title and CTAB and keeps every record line."""
+    """Setting molblock swaps title and CTAB, unchecked, keeping every record."""
     text = "old\nsrc\nM  END\n> <A>  (1)\n1\n\nnote\n\n$$$$\n"
     block = next(SDBlock.from_lines(io.StringIO(text)))
 
-    block.molblock = "new\r\n  prog\r\n\r\nM  END\r\n\r\n"
+    block.molblock = "new\r\n  prog\r\n\r\nM  END\r\n"
     assert block.title == "new"
     assert block.molblock == "new\n  prog\n\nM  END\n"
     assert str(block) == "new\n  prog\n\nM  END\n> <A>  (1)\n1\n\nnote\n\n$$$$\n"
-    for bad, message in [
-        ("t\nx\n", "no M  END"),
-        ("t\nM  END\n> <A>\n1\n", "after its M  END"),
-        ("t\n$$$$\nM  END\n", r"\$\$\$\$ line"),
-        ("$$$$\nM  END\n", r"\$\$\$\$ line"),
-    ]:
-        with pytest.raises(ValueError, match=message):
-            block.molblock = bad
+    block.molblock = "solo"
+    assert (block.title, block.mdl, block.to_dict()) == ("solo", "", {"A": "1"})
     with pytest.raises(TypeError, match="molblocks must be str"):
         block.molblock = b"t\nM  END\n"  # type: ignore[assignment]
-    assert block.molblock == "new\n  prog\n\nM  END\n"
     block.molblock = "last\r\nM  END"
     assert block.molblock == "last\nM  END\n"
 

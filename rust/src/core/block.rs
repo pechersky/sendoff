@@ -105,17 +105,6 @@ pub struct Parts<'a> {
     pub mdl_end: usize,
 }
 
-/// Why a value cannot replace a block's title and MDL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum InvalidMolblock {
-    #[error("molblock has no M  END line")]
-    MissingEnd,
-    #[error("molblock has data after its M  END line")]
-    TrailingData,
-    #[error("molblock has a $$$$ line, which would end the block")]
-    Delimiter,
-}
-
 /// Why a value cannot be a block's title.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum InvalidTitle {
@@ -408,32 +397,20 @@ impl Block {
         Ok(())
     }
 
-    /// Replace the title line and MDL with `molblock`, keeping the SD data.
-    ///
-    /// `molblock` must run through an `M  END` line followed only by
-    /// whitespace, with no line starting with `$$$$`.
-    pub fn set_molblock(&mut self, molblock: &[u8]) -> Result<(), InvalidMolblock> {
-        let title_end = line_end(molblock, 0);
-        let mdl_end =
-            mdl_end(molblock, title_end, molblock.len()).ok_or(InvalidMolblock::MissingEnd)?;
-        if !molblock[mdl_end..].iter().all(u8::is_ascii_whitespace) {
-            return Err(InvalidMolblock::TrailingData);
-        }
-        if lines(&molblock[..mdl_end]).any(|line| line.starts_with(b"$$$$")) {
-            return Err(InvalidMolblock::Delimiter);
-        }
+    /// Replace the title line and MDL with `molblock`, unchecked, keeping
+    /// the SD data.
+    pub fn set_molblock(&mut self, molblock: &[u8]) {
         let metadata = &self.data[self.mdl_end()..];
-        let mut data = Vec::with_capacity(mdl_end + 1 + metadata.len());
-        data.extend_from_slice(&molblock[..mdl_end]);
-        if !data.ends_with(b"\n") {
+        let mut data = Vec::with_capacity(molblock.len() + 1 + metadata.len());
+        data.extend_from_slice(molblock);
+        if !data.is_empty() && !data.ends_with(b"\n") {
             data.extend_from_slice(missing_ending(&data, title_newline(&data)));
         }
         let new_mdl_end = data.len();
+        self.title_end = line_end(&data, 0);
         data.extend_from_slice(metadata);
         self.data = Data::Owned(data);
-        self.title_end = title_end;
         *self.mdl_end.get_mut() = new_mdl_end;
-        Ok(())
     }
 
     /// Give the first record named `name` the single-line `value`, keeping
@@ -831,24 +808,13 @@ mod tests {
     #[test]
     fn set_molblock_replaces_title_and_mdl_only() {
         let mut block = block(" old \nsrc\nM  END\n> <A>\na\n\n$$$$\n", true);
-        block.set_molblock(b"new\n  prog\n\nM  END").unwrap();
+        block.set_molblock(b"new\n  prog\n\nM  END");
         assert_eq!(block.title(), b"new");
         assert_eq!(block.mdl(), b"  prog\n\nM  END\n");
         assert_eq!(written(&block), "new\n  prog\n\nM  END\n> <A>\na\n\n$$$$\n");
-        block.set_molblock(b"M  END\nM  END\n \n\t\n").unwrap();
-        assert_eq!(block.title(), b"M  END");
-        assert_eq!(block.mdl(), b"M  END\n");
+        block.set_molblock(b"solo");
+        assert_eq!((block.title(), block.mdl()), (&b"solo"[..], &b""[..]));
         assert_eq!(records(&block).unwrap(), [("A".into(), "a".into())]);
-        for (bad, error) in [
-            (&b"t\nx\n"[..], InvalidMolblock::MissingEnd),
-            (b"M  END\n", InvalidMolblock::MissingEnd),
-            (b"t\nM  END\n> <A>\n", InvalidMolblock::TrailingData),
-            (b"t\n$$$$\nM  END\n", InvalidMolblock::Delimiter),
-            (b"$$$$ t\nM  END\n", InvalidMolblock::Delimiter),
-        ] {
-            assert_eq!(block.set_molblock(bad), Err(error));
-        }
-        assert_eq!(block.title(), b"M  END");
     }
 
     #[test]

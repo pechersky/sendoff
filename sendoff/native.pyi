@@ -579,15 +579,14 @@ class SDBlock(Generic[AnyStr]):
         """
         Replace the title line and CTAB, keeping the SD data.
 
-        For example, `block.molblock = Chem.MolToMolBlock(mol)`. Text
-        molblocks have CRLF and CR line endings translated to LF, and a
-        molblock without a final newline gets its title line's ending. So
+        For example, `block.molblock = Chem.MolToMolBlock(mol)`. The
+        molblock is written unchecked, like record values. Text molblocks
+        have CRLF and CR line endings translated to LF, and a molblock
+        without a final newline gets its title line's ending. So
         `block.molblock = block.molblock` translates a str block's title line
         and CTAB to LF and changes nothing else.
 
         Raises:
-            ValueError: if the molblock has no `M  END` line, has more than
-                whitespace after it, or has a line starting with `$$$$`
             TypeError: if the molblock is not the block's type
         """
 

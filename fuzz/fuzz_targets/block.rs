@@ -98,11 +98,7 @@ fn apply(block: &mut Block, edit: &Edit<'_>) {
             Ok(()) => assert_eq!(block.title(), trim_end(title)),
             Err(_) => assert_eq!(*block, before),
         },
-        Edit::Molblock(molblock) => {
-            if block.set_molblock(molblock).is_err() {
-                assert_eq!(*block, before);
-            }
-        }
+        Edit::Molblock(molblock) => block.set_molblock(molblock),
         Edit::Mdl(ref mdl) => {
             if mdl.iter().all(|line| !line.contains(&b'\n')) {
                 block.replace_mdl(mdl.iter().copied());

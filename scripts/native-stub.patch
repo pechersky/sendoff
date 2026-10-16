@@ -413,15 +413,15 @@
          """
          Replace the title line and CTAB, keeping the SD data.
 
-@@ -487,6 +590,7 @@
-                 whitespace after it, or has a line starting with `$$$$`
+@@ -486,6 +589,7 @@
+         Raises:
              TypeError: if the molblock is not the block's type
          """
 +
      def names(self, /) -> list[AnyStr]:
          """
          Return the record names in input order, duplicates included.
-@@ -495,6 +599,7 @@
+@@ -494,6 +598,7 @@
          building the values. Blocks need not share names, so collect them
          across a file with `Counter(n for b in blocks for n in b.names())`.
          """
@@ -429,7 +429,7 @@
      @property
      def num_atoms(self, /) -> int:
          """
-@@ -507,6 +612,7 @@
+@@ -506,6 +611,7 @@
          Raises:
              MalformedCTableError: if the format or counts cannot be read
          """
@@ -437,7 +437,7 @@
      @property
      def num_bonds(self, /) -> int:
          """
-@@ -519,6 +625,7 @@
+@@ -518,6 +624,7 @@
          Raises:
              MalformedCTableError: if the format or counts cannot be read
          """
@@ -445,7 +445,7 @@
      def records(self, /) -> list[tuple[AnyStr, AnyStr]]:
          """
          Return all SD data records.
-@@ -527,6 +634,7 @@
+@@ -526,6 +633,7 @@
              Tuples of record name and value in the input type; multiline
              values include their inner newlines
          """
@@ -453,7 +453,7 @@
      def remove_record(self, /, name: AnyStr) -> int:
          """
          Remove every record named `name`.
-@@ -540,6 +648,7 @@
+@@ -539,6 +647,7 @@
          Raises:
              TypeError: if `name` is not the block's type
          """
@@ -461,7 +461,7 @@
      def renumber_indices(self, /) -> None:
          """
          Renumber atom and bond indices to be 1-indexed and in order.
-@@ -552,6 +661,7 @@
+@@ -551,6 +660,7 @@
              IndicesDuplicateError: as CTable.renumber_indices raises
              NotImplementedError: as CTable.renumber_indices raises
          """
@@ -469,7 +469,7 @@
      def replace_records(
          self,
          /,
-@@ -575,6 +685,7 @@
+@@ -574,6 +684,7 @@
              TypeError: if a name or value is not the block's type
              ValueError: for another `header`
          """
@@ -477,7 +477,7 @@
      def set_record(
          self,
          /,
-@@ -601,16 +712,18 @@
+@@ -600,16 +711,18 @@
              TypeError: if `name` or `value` is not the block's type
              ValueError: for another `header`
          """
@@ -499,7 +499,7 @@
          """
          Replace the title line.
 
-@@ -619,6 +732,7 @@
+@@ -618,6 +731,7 @@
                  `$$$$`, which would end the block
              TypeError: if the title is not the block's type
          """
@@ -507,7 +507,7 @@
      def to_dict(self, /) -> dict[AnyStr, AnyStr]:
          """
          Return the records as a dict, later duplicates winning.
-@@ -627,12 +741,13 @@
+@@ -626,12 +740,13 @@
          """
 
  @final
@@ -524,7 +524,7 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -640,7 +755,7 @@
+@@ -639,7 +754,7 @@
          """
 
  @final
@@ -533,7 +533,7 @@
      """
      Write SDBlocks one at a time, buffered as `write_sdf` writes them.
 
-@@ -648,8 +763,9 @@
+@@ -647,8 +762,9 @@
      object is left open. Leaving a `with` block closes the writer, also on
      an error. Writing to a closed writer raises ValueError.
      """
@@ -545,7 +545,7 @@
      def close(self, /) -> None:
          """
          Write the buffered blocks and close a path. Closing twice does nothing.
-@@ -658,6 +774,7 @@
+@@ -657,6 +773,7 @@
              OSError: if the buffered blocks cannot be written; the writer is
                  closed anyway
          """
@@ -553,7 +553,7 @@
      def write(self, block: SDBlock[AnyStr], /) -> None:
          """
          Write a block, ending with $$$$, as `str(block)` or `bytes(block)`.
-@@ -671,23 +788,49 @@
+@@ -670,23 +787,49 @@
          """
 
  @final
@@ -611,7 +611,7 @@
  ) -> _SDBlockIterator[Any]:
      """
      Lazily parse SDBlocks from an SDF path or file object.
-@@ -729,9 +872,12 @@
+@@ -728,9 +871,12 @@
          TypeError: if `source` is neither a path nor a file object
      """
 
@@ -626,7 +626,7 @@
      """
      Write SDBlocks one at a time to a path or a file object, buffered.
 
-@@ -751,10 +897,13 @@
+@@ -750,10 +896,13 @@
          OSError: if `dest` cannot be created
      """
 
@@ -642,7 +642,7 @@
      """
      Write SDBlocks to a path or a file object, and return how many.
 
-@@ -787,5 +936,3 @@
+@@ -786,5 +935,3 @@
          UnicodeDecodeError: for a str block that is not UTF-8
          OSError: if `dest` cannot be created or written
      """

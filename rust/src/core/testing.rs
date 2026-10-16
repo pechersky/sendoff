@@ -37,5 +37,8 @@ pub const EDITS: [fn(&mut Block) -> String; 8] = [
         block.replace_mdl([&b"M  END"[..], b"> <B>"]);
         String::new()
     },
-    |block| format!("{:?}", block.set_molblock(b"t\nM  END\n")),
+    |block| {
+        block.set_molblock(b"t\nM  END\n");
+        String::new()
+    },
 ];
