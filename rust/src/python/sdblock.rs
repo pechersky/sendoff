@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyGenericAlias, PyList, PyString, PyTuple, PyType};
 
 use crate::core::block::{Block, Parts};
-use crate::core::ctable::CTable;
+use crate::core::ctable::{CTable, CTableFormat};
 use crate::core::newline::{translated, universal_newlines};
 use crate::core::record::{HeaderStyle, Record};
 use crate::core::split::single_block;
@@ -380,15 +380,14 @@ impl PySDBlock {
 
     /// Replace the title line and CTAB, keeping the SD data.
     ///
-    /// For example, `block.molblock = Chem.MolToMolBlock(mol)`. Text
-    /// molblocks have CRLF and CR line endings translated to LF, and a
-    /// molblock without a final newline gets its title line's ending. So
+    /// For example, `block.molblock = Chem.MolToMolBlock(mol)`. The
+    /// molblock is written unchecked, like record values. Text molblocks
+    /// have CRLF and CR line endings translated to LF, and a molblock
+    /// without a final newline gets its title line's ending. So
     /// `block.molblock = block.molblock` translates a str block's title line
     /// and CTAB to LF and changes nothing else.
     ///
     /// Raises:
-    ///     ValueError: if the molblock has no `M  END` line, has more than
-    ///         whitespace after it, or has a line starting with `$$$$`
     ///     TypeError: if the molblock is not the block's type
     #[setter(molblock)]
     fn set_molblock(&mut self, molblock: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -397,10 +396,8 @@ impl PySDBlock {
             Kind::Text => universal_newlines(molblock),
             Kind::Bytes => Cow::Borrowed(molblock),
         };
-        self.block
-            .get_mut()?
-            .set_molblock(&molblock)
-            .map_err(PyErr::from)
+        self.block.get_mut()?.set_molblock(&molblock);
+        Ok(())
     }
 
     /// Return the CTAB after the title, through `M  END`, as one value.
@@ -413,6 +410,38 @@ impl PySDBlock {
         self.kind
             .value(py, self.block.mdl())
             .map_err(|error| self.noted(py, error, || "Reading the MDL of".into()))
+    }
+
+    /// Replace the CTAB after the title, keeping the title line and SD data.
+    ///
+    /// The MDL is written unchecked, like record values. Text MDL has CRLF
+    /// and CR line endings translated to LF, and MDL without a final
+    /// newline gets the title line's ending.
+    ///
+    /// Raises:
+    ///     TypeError: if the MDL is not the block's type
+    #[setter(mdl)]
+    fn set_mdl(&mut self, mdl: &Bound<'_, PyAny>) -> PyResult<()> {
+        let mdl = self.arg_bytes(mdl, "MDL")?;
+        let mdl = match self.kind {
+            Kind::Text => universal_newlines(mdl),
+            Kind::Bytes => Cow::Borrowed(mdl),
+        };
+        self.block
+            .get_mut()?
+            .replace_mdl((!mdl.is_empty()).then_some(&*mdl));
+        Ok(())
+    }
+
+    /// Return the MDL without its program and comment lines, as one value.
+    ///
+    /// So `a.ctab == b.ctab` compares two structures as written, ignoring
+    /// their titles, timestamps, and comments.
+    #[getter]
+    fn ctab<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.kind
+            .value(py, self.block.ctab())
+            .map_err(|error| self.noted(py, error, || "Reading the CTAB of".into()))
     }
 
     /// Return all SD data records.
@@ -848,6 +877,12 @@ impl PySDBlock {
     #[getter]
     fn num_bonds(&self) -> PyResult<i64> {
         Ok(self.block.counts()?.bonds)
+    }
+
+    /// The format the counts line ends with, "V2000" or "V3000", or None.
+    #[getter]
+    fn format(&self) -> Option<&'static str> {
+        self.block.format().map(CTableFormat::name)
     }
 
     /// Renumber atom and bond indices to be 1-indexed and in order.

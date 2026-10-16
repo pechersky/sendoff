@@ -65,7 +65,7 @@ jobs:
       run: |
         for target in $(cargo fuzz list); do
           cargo fuzz run -s none "$target" -- \
-            -max_total_time=60 -max_len=4096 -rss_limit_mb=2048
+            -max_total_time=60 -max_len=4096 -rss_limit_mb=2048 -dict=sdf.dict
         done
     # Report only: lists the PR's changed lines that no fuzz input reached.
     - name: Report fuzz coverage of changed lines

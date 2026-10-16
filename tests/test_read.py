@@ -643,6 +643,12 @@ LATIN1_BODY = (
 LATIN1_TITLE = b"\xa6\n\n\n  0  0  0  0  0  0  0  0  0  0999 V2000\nM  END\n$$$$\n"
 
 
+LATIN1_CTAB = (
+    b"first\n\n\n  1  0  0  0  0  0  0  0  0  0999 V2000\n"
+    b"    0.0000    0.0000    0.0000 \xa6   0  0\nM  END\n$$$$\n"
+)
+
+
 DECODE_HINT = (
     "parse_sdf(os.fsencode(path)) reads such files as bytes, and "
     "parse_sdf(open(path, encoding=...)) decodes another encoding."
@@ -671,6 +677,7 @@ DECODING: dict[str, tuple[bytes, typing.Callable[[SDBlock[str]], object], str]] 
     "title": (LATIN1_TITLE, lambda block: block.title, "Reading the title of"),
     "molblock": (LATIN1_BODY, lambda block: block.molblock, "Reading the molblock of"),
     "mdl": (LATIN1_BODY, lambda block: block.mdl, "Reading the MDL of"),
+    "ctab": (LATIN1_CTAB, lambda block: block.ctab, "Reading the CTAB of"),
     "ctable": (LATIN1_BODY, lambda block: block.ctable(), "Reading the CTAB of"),
     "fix_counts": (
         LATIN1_BODY,
@@ -708,6 +715,7 @@ NOT_DECODING = {
     "replace_records",
     "num_atoms",
     "num_bonds",
+    "format",
 }
 
 

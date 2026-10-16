@@ -64,9 +64,17 @@
      def fix_counts(self, /) -> None:
          """
          Set the counts line to the number of atom and bond lines.
-@@ -52,21 +87,25 @@
+@@ -52,26 +87,31 @@
              NotImplementedError: for a V2000 format table, or CTABs nested in
                  RGROUP or TEMPLATE blocks
+         """
+-    @property
+-    def format(self, /) -> str:
++
++    @property
++    def format(self, /) -> Literal["V2000", "V3000"]:
+         """
+         Return the format from the counts line, "V2000" or "V3000".
          """
 +
      @property
@@ -90,7 +98,7 @@
      def renumber_indices(self, /) -> None:
          """
          Renumber the atom and bond indices in the block.
-@@ -100,6 +139,7 @@
+@@ -105,6 +145,7 @@
              NotImplementedError: if trying to renumber in a V2000 format table,
                  or a table that renumbering would corrupt, as above
          """
@@ -98,7 +106,7 @@
      def valid_atom_indices(self, /, strict: bool = False) -> bool:
          """
          Validate that the atom lines match the counts line.
-@@ -123,6 +163,7 @@
+@@ -128,6 +169,7 @@
          Returns:
              If all the checks pass, return True.
          """
@@ -106,7 +114,7 @@
      def valid_bond_indices(self, /, strict: bool = False) -> bool:
          """
          Validate that the bond lines match the counts line.
-@@ -147,8 +188,11 @@
+@@ -152,8 +194,11 @@
              If all the checks pass, return True.
          """
 
@@ -119,7 +127,7 @@
      """
      Handle a single molecule block from an SD file.
 
-@@ -169,16 +213,24 @@
+@@ -174,16 +219,24 @@
      line with no `<name>`. Values are written unchecked too: a value with a
      blank line or a `$$$$` line reads back as more records or blocks.
      """
@@ -150,7 +158,7 @@
          """
          Whether any record is named `name`: `name in block.names()`.
 
-@@ -189,13 +241,15 @@
+@@ -194,13 +247,15 @@
              TypeError: if `name` is not the block's type
              MalformedRecordError: if a record header has no `<name>`
          """
@@ -167,7 +175,7 @@
          """
          Remove every record named `name`, as `remove_record(name)` does.
 
-@@ -203,8 +257,9 @@
+@@ -208,8 +263,9 @@
              KeyError: if no record has that name
              TypeError: if `name` is not the block's type
          """
@@ -178,7 +186,7 @@
          """
          Return the value of the last record named `name`, like a dict.
 
-@@ -212,24 +267,27 @@
+@@ -217,24 +273,27 @@
              KeyError: if no record has that name
              TypeError: if `name` is not the block's type
          """
@@ -210,7 +218,7 @@
          *,
          header: Literal["plain", "padded", "copy"] = "plain",
      ) -> SDBlock[AnyStr]:
-@@ -251,23 +309,28 @@
+@@ -256,23 +315,28 @@
                  `header`
              TypeError: if `sdf` is not str or bytes, or a record is not its type
          """
@@ -240,7 +248,7 @@
      def __str__(self, /) -> str:
          """
          A str block's SDF, ending with $$$$: the inverse of `SDBlock(sdf)`.
-@@ -281,6 +344,7 @@
+@@ -286,6 +350,7 @@
          Raises:
              UnicodeDecodeError: for a block from a str path that is not UTF-8
          """
@@ -248,7 +256,7 @@
      @classmethod
      def _from_state(
          cls, /, data: bytes, title_end: int, mdl_end: int, text: bool
-@@ -291,6 +355,7 @@
+@@ -296,6 +361,7 @@
          Raises:
              ValueError: if the state cannot come from a block
          """
@@ -256,15 +264,26 @@
      def append_record(
          self,
          /,
-@@ -315,6 +380,7 @@
+@@ -320,14 +386,16 @@
              TypeError: if `name` or `value` is not the block's type
              ValueError: for another `header`
+         """
+-    @property
+-    def ctab(self, /) -> Any:
++
++    @property
++    def ctab(self, /) -> AnyStr:
+         """
+         Return the MDL without its program and comment lines, as one value.
+
+         So `a.ctab == b.ctab` compares two structures as written, ignoring
+         their titles, timestamps, and comments.
          """
 +
      def ctable(self, /) -> CTable:
          """
          Parse out the underlying CTable object.
-@@ -330,6 +396,7 @@
+@@ -343,6 +411,7 @@
              MalformedCTableError: if the table is shorter than its header,
                  or its format or counts cannot be read
          """
@@ -272,9 +291,17 @@
      def fix_counts(self, /) -> None:
          """
          Set the counts line to the number of atom and bond lines.
-@@ -340,12 +407,28 @@
+@@ -353,17 +422,34 @@
              MalformedCTableError: as ctable and CTable.fix_counts raise
              NotImplementedError: as CTable.fix_counts raises
+         """
+-    @property
+-    def format(self, /) -> str | None:
++
++    @property
++    def format(self, /) -> Literal["V2000", "V3000"] | None:
+         """
+         The format the counts line ends with, "V2000" or "V3000", or None.
          """
 +
 +    @overload
@@ -305,7 +332,7 @@
      ) -> _SDBlockIterator[Any]:
          """
          Parse SDBlocks from homogeneous str or bytes lines or a file object.
-@@ -380,6 +463,14 @@
+@@ -398,6 +484,14 @@
                  or a non-iterable; and, as blocks are produced, for items or
                  reads that are not str or bytes or that mix the two
          """
@@ -320,7 +347,7 @@
      @staticmethod
      def from_sdf(sdf: str | bytes) -> _SDBlockIterator[Any]:
          """
-@@ -399,7 +490,11 @@
+@@ -417,7 +511,11 @@
          Raises:
              TypeError: if `sdf` is not str or bytes
          """
@@ -333,7 +360,7 @@
          """
          Return the value of the last record named `name`, or `default`.
 
-@@ -416,6 +511,7 @@
+@@ -434,6 +532,7 @@
          Raises:
              TypeError: if `name` is not the block's type
          """
@@ -341,24 +368,37 @@
      def iter_records(self, /) -> _SDRecordIterator[AnyStr]:
          """
          Lazily iterate over SD data records in input order.
-@@ -424,8 +520,9 @@
+@@ -442,8 +541,9 @@
          the iterator raises RuntimeError if the records change; to edit them
          in a loop, loop over `records()`.
          """
-+
-     @property
+-    @property
 -    def mdl(self, /) -> Any:
++
++    @property
 +    def mdl(self, /) -> AnyStr:
          """
          Return the CTAB after the title, through `M  END`, as one value.
 
-@@ -433,16 +530,18 @@
+@@ -451,8 +551,9 @@
          CTAB and `block.mdl.splitlines()` gives its lines. `block.molblock`
          is `block.title`, the title line's ending, then `block.mdl`.
          """
 +
-     @property
+     @mdl.setter
+-    def mdl(self, /, mdl: Any) -> None:
++    def mdl(self, /, mdl: AnyStr) -> None:
+         """
+         Replace the CTAB after the title, keeping the title line and SD data.
+
+@@ -463,16 +564,18 @@
+         Raises:
+             TypeError: if the MDL is not the block's type
+         """
+-    @property
 -    def molblock(self, /) -> Any:
++
++    @property
 +    def molblock(self, /) -> AnyStr:
          """
          Return the title line and CTAB through `M  END` as one value.
@@ -373,15 +413,15 @@
          """
          Replace the title line and CTAB, keeping the SD data.
 
-@@ -457,6 +556,7 @@
-                 whitespace after it, or has a line starting with `$$$$`
+@@ -486,6 +589,7 @@
+         Raises:
              TypeError: if the molblock is not the block's type
          """
 +
      def names(self, /) -> list[AnyStr]:
          """
          Return the record names in input order, duplicates included.
-@@ -465,6 +565,7 @@
+@@ -494,6 +598,7 @@
          building the values. Blocks need not share names, so collect them
          across a file with `Counter(n for b in blocks for n in b.names())`.
          """
@@ -389,7 +429,7 @@
      @property
      def num_atoms(self, /) -> int:
          """
-@@ -477,6 +578,7 @@
+@@ -506,6 +611,7 @@
          Raises:
              MalformedCTableError: if the format or counts cannot be read
          """
@@ -397,7 +437,7 @@
      @property
      def num_bonds(self, /) -> int:
          """
-@@ -489,6 +591,7 @@
+@@ -518,6 +624,7 @@
          Raises:
              MalformedCTableError: if the format or counts cannot be read
          """
@@ -405,7 +445,7 @@
      def records(self, /) -> list[tuple[AnyStr, AnyStr]]:
          """
          Return all SD data records.
-@@ -497,6 +600,7 @@
+@@ -526,6 +633,7 @@
              Tuples of record name and value in the input type; multiline
              values include their inner newlines
          """
@@ -413,7 +453,7 @@
      def remove_record(self, /, name: AnyStr) -> int:
          """
          Remove every record named `name`.
-@@ -510,6 +614,7 @@
+@@ -539,6 +647,7 @@
          Raises:
              TypeError: if `name` is not the block's type
          """
@@ -421,7 +461,7 @@
      def renumber_indices(self, /) -> None:
          """
          Renumber atom and bond indices to be 1-indexed and in order.
-@@ -522,6 +627,7 @@
+@@ -551,6 +660,7 @@
              IndicesDuplicateError: as CTable.renumber_indices raises
              NotImplementedError: as CTable.renumber_indices raises
          """
@@ -429,7 +469,7 @@
      def replace_records(
          self,
          /,
-@@ -545,6 +651,7 @@
+@@ -574,6 +684,7 @@
              TypeError: if a name or value is not the block's type
              ValueError: for another `header`
          """
@@ -437,13 +477,14 @@
      def set_record(
          self,
          /,
-@@ -571,16 +678,18 @@
+@@ -600,16 +711,18 @@
              TypeError: if `name` or `value` is not the block's type
              ValueError: for another `header`
          """
-+
-     @property
+-    @property
 -    def title(self, /) -> Any:
++
++    @property
 +    def title(self, /) -> AnyStr:
          """
          Return the title line without trailing whitespace, in the input type.
@@ -458,7 +499,7 @@
          """
          Replace the title line.
 
-@@ -589,6 +698,7 @@
+@@ -618,6 +731,7 @@
                  `$$$$`, which would end the block
              TypeError: if the title is not the block's type
          """
@@ -466,7 +507,7 @@
      def to_dict(self, /) -> dict[AnyStr, AnyStr]:
          """
          Return the records as a dict, later duplicates winning.
-@@ -597,12 +707,13 @@
+@@ -626,12 +740,13 @@
          """
 
  @final
@@ -483,7 +524,7 @@
      def close(self, /) -> None:
          """
          Stop iterating and release the input source, closing files that
-@@ -610,7 +721,7 @@
+@@ -639,7 +754,7 @@
          """
 
  @final
@@ -492,7 +533,7 @@
      """
      Write SDBlocks one at a time, buffered as `write_sdf` writes them.
 
-@@ -618,8 +729,9 @@
+@@ -647,8 +762,9 @@
      object is left open. Leaving a `with` block closes the writer, also on
      an error. Writing to a closed writer raises ValueError.
      """
@@ -504,7 +545,7 @@
      def close(self, /) -> None:
          """
          Write the buffered blocks and close a path. Closing twice does nothing.
-@@ -628,6 +740,7 @@
+@@ -657,6 +773,7 @@
              OSError: if the buffered blocks cannot be written; the writer is
                  closed anyway
          """
@@ -512,7 +553,7 @@
      def write(self, block: SDBlock[AnyStr], /) -> None:
          """
          Write a block, ending with $$$$, as `str(block)` or `bytes(block)`.
-@@ -641,23 +754,49 @@
+@@ -670,23 +787,49 @@
          """
 
  @final
@@ -570,7 +611,7 @@
  ) -> _SDBlockIterator[Any]:
      """
      Lazily parse SDBlocks from an SDF path or file object.
-@@ -699,9 +838,12 @@
+@@ -728,9 +871,12 @@
          TypeError: if `source` is neither a path nor a file object
      """
 
@@ -585,7 +626,7 @@
      """
      Write SDBlocks one at a time to a path or a file object, buffered.
 
-@@ -721,10 +863,13 @@
+@@ -750,10 +896,13 @@
          OSError: if `dest` cannot be created
      """
 
@@ -601,7 +642,7 @@
      """
      Write SDBlocks to a path or a file object, and return how many.
 
-@@ -757,5 +902,3 @@
+@@ -786,5 +935,3 @@
          UnicodeDecodeError: for a str block that is not UTF-8
          OSError: if `dest` cannot be created or written
      """

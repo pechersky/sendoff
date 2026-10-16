@@ -575,11 +575,7 @@ def assert_round_trips(block: SDBlock[Any]) -> None:
         molblock = block.molblock
     except UnicodeDecodeError:
         return
-    try:
-        block.molblock = molblock
-    except ValueError:
-        assert block == original
-        return
+    block.molblock = molblock
     data, _, mdl_end, _ = block.__reduce__()[1]
     old_data, _, old_mdl_end, _ = original.__reduce__()[1]
     assert data[mdl_end:] == old_data[old_mdl_end:]

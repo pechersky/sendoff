@@ -316,6 +316,23 @@ def test_mdl_is_the_ctab_text() -> None:
     assert no_end.mdl == "  prog\n> <A>\n"
 
 
+def test_ctab_compares_structures_without_their_headers() -> None:
+    """The CTAB is the MDL without its program and comment lines."""
+    ctab = (
+        "  1  0  0  0  0  0  0  0  0  0999 V2000\n"
+        "    0.0000    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0\n"
+        "M  END\n"
+    )
+    first = SDBlock(f"a\n     RDKit          2D\n\n{ctab}")
+    second = SDBlock(f"b\n  -OEChem-01012600002D\nnote\n{ctab}> <A>\n1\n")
+    assert first.mdl != second.mdl
+    assert first.ctab == second.ctab == ctab
+    assert first.format == "V2000"
+    short = SDBlock("t\nM  END\n")
+    assert (short.ctab, short.format) == ("", None)
+    assert SDBlock("t\n\n\n  0  0 V9\nM  END\n").format is None
+
+
 def test_names_len_and_contains_skip_values() -> None:
     """names(), len() and in read record names without building values."""
     sdf = "t\nM  END\n> <A>\n1\n2\n\n> <B>\n\n> <A>\n3\n\n$$$$\n"
@@ -673,25 +690,18 @@ def test_str_and_bytes_are_the_sdf_of_their_kind() -> None:
 
 
 def test_molblock_setter_replaces_the_structure_only() -> None:
-    """Setting molblock swaps title and CTAB and keeps every record line."""
+    """Setting molblock swaps title and CTAB, unchecked, keeping every record."""
     text = "old\nsrc\nM  END\n> <A>  (1)\n1\n\nnote\n\n$$$$\n"
     block = next(SDBlock.from_lines(io.StringIO(text)))
 
-    block.molblock = "new\r\n  prog\r\n\r\nM  END\r\n\r\n"
+    block.molblock = "new\r\n  prog\r\n\r\nM  END\r\n"
     assert block.title == "new"
     assert block.molblock == "new\n  prog\n\nM  END\n"
     assert str(block) == "new\n  prog\n\nM  END\n> <A>  (1)\n1\n\nnote\n\n$$$$\n"
-    for bad, message in [
-        ("t\nx\n", "no M  END"),
-        ("t\nM  END\n> <A>\n1\n", "after its M  END"),
-        ("t\n$$$$\nM  END\n", r"\$\$\$\$ line"),
-        ("$$$$\nM  END\n", r"\$\$\$\$ line"),
-    ]:
-        with pytest.raises(ValueError, match=message):
-            block.molblock = bad
+    block.molblock = "solo"
+    assert (block.title, block.mdl, block.to_dict()) == ("solo", "", {"A": "1"})
     with pytest.raises(TypeError, match="molblocks must be str"):
         block.molblock = b"t\nM  END\n"  # type: ignore[assignment]
-    assert block.molblock == "new\n  prog\n\nM  END\n"
     block.molblock = "last\r\nM  END"
     assert block.molblock == "last\nM  END\n"
 
@@ -704,6 +714,21 @@ def test_molblock_setter_replaces_the_structure_only() -> None:
     assert byte_block.molblock == b"b\r\nM  END\r\n"
     assert byte_block.title == b"b"
     assert byte_block.to_dict() == {b"A": b"1"}
+
+
+def test_mdl_setter_keeps_the_title_line_and_records() -> None:
+    """Setting mdl swaps the CTAB, unchecked, keeping the title line as written."""
+    block = next(SDBlock.from_sdf(" old \nsrc\nM  END\n> <A>  (1)\n1\n\n$$$$\n"))
+    block.mdl = "  prog\r\n\r\nM  END"
+    assert str(block) == " old \n  prog\n\nM  END\n> <A>  (1)\n1\n\n$$$$\n"
+    block.mdl = ""
+    assert (block.mdl, block.to_dict()) == ("", {"A": "1"})
+    with pytest.raises(TypeError, match="MDL must be str"):
+        block.mdl = b"M  END\n"  # type: ignore[assignment]
+
+    byte_block = next(SDBlock.from_sdf(b"t \r\nold\r\nM  END\r\n> <A>\r\n1\r\n"))
+    byte_block.mdl = b"new\nM  END"
+    assert bytes(byte_block) == b"t \r\nnew\nM  END\r\n> <A>\r\n1\r\n$$$$\r\n"
 
 
 def test_title_setter_replaces_only_the_title() -> None:
