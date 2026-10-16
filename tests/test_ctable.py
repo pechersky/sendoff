@@ -598,6 +598,7 @@ def test_fix_counts_sets_counts_to_table_lines(ending: str) -> None:
     lines = [line + ending for line in sdf_of(block).splitlines()[:-1]]
     ctable = CTable(lines)
     assert (ctable.num_atoms, ctable.num_bonds) == (5, 3)
+    assert ctable.format == block.format == "V3000"
     ctable.fix_counts()
     fixed = "M  V30 COUNTS  2 1  1 0 1 REGNO=7" + ending
     assert ctable.lines == [

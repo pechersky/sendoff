@@ -62,6 +62,12 @@ impl PyCTable {
         self.inner.num_bonds
     }
 
+    /// Return the format from the counts line, "V2000" or "V3000".
+    #[getter]
+    fn format(&self) -> &'static str {
+        self.inner.format.name()
+    }
+
     /// Validate that the atom lines match the counts line.
     ///
     /// If strict, make sure they are 1-indexed and in order.

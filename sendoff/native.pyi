@@ -89,6 +89,12 @@ class CTable:
         """
 
     @property
+    def format(self, /) -> Literal["V2000", "V3000"]:
+        """
+        Return the format from the counts line, "V2000" or "V3000".
+        """
+
+    @property
     def lines(self, /) -> list[str]:
         """
         Return a copy of the original connection-table lines.
@@ -381,6 +387,15 @@ class SDBlock(Generic[AnyStr]):
             ValueError: for another `header`
         """
 
+    @property
+    def ctab(self, /) -> AnyStr:
+        """
+        Return the MDL without its program and comment lines, as one value.
+
+        So `a.ctab == b.ctab` compares two structures as written, ignoring
+        their titles, timestamps, and comments.
+        """
+
     def ctable(self, /) -> CTable:
         """
         Parse out the underlying CTable object.
@@ -406,6 +421,12 @@ class SDBlock(Generic[AnyStr]):
         Raises:
             MalformedCTableError: as ctable and CTable.fix_counts raise
             NotImplementedError: as CTable.fix_counts raises
+        """
+
+    @property
+    def format(self, /) -> Literal["V2000", "V3000"] | None:
+        """
+        The format the counts line ends with, "V2000" or "V3000", or None.
         """
 
     @overload
@@ -529,6 +550,19 @@ class SDBlock(Generic[AnyStr]):
         Every line ends in a newline, so `needle in block.mdl` searches the
         CTAB and `block.mdl.splitlines()` gives its lines. `block.molblock`
         is `block.title`, the title line's ending, then `block.mdl`.
+        """
+
+    @mdl.setter
+    def mdl(self, /, mdl: AnyStr) -> None:
+        """
+        Replace the CTAB after the title, keeping the title line and SD data.
+
+        The MDL is written unchecked, like record values. Text MDL has CRLF
+        and CR line endings translated to LF, and MDL without a final
+        newline gets the title line's ending.
+
+        Raises:
+            TypeError: if the MDL is not the block's type
         """
 
     @property

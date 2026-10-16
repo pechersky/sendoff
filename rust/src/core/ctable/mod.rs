@@ -19,6 +19,16 @@ pub enum CTableFormat {
     V3000,
 }
 
+impl CTableFormat {
+    /// The name the counts line ends with.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::V2000 => "V2000",
+            Self::V3000 => "V3000",
+        }
+    }
+}
+
 /// A V3000 section of the root CTAB that holds one line per atom or bond.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Section {

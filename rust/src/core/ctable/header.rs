@@ -89,6 +89,15 @@ fn fields(line: &str) -> impl DoubleEndedIterator<Item = &str> {
     .filter(|field| !field.is_empty())
 }
 
+/// The format `counts_line` ends with, if it ends with one.
+pub fn counts_line_format(counts_line: &str) -> Option<CTableFormat> {
+    match fields(counts_line).next_back()? {
+        "V2000" => Some(CTableFormat::V2000),
+        "V3000" => Some(CTableFormat::V3000),
+        _ => None,
+    }
+}
+
 /// The atom and bond count fields of the V3000 `COUNTS` line, its fourth and
 /// fifth fields.
 fn v3000_count_fields(line: &str) -> Result<(&str, &str), CTableError> {

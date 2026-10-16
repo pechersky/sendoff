@@ -13,8 +13,9 @@ use std::sync::{Arc, LazyLock};
 use memchr::{memmem, memrchr};
 use memmap2::Mmap;
 
+use crate::core::ctable::CTableFormat;
 use crate::core::ctable::error::CTableError;
-use crate::core::ctable::header::{Counts, HEADER_LINES, parse_header};
+use crate::core::ctable::header::{Counts, HEADER_LINES, counts_line_format, parse_header};
 use crate::core::lines::{find_newline, line_end, lines};
 use crate::core::newline::{
     CRLF_TRAILER, TRAILER, missing_ending, newline, title_newline, trailer,
@@ -568,6 +569,18 @@ impl Block {
         let found = owned.iter().take_while(|line| line.is_some()).count();
         let header = owned.each_ref().map(|line| line.as_deref().unwrap_or(""));
         parse_header(&header[..found])
+    }
+
+    /// The MDL without its first two lines, the program and comment lines.
+    pub fn ctab(&self) -> &[u8] {
+        let mdl = self.mdl();
+        &mdl[line_end(mdl, line_end(mdl, 0))..]
+    }
+
+    /// The format the counts line ends with, if it ends with one.
+    pub fn format(&self) -> Option<CTableFormat> {
+        let ctab = self.ctab();
+        counts_line_format(&String::from_utf8_lossy(&ctab[..line_end(ctab, 0)]))
     }
 }
 
