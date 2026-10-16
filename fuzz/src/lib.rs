@@ -43,6 +43,11 @@ pub fn check_block(block: &Block) {
         .counts()
         .map(|counts| (counts.format, counts.atoms, counts.bonds));
     assert_eq!(parsed, counts);
+    assert!(block.mdl().ends_with(block.ctab()));
+    let format = block.format();
+    if let Ok((counts_format, ..)) = counts {
+        assert_eq!(format, Some(counts_format));
+    }
 }
 
 /// The named records, as `(name, value)` pairs.
