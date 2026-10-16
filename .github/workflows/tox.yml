@@ -40,6 +40,33 @@ jobs:
     - name: Check Clippy
       run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Set up Rust
+      run: |
+        rustup toolchain install stable --profile minimal
+        rustup default stable
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        workspaces: fuzz
+    - name: Install cargo-fuzz
+      run: cargo install cargo-fuzz --locked --version 0.13.2
+    # A crash prints its input; `cargo fuzz run -s none <target> <file>`
+    # replays it.
+    - name: Fuzz each target for a minute
+      working-directory: fuzz
+      run: |
+        for target in $(cargo fuzz list); do
+          cargo fuzz run -s none "$target" -- \
+            -max_total_time=60 -max_len=4096 -rss_limit_mb=2048
+        done
+
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -155,7 +182,7 @@ jobs:
         PY
 
   wheels:
-    needs: [clippy, test]
+    needs: [clippy, test, fuzz]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     uses: ./.github/workflows/wheels.yml
 
