@@ -48,9 +48,10 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
+        fetch-depth: 0
     - name: Set up Rust
       run: |
-        rustup toolchain install stable --profile minimal
+        rustup toolchain install stable --profile minimal --component llvm-tools-preview
         rustup default stable
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
@@ -66,6 +67,23 @@ jobs:
           cargo fuzz run -s none "$target" -- \
             -max_total_time=60 -max_len=4096 -rss_limit_mb=2048
         done
+    # Report only: lists the PR's changed lines that no fuzz input reached.
+    - name: Report fuzz coverage of changed lines
+      if: github.event_name == 'pull_request'
+      working-directory: fuzz
+      env:
+        BASE_REF: ${{ github.base_ref }}
+      run: |
+        tools="$(rustc --print target-libdir)/../bin"
+        bins=target/x86_64-unknown-linux-gnu/coverage/x86_64-unknown-linux-gnu/release
+        for target in $(cargo fuzz list); do
+          cargo fuzz coverage -s none "$target"
+          "$tools/llvm-cov" export -format=lcov \
+            -instr-profile="coverage/$target/coverage.profdata" "$bins/$target" \
+            | sed 's#^SF:.*/rust/src/#SF:rust/src/#' > "coverage/$target.lcov"
+        done
+        pipx run --spec diff-cover==10.6.0 diff-cover coverage/*.lcov \
+          --compare-branch="origin/$BASE_REF" --format "markdown:$GITHUB_STEP_SUMMARY"
 
   test:
     runs-on: ubuntu-24.04
