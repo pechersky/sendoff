@@ -6,6 +6,7 @@ pub mod core;
 
 use crate::core::block::Block;
 use crate::core::ctable::CTable;
+use crate::core::ctable::header::counts_line_format;
 use crate::core::lines::lines;
 use crate::core::record::Record;
 
@@ -45,6 +46,10 @@ pub fn check_block(block: &Block) {
     assert_eq!(parsed, counts);
     assert!(block.mdl().ends_with(block.ctab()));
     let format = block.format();
+    assert_eq!(
+        format.and_then(|format| counts_line_format(format.name())),
+        format
+    );
     if let Ok((counts_format, ..)) = counts {
         assert_eq!(format, Some(counts_format));
     }
